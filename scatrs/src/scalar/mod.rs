@@ -6,8 +6,10 @@ use core::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Sub, SubAssign};
 use num_traits::{Float, FloatConst};
 
 mod dd;
+mod dual;
 
 pub use dd::{DoubleDouble, ParseDoubleDoubleError};
+pub use dual::Dual;
 
 /// A real scalar type for generic kernels.
 ///

@@ -46,6 +46,6 @@ def _constants() -> dict[str, arb]:
 
 
 def generate() -> tuple[int, list[dict]]:
-    ctx.prec = PRECISION_BITS
-    recs = [record("constants", name, {}, {"value": [v]}) for name, v in _constants().items()]
+    with ctx.workprec(PRECISION_BITS):
+        recs = [record("constants", name, {}, {"value": [v]}) for name, v in _constants().items()]
     return PRECISION_BITS, recs

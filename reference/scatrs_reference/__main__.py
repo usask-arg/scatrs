@@ -6,6 +6,8 @@ import argparse
 import sys
 from pathlib import Path
 
+from flint import ctx
+
 from scatrs_reference.generators import GENERATORS
 from scatrs_reference.records import update_manifest, write_jsonl
 
@@ -20,6 +22,7 @@ def main(argv: list[str] | None = None) -> int:
     gen.add_argument("--only", nargs="+", choices=sorted(GENERATORS))
     args = parser.parse_args(argv)
     for name in args.only or sorted(GENERATORS):
+        ctx.default()  # no precision or other context state leaks between generators
         precision_bits, records = GENERATORS[name]()
         filename = f"{name}.jsonl"
         digest = write_jsonl(args.out / filename, records)

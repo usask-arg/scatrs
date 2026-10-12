@@ -1,7 +1,7 @@
 //! Loader for the committed Arb reference data in `reference/data/`.
 #![allow(dead_code)]
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
 use serde::Deserialize;
@@ -80,13 +80,49 @@ pub fn data_path(file: &str) -> PathBuf {
         .join(file)
 }
 
+/// Load and validate a reference file: every line must parse, every output must have
+/// equal-length `hi`/`lo`/`dec`/`err` arrays, and case names must be unique within the file.
 pub fn load(file: &str) -> Vec<Record> {
-    let text = std::fs::read_to_string(data_path(file))
-        .unwrap_or_else(|e| panic!("cannot read reference file {file}: {e}"));
-    text.lines()
-        .filter(|l| !l.trim().is_empty())
-        .map(|l| serde_json::from_str(l).expect("valid reference record"))
-        .collect()
+    let path = data_path(file);
+    let text = std::fs::read_to_string(&path).unwrap_or_else(|e| {
+        panic!(
+            "cannot read reference file {file} ({}): {e}",
+            path.display()
+        )
+    });
+    let records: Vec<Record> = text
+        .lines()
+        .enumerate()
+        .filter(|(_, l)| !l.trim().is_empty())
+        .map(|(i, l)| {
+            serde_json::from_str(l)
+                .unwrap_or_else(|e| panic!("{file}:{}: invalid reference record: {e}", i + 1))
+        })
+        .collect();
+    validate(file, &records);
+    records
+}
+
+fn validate(file: &str, records: &[Record]) {
+    let mut seen = BTreeSet::new();
+    for r in records {
+        assert!(
+            seen.insert(r.case.as_str()),
+            "{file}: duplicate case name {}",
+            r.case
+        );
+        for (name, v) in &r.outputs {
+            assert!(
+                v.hi.len() == v.lo.len() && v.hi.len() == v.dec.len() && v.hi.len() == v.err.len(),
+                "{file}: case {} output {name}: hi/lo/dec/err lengths differ ({}/{}/{}/{})",
+                r.case,
+                v.hi.len(),
+                v.lo.len(),
+                v.dec.len(),
+                v.err.len()
+            );
+        }
+    }
 }
 
 pub fn find<'a>(records: &'a [Record], case: &str) -> &'a Record {

@@ -12,8 +12,16 @@ use crate::scalar::Real;
 
 /// A value with `N` first-order derivatives: `re + Σᵢ eps[i]·εᵢ`.
 ///
-/// Comparisons and `is_zero` look only at the value `re`. `Float::is_nan` and
-/// `Float::is_finite` also inspect the derivatives, so a NaN derivative is never silent.
+/// # Comparisons and zero tests
+///
+/// `==`, `<` and the other comparisons look only at the value `re`, so a `Dual` orders like its
+/// value. [`Zero::is_zero`] and [`One::is_one`] are strict: they also require every derivative
+/// to be zero. Generic code uses them as shortcuts, where a value-only test would silently drop
+/// derivatives: num-complex 0.4.6 returns early from `Complex::sqrt` and `cbrt` when a component
+/// `is_zero()`, and returns `one()` from `powf`/`powc` when the exponent `is_zero()`. So for a
+/// refractive index `m = n + 0i` with ∂/∂(Im m) seeded, `m.sqrt()` would lose that derivative.
+/// ForwardDiff.jl made the same choice (v1.0, PR #481). `Float::is_nan` and `Float::is_finite`
+/// also inspect the derivatives, so a NaN derivative is never silent.
 ///
 /// # Arithmetic
 ///
@@ -26,43 +34,54 @@ use crate::scalar::Real;
 /// |---|---|
 /// | `a + b`, `a - b`, `-a` | `a′ + b′`, `a′ − b′`, `−a′` |
 /// | `a * b` | `a′·b + a·b′` |
-/// | `a / b` | `(a′ − q·b′)·(1/b)` |
+/// | `a / b` | `(a′ − q·b′)·(1/b)`, or `(a′ − q·b′)/b` in the special cases below |
 /// | `a % b` | `a′ − t·b′`, where `t` is the integer with `a = t·b + r` |
 /// | `a + y`, `a - y` | `a′` |
 /// | `a * y`, `a / y` | `a′·y`, `a′/y` |
 ///
 /// Each formula is evaluated in `T`, so a derivative errs by a few units in the last place of
-/// its largest term; cancellation between the terms is not compensated.
+/// its largest term; cancellation between the terms is not compensated. An intermediate can
+/// overflow although the derivative is finite, as with the same formula in `T`: for `a / b`
+/// with `a = 1e300`, `b = 10` and `b′ = 1e10`, `q·b′` overflows and the derivative is −∞ where
+/// the true value is −1e308.
 ///
 /// `%` jumps where `a/b` is an integer; there the derivative is that of the branch that gave
 /// the value (`t = a/b`, `r = ±0`). `t` is recovered from the exact remainder as
 /// `round((a − r)/b)`, not as `trunc(a/b)`, which rounding can move to the next integer:
-/// `1.0 / 0.1 == 10.0`, yet `1.0 % 0.1 == 1.0 − 9·0.1`. It is exact for |t| < 2⁵⁰ with `f64`
-/// (about 2⁹⁸ with `DoubleDouble`), and within about 2u·|t| beyond (u the unit roundoff of `T`).
+/// `1.0 / 0.1 == 10.0`, yet `1.0 % 0.1 == 1.0 − 9·0.1`. With `f64` the computed quotient is
+/// within (2u + u²)·|t| of `t` (u = 2⁻⁵³), so the recovered `t` is exact for |t| < 2⁵¹ and
+/// within (2u + u²)·|t| + ½ beyond; with `DoubleDouble` it is exact for |t| below about 2¹⁰⁰.
 ///
 /// # Special values and signed zeros
 ///
 /// A derivative component that is exactly zero is a *strong zero*: it contributes zero even
 /// when multiplied by an infinite or NaN factor. So a direction on which no operand depends
 /// keeps derivative 0 whatever the values: `Dual::constant(2.0) * Dual::constant(f64::INFINITY)`
-/// has zero derivatives, not NaN. With finite operands, a derivative is NaN only if the value is
-/// NaN too (`0 / 0`, `x % 0`) or two terms of its formula overflow with opposite signs
-/// (`∞ − ∞`, as `T` would give for the same formula). Otherwise IEEE 754 rules apply: `x / 0`
-/// has derivative `x′/0 = ±∞`, `a / b` at `b = ±0` with `b′ ≠ 0` is dominated by the `a·b′/b²`
-/// term, and a nonzero derivative times an infinite value is infinite. An infinite or NaN
-/// derivative times a zero value is NaN, as in `T`.
+/// has zero derivatives, not NaN, and a derivative never depends on `N` or on the other
+/// directions. With finite operands, a derivative is NaN only if the value is NaN too (`0 / 0`,
+/// `x % 0`) or two terms of its formula overflow with opposite signs (`∞ − ∞`). Otherwise
+/// IEEE 754 rules apply: `x / 0` has derivative `x′/0 = ±∞`, `a / b` at `b = ±0` with `b′ ≠ 0`
+/// is dominated by the `a·b′/b²` term, and a nonzero derivative times an infinite value is
+/// infinite. An infinite or NaN derivative times a zero value is NaN, as in `T`.
+///
+/// The rule cannot tell a direction the operands do not depend on from one in which they are
+/// stationary. For `p` seeded at 0, `p * p` rightly has derivative 0, so a square root of it
+/// (`sqrt(p * p)`, or `(p * p).powf(0.25)`) gets derivative 0 at the singular point of the root,
+/// where `|p|` and `|p|^½` have no derivative (the plain chain rule would give 0·∞ = NaN). Write
+/// `abs` or `hypot` rather than the root of a square.
 ///
 /// The sign of a zero derivative is unspecified (it may be `+0` or `−0`). It carries no
 /// information, and no operation lets it change a nonzero result.
 ///
 /// # Speed
 ///
-/// Operations are `#[inline]` and loop over the `N` derivatives with fixed trip counts; for
-/// `Dual<f64, N>` they compile to straight-line vectorised code. `*`, `/`, `* f64` and `/ f64`
-/// first check, with one predictable branch, that the plain rule cannot meet a non-finite factor
-/// (or, for `/`, a reciprocal outside the full-precision range); only the special values take
-/// the slower path. The correctly rounded value of `/` costs a second division: `a/b` for the
-/// value and `1/b` for the derivatives.
+/// Operations are `#[inline]`, and the derivatives are fixed-length arrays that LLVM unrolls;
+/// for `N ≥ 2` it packs them into SIMD lanes where it can (two-lane NEON on aarch64). `*`, `/`,
+/// `* f64`, `/ f64` and the chain rule first check the values for the special cases above
+/// (for `/`, three floating-point comparisons) and hand those to `#[cold]` out-of-line code.
+/// These checks are branches, so unlike the same loop over `f64`, a loop over many `Dual`s is not
+/// vectorised across elements. The correctly rounded value of `/` costs a second division:
+/// `a/b` for the value and `1/b` for the derivatives.
 #[derive(Clone, Copy, Debug)]
 pub struct Dual<T, const N: usize> {
     re: T,
@@ -118,30 +137,35 @@ impl<T: Real, const N: usize> Dual<T, N> {
         let eps = if df.is_finite() {
             self.eps.map(|e| e * df)
         } else {
-            scale_special(&self, f, df).eps
+            scale_special(self, f, df).eps
         };
         Self { re: f, eps }
     }
 }
 
-// Special-value paths. `*`, `* f64`, `/ f64` and `chain` check that the plain rule cannot meet
-// a non-finite factor and otherwise call one of these, as `special(..).eps` (`/` keeps its
-// special path inline, see there). Measured on `Dual<f64, N>`:
-// * out of line and `#[cold]`, they keep a real, predicted branch; inline, LLVM turns small ones
-//   into selects that put the check on the critical path (a multiply chain with N = 1 ran at
-//   2.2× the cycles);
+// Special-value paths. Each checked operation calls one of the `*_special` functions below as
+// `special(..).eps`. Measured on `Dual<f64, N>` (Apple M4, cycle counts):
+// * out of line and `#[cold]`, a special path keeps the check a real, predicted branch; inline,
+//   LLVM turned small ones into selects that put the check on the critical path (a multiply
+//   chain with N = 1 took 2.2× the cycles, a division chain 1.9×);
 // * returning the whole `Dual` keeps the merge in floating-point registers (a `[f64; 1]` is
 //   returned in an integer register), and taking `.eps` rather than returning early keeps the
 //   fast path's result out of the return slot (an early return cost ~14% throughput at N = 4);
+// * operands go by value; by reference measured the same or slower;
 // * branch-free strong zeros everywhere, instead of a check, cost ~25% throughput at N = 4.
 
-/// `e·v`, but zero when the derivative component `e` is zero, even if `v` is infinite or NaN.
+/// The strong-zero product of a derivative component `e` and a factor `v`: `+0` whenever
+/// `e.is_zero()` (`e` is `±0`; for a nested `Dual`, zero in every part), whatever `v` is,
+/// including ±∞ and NaN; otherwise exactly `e * v`, so a nonzero `e` times ±∞ or NaN still gives
+/// ±∞ or NaN.
 #[inline]
 fn strong_mul<T: Real>(e: T, v: T) -> T {
     if e.is_zero() { T::zero() } else { e * v }
 }
 
-/// `e/v`, but zero when `e` is zero, even if `v` is zero or NaN.
+/// The strong-zero quotient of a derivative component `e` by `v`: `+0` whenever `e.is_zero()`,
+/// whatever `v` is, including ±0 and NaN; otherwise exactly `e / v`, so a nonzero `e` divided
+/// by ±0 gives ±∞.
 #[inline]
 fn strong_div<T: Real>(e: T, v: T) -> T {
     if e.is_zero() { T::zero() } else { e / v }
@@ -150,7 +174,7 @@ fn strong_div<T: Real>(e: T, v: T) -> T {
 /// Value `f`, derivatives `x′·df` with strong zeros (`df` infinite or NaN).
 #[cold]
 #[inline(never)]
-fn scale_special<T: Real, const N: usize>(x: &Dual<T, N>, f: T, df: T) -> Dual<T, N> {
+fn scale_special<T: Real, const N: usize>(x: Dual<T, N>, f: T, df: T) -> Dual<T, N> {
     Dual {
         re: f,
         eps: x.eps.map(|e| strong_mul(e, df)),
@@ -160,7 +184,7 @@ fn scale_special<T: Real, const N: usize>(x: &Dual<T, N>, f: T, df: T) -> Dual<T
 /// `a * b` with strong zeros (a value is infinite or NaN, or the product overflowed).
 #[cold]
 #[inline(never)]
-fn mul_special<T: Real, const N: usize>(a: &Dual<T, N>, b: &Dual<T, N>, re: T) -> Dual<T, N> {
+fn mul_special<T: Real, const N: usize>(a: Dual<T, N>, b: Dual<T, N>, re: T) -> Dual<T, N> {
     Dual {
         re,
         eps: array::from_fn(|i| strong_mul(a.eps[i], b.re) + strong_mul(b.eps[i], a.re)),
@@ -170,7 +194,7 @@ fn mul_special<T: Real, const N: usize>(a: &Dual<T, N>, b: &Dual<T, N>, re: T) -
 /// `a * y` with strong zeros (`y` infinite or NaN).
 #[cold]
 #[inline(never)]
-fn mul_f64_special<T: Real, const N: usize>(a: &Dual<T, N>, y: f64) -> Dual<T, N> {
+fn mul_f64_special<T: Real, const N: usize>(a: Dual<T, N>, y: f64) -> Dual<T, N> {
     Dual {
         re: a.re * y,
         eps: a.eps.map(|e| if e.is_zero() { T::zero() } else { e * y }),
@@ -180,10 +204,21 @@ fn mul_f64_special<T: Real, const N: usize>(a: &Dual<T, N>, y: f64) -> Dual<T, N
 /// `a / y` with strong zeros (`y` zero or NaN).
 #[cold]
 #[inline(never)]
-fn div_f64_special<T: Real, const N: usize>(a: &Dual<T, N>, y: f64) -> Dual<T, N> {
+fn div_f64_special<T: Real, const N: usize>(a: Dual<T, N>, y: f64) -> Dual<T, N> {
     Dual {
         re: a.re / y,
         eps: a.eps.map(|e| if e.is_zero() { T::zero() } else { e / y }),
+    }
+}
+
+/// `a / b` with quotient `q`, when the fast path's `(a′ − q·b′)·(1/b)` could meet 0·∞ or a
+/// reciprocal without full precision: `(a′ − q·b′)/b`, divided directly, with strong zeros.
+#[cold]
+#[inline(never)]
+fn div_special<T: Real, const N: usize>(a: Dual<T, N>, b: Dual<T, N>, q: T) -> Dual<T, N> {
+    Dual {
+        re: q,
+        eps: array::from_fn(|i| strong_div(a.eps[i] - strong_mul(b.eps[i], q), b.re)),
     }
 }
 
@@ -230,7 +265,7 @@ impl<T: Real, const N: usize> Mul for Dual<T, N> {
         let eps = if re.is_finite() {
             array::from_fn(|i| self.eps[i] * o.re + self.re * o.eps[i])
         } else {
-            mul_special(&self, &o, re).eps
+            mul_special(self, o, re).eps
         };
         Self { re, eps }
     }
@@ -243,15 +278,16 @@ impl<T: Real, const N: usize> Div for Dual<T, N> {
         let q = self.re / o.re;
         let inv = T::one() / o.re;
         // A finite quotient has a finite dividend and a nonzero divisor, so no 0·∞ arises, and
-        // a finite 1/b of at least `min_positive_value()` has full precision. Otherwise (b is
+        // a finite 1/b of at least `min_positive_value()` has full precision. Otherwise b is
         // ±0, ±∞ or NaN, |b| is subnormal or near MAX, the dividend is not finite, or the
-        // quotient overflowed) the derivatives are (a′ − q·b′)/b, divided directly, with strong
-        // zeros. That path stays inline: the division's latency hides the check, and inline
-        // measured faster than out of line here.
-        let eps = if q.is_finite() && inv.is_finite() && inv.abs() >= T::min_positive_value() {
+        // quotient overflowed. The three comparisons are combined without short-circuiting, so
+        // they cost one branch (NaN fails each of them).
+        let (max, m) = (T::max_value(), inv.abs());
+        let fast = (q.abs() <= max) & (m <= max) & (m >= T::min_positive_value());
+        let eps = if fast {
             array::from_fn(|i| (self.eps[i] - q * o.eps[i]) * inv)
         } else {
-            array::from_fn(|i| strong_div(self.eps[i] - strong_mul(o.eps[i], q), o.re))
+            div_special(self, o, q).eps
         };
         Self { re: q, eps }
     }
@@ -300,7 +336,7 @@ impl<T: Real, const N: usize> Mul<f64> for Dual<T, N> {
         let eps = if y.is_finite() {
             self.eps.map(|e| e * y)
         } else {
-            mul_f64_special(&self, y).eps
+            mul_f64_special(self, y).eps
         };
         Self {
             re: self.re * y,
@@ -314,7 +350,7 @@ impl<T: Real, const N: usize> Div<f64> for Dual<T, N> {
     #[inline]
     fn div(self, y: f64) -> Self {
         let eps = if y == 0.0 || y.is_nan() {
-            div_f64_special(&self, y).eps
+            div_f64_special(self, y).eps
         } else {
             self.eps.map(|e| e / y)
         };
@@ -378,10 +414,11 @@ impl<T: Real, const N: usize> Zero for Dual<T, N> {
         Self::constant(T::zero())
     }
 
-    /// Whether the value is zero (of either sign), whatever the derivatives.
+    /// Whether the value and every derivative are zero (of either sign). Strict, so that
+    /// generic shortcuts on zero keep derivatives (see "Comparisons and zero tests" on [`Dual`]).
     #[inline]
     fn is_zero(&self) -> bool {
-        self.re.is_zero()
+        self.re.is_zero() && self.eps.iter().all(Zero::is_zero)
     }
 }
 
@@ -389,6 +426,12 @@ impl<T: Real, const N: usize> One for Dual<T, N> {
     #[inline]
     fn one() -> Self {
         Self::constant(T::one())
+    }
+
+    /// Whether the value is one and every derivative zero (see [`Zero::is_zero`] for why).
+    #[inline]
+    fn is_one(&self) -> bool {
+        self.re.is_one() && self.eps.iter().all(Zero::is_zero)
     }
 }
 
@@ -402,7 +445,8 @@ impl<T: Real, const N: usize> Num for Dual<T, N> {
 }
 
 impl<T: Real, const N: usize> NumCast for Dual<T, N> {
-    /// A constant converted by `T`'s `NumCast::from`.
+    /// A constant converted by `T`'s `NumCast::from`, which reads `n` through `ToPrimitive`.
+    /// From another `Dual` that is its value alone: the derivatives are dropped.
     fn from<U: ToPrimitive>(n: U) -> Option<Self> {
         <T as NumCast>::from(n).map(Self::constant)
     }

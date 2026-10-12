@@ -1,3 +1,4 @@
+use num_complex::Complex;
 use num_traits::{Num, NumCast, One, ToPrimitive, Zero};
 use proptest::prelude::*;
 use scatrs::scalar::{DoubleDouble as Dd, Dual};
@@ -40,7 +41,11 @@ fn negation_and_remainder() {
 fn comparisons_use_value_only() {
     assert_eq!(D2::new(1.0, [5.0, 0.0]), D2::new(1.0, [0.0, 0.0]));
     assert!(D2::new(1.0, [9.0, 9.0]) < D2::new(2.0, [0.0, 0.0]));
-    assert!(D2::new(0.0, [1.0, 0.0]).is_zero());
+    // Controller decision after the Task 7 review (overrides the plan): `is_zero` and `is_one`
+    // are strict, also requiring zero derivatives, because num-complex shortcuts on them
+    // (`sqrt`, `cbrt`, `powf`, `powc`) and a value-only test silently drops derivatives there.
+    assert!(!D2::new(0.0, [1.0, 0.0]).is_zero());
+    assert!(D2::new(0.0, [0.0, 0.0]).is_zero());
 }
 
 #[test]
@@ -378,10 +383,41 @@ fn comparisons_and_zero_with_special_values() {
     assert!(nan != nan);
     assert_eq!(nan.partial_cmp(&D2::zero()), None);
     assert_eq!(D2::new(-0.0, [1.0, 2.0]), D2::zero());
-    assert!(D2::new(-0.0, [1.0, 2.0]).is_zero());
-    assert!(!D2::new(5e-324, [0.0, 0.0]).is_zero());
-    assert!(D2::new(1.0, [3.0, 0.0]).is_one());
     assert!(D2::new(f64::NEG_INFINITY, [0.0; 2]) < D2::new(f64::MIN, [0.0; 2]));
+    // Strict zero and one tests (controller decision after the Task 7 review): the value and
+    // every derivative, each of either sign of zero.
+    assert!(!D2::new(-0.0, [1.0, 2.0]).is_zero());
+    assert!(!D2::new(0.0, [0.0, -5e-324]).is_zero());
+    assert!(D2::new(-0.0, [0.0, -0.0]).is_zero());
+    assert!(!D2::new(5e-324, [0.0, 0.0]).is_zero());
+    assert!(!D2::new(1.0, [3.0, 0.0]).is_one());
+    assert!(!D2::new(1.0, [0.0, f64::NAN]).is_one());
+    assert!(D2::new(1.0, [-0.0, 0.0]).is_one());
+    assert!(!D2::new(1.0 + f64::EPSILON, [0.0; 2]).is_one());
+    assert!(D2::zero().is_zero() && D2::one().is_one());
+    assert!(!D2::constant(f64::NAN).is_zero() && !D2::constant(f64::NAN).is_one());
+    // Over double-double, and for a dual whose derivative parts are themselves zero tests.
+    assert!(!Dual::<Dd, 1>::new(Dd::ZERO, [Dd::from_f64(1e-300)]).is_zero());
+    assert!(Dual::<Dd, 1>::new(-Dd::ZERO, [Dd::ZERO]).is_zero());
+}
+
+#[test]
+fn complex_zero_and_one_tests_see_derivatives() {
+    // num-complex shortcuts `sqrt`, `cbrt`, `powf` and `powc` on these tests. With m = n + 0i
+    // and ∂/∂(Im m) seeded, the imaginary part is zero in value but not as a dual, and must not
+    // be treated as zero.
+    let [n, k] = D2::variables([1.33, 0.0]);
+    assert!(!Complex::new(D2::zero(), k).is_zero());
+    assert!(!Complex::new(n, k).im.is_zero());
+    assert!(Complex::new(D2::zero(), D2::zero()).is_zero());
+    assert!(!Complex::new(D2::one(), k).is_one());
+    assert!(Complex::new(D2::one(), D2::zero()).is_one());
+    assert!(!Complex::new(D2::new(1.0, [1.0, 0.0]), D2::zero()).is_one());
+    // Equality stays value-only, also inside a complex number.
+    assert_eq!(
+        Complex::new(D2::zero(), k),
+        Complex::new(D2::zero(), D2::zero())
+    );
 }
 
 #[test]
@@ -485,6 +521,229 @@ fn double_double_quotient_keeps_full_precision_for_huge_divisors() {
         "{:?} vs {want:?}",
         q.eps()[0]
     );
+}
+
+// ---- Exact expansion arithmetic: a reference for double-double derivatives -----------------
+
+/// Error-free sum: `s + e == a + b` exactly (Knuth's TwoSum).
+fn two_sum(a: f64, b: f64) -> (f64, f64) {
+    let s = a + b;
+    let bb = s - a;
+    (s, (a - (s - bb)) + (b - bb))
+}
+
+/// An exact sum of doubles, kept as a nonoverlapping expansion (Shewchuk's Grow-Expansion).
+#[derive(Default)]
+struct Exact(Vec<f64>);
+
+impl Exact {
+    fn add(&mut self, b: f64) {
+        let mut q = b;
+        for e in self.0.iter_mut() {
+            let (s, h) = two_sum(q, *e);
+            *e = h;
+            q = s;
+        }
+        self.0.push(q);
+    }
+
+    /// Adds the exact product of the factors (each split by TwoProd, so no rounding is lost;
+    /// valid while no partial product underflows).
+    fn add_product(&mut self, factors: &[f64]) {
+        let mut terms = vec![factors[0]];
+        for &f in &factors[1..] {
+            terms = terms
+                .iter()
+                .flat_map(|&t| {
+                    let p = t * f;
+                    [p, t.mul_add(f, -p)]
+                })
+                .collect();
+        }
+        for t in terms {
+            self.add(t);
+        }
+    }
+
+    /// Adds `sign` times the exact product of double-doubles (every combination of words).
+    fn add_dd_product(&mut self, sign: f64, factors: &[Dd]) {
+        let words: Vec<[f64; 2]> = factors.iter().map(|x| [x.hi(), x.lo()]).collect();
+        for mask in 0..1usize << words.len() {
+            let mut f: Vec<f64> = (0..words.len())
+                .map(|j| words[j][(mask >> j) & 1])
+                .collect();
+            f[0] *= sign;
+            self.add_product(&f);
+        }
+    }
+
+    /// The value, rounded (to within a few ulps).
+    fn approx(&self) -> f64 {
+        self.0.iter().sum()
+    }
+}
+
+#[test]
+fn double_double_product_and_quotient_rule_accuracy() {
+    // Random double-doubles over 2^±200, derivatives over 2^±20, so no intermediate overflows
+    // or underflows. The error is measured exactly: for the quotient, got·b² − (a′b − ab′) is
+    // summed exactly and divided by b².
+    let mut next = uniform(0x2545_f491_4f6c_dd1d);
+    let mut dd = |lo: f64, hi: f64| {
+        let s = if next() < 0.5 { -1.0 } else { 1.0 };
+        let h = s * (1.0 + next()) * 2f64.powi((lo + (hi - lo) * next()).floor() as i32);
+        Dd::new(h, h * (next() - 0.5) * 2f64.powi(-53))
+    };
+    let (mut worst_mul, mut worst_div) = (0.0_f64, 0.0_f64);
+    for _ in 0..50_000 {
+        let (a, b) = (dd(-200.0, 200.0), dd(-200.0, 200.0));
+        let (da, db) = (dd(-20.0, 20.0), dd(-20.0, 20.0));
+        let (x, y) = (Dual::<Dd, 1>::new(a, [da]), Dual::<Dd, 1>::new(b, [db]));
+
+        // a′·b and a·b′ each err by 4u², their sum by 3u²: 7u²·(|a′b| + |ab′|) to first order
+        // (the second-order terms are below 2^-100 of that).
+        let got = (x * y).eps()[0];
+        let mut e = Exact::default();
+        e.add_dd_product(1.0, &[da, b]);
+        e.add_dd_product(1.0, &[a, db]);
+        e.add(-got.hi());
+        e.add(-got.lo());
+        let scale = (da.hi() * b.hi()).abs() + (a.hi() * db.hi()).abs();
+        let err = e.approx().abs() / (U2 * scale);
+        worst_mul = worst_mul.max(err);
+        assert!(err <= 7.0 + 1e-9, "{x:?} * {y:?}: {err} u²");
+
+        // q = a/b and 1/b err by 10u² each, q·b′ and the final product by 4u², a′ − q·b′ by
+        // 3u²: 31u²·(|a′| + |q·b′|)/|b| to first order.
+        let got = (x / y).eps()[0];
+        let mut e = Exact::default();
+        e.add_dd_product(1.0, &[got, b, b]);
+        e.add_dd_product(-1.0, &[da, b]);
+        e.add_dd_product(1.0, &[a, db]);
+        let b2 = b.hi() * b.hi();
+        let scale = (da.hi().abs() + (a.hi() / b.hi() * db.hi()).abs()) / b.hi().abs();
+        let err = e.approx().abs() / b2 / (U2 * scale);
+        worst_div = worst_div.max(err);
+        assert!(err <= 31.0 + 1e-9, "{x:?} / {y:?}: {err} u²");
+    }
+    eprintln!("double-double product rule: worst {worst_mul:.3} u² (bound 7 u²)");
+    eprintln!("double-double quotient rule: worst {worst_div:.3} u² (bound 31 u²)");
+}
+
+/// One expression that uses every operation, with special paths reachable from its inputs.
+fn every_operation<T: scatrs::Real, const N: usize>(
+    x: Dual<T, N>,
+    y: Dual<T, N>,
+    z: Dual<T, N>,
+    c: f64,
+) -> Dual<T, N> {
+    let p = x * y - z / x;
+    let q = (p % y + c) * (z - c) / (y * c);
+    let mut r = q * p - x / (z + 1.0);
+    r *= y;
+    r /= x;
+    r %= z;
+    r += -p / c;
+    r -= q * c;
+    r * (x - y) + z
+}
+
+/// `every_operation` with the seeds `s` in direction `k` of an `N`-direction dual and the
+/// `other` seeds elsewhere: the value and direction `k`'s derivative.
+fn seeded<const N: usize>(
+    v: [f64; 3],
+    s: [f64; 3],
+    other: [[f64; 8]; 3],
+    k: usize,
+    c: f64,
+) -> (f64, f64) {
+    let d = |i: usize| {
+        let mut eps: [f64; N] = core::array::from_fn(|j| other[i][j]);
+        eps[k] = s[i];
+        Dual::<f64, N>::new(v[i], eps)
+    };
+    let r = every_operation(d(0), d(1), d(2), c);
+    (r.re(), r.eps()[k])
+}
+
+/// A double from the whole range or a small set of specials, as an array of three.
+fn three() -> impl Strategy<Value = [f64; 3]> {
+    [any_f64(), any_f64(), any_f64()]
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(4096))]
+
+    #[test]
+    fn each_direction_is_independent_of_n_and_of_the_other_seeds(
+        v in three(),
+        s in three(),
+        other in [prop::array::uniform8(any_f64()), prop::array::uniform8(any_f64()), prop::array::uniform8(any_f64())],
+        k in 0usize..8,
+        c in any_f64(),
+    ) {
+        // Every rule is componentwise and its special-case choice depends only on the values,
+        // so direction k's derivative is the same bit for bit (or NaN in both) for any N and any
+        // seeds in the other directions.
+        let (re1, d1) = seeded::<1>(v, s, other, 0, c);
+        for (re, d) in [
+            seeded::<2>(v, s, other, k % 2, c),
+            seeded::<4>(v, s, other, k % 4, c),
+            seeded::<8>(v, s, other, k, c),
+        ] {
+            prop_assert!(same(re, re1), "value {re:?} vs {re1:?}");
+            prop_assert!(same(d, d1), "derivative {d:?} vs {d1:?}");
+        }
+    }
+
+    #[test]
+    fn remainder_quotient_beyond_2_51_is_within_its_bound(
+        b in wide_f64(),
+        k in (1u64 << 50)..(1u64 << 53),
+        nudge in -4i64..=4,
+        neg in any::<bool>(),
+    ) {
+        let a0 = (k as f64 * b).abs();
+        let a = f64::from_bits((a0.to_bits() as i64 + nudge) as u64) * if neg { -1.0 } else { 1.0 };
+        let r = D1::constant(a) % D1::new(b, [1.0]);
+        let t = -r.eps()[0];
+        prop_assert_eq!(t, t.trunc());
+        // The exact quotient: a − r is exact in double-double and the quotient errs by about
+        // 13u²·2^53 ≪ ½ there; a − t·b == r confirms it (t·b is exact for |t| < 2^54).
+        let dd = Dd::from_f64;
+        let exact = ((dd(a) - dd(r.re())) / dd(b)).round();
+        prop_assert_eq!(exact.lo(), 0.0);
+        let resid = (dd(a) - exact * dd(b) - dd(r.re())).abs().hi();
+        prop_assert!(resid <= b.abs() * 2f64.powi(-60), "{a:?} % {b:?}: {exact:?}");
+        // The computed (a − r)/b errs by at most (2u + u²)·|t|, and rounding adds at most ½.
+        let tx = exact.hi();
+        prop_assert!((t - tx).abs() <= (2.0 * U + U * U) * tx.abs() + 0.5, "{a:?} % {b:?}: {t} vs {tx}");
+    }
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(1024))]
+
+    #[test]
+    fn double_double_remainder_quotient_is_exact_far_beyond_f64(
+        bh in wide_f64(),
+        bl in -0.5..0.5f64,
+        m in 1u64..(1 << 53),
+        e in 0..=40i32,
+        nudge in -4i64..=4,
+    ) {
+        // k up to 2^93, and a within a few u²·|a| of k·b.
+        let b = Dd::new(bh, bl * bh.abs() * 2f64.powi(-53));
+        let a0 = b * (m as f64 * 2f64.powi(e));
+        let a = Dd::new(a0.hi(), a0.lo() + nudge as f64 * a0.hi().abs() * 2f64.powi(-106));
+        let r = Dual::<Dd, 1>::constant(a) % Dual::new(b, [Dd::ONE]);
+        let t = -r.eps()[0];
+        prop_assert_eq!(t, t.trunc());
+        // |a − t·b − r| <= 4u²|t·b| + 3u²|a| + 2u²|b| <= 2^-9·|b| for |t| < 2^94, while a wrong
+        // t leaves |b|.
+        let resid = (a - b * t - r.re()).abs().hi();
+        prop_assert!(resid <= b.abs().hi() * 2f64.powi(-8), "{a:?} % {b:?}: t = {t:?}");
+    }
 }
 
 /// A deterministic xorshift generator of uniform doubles in [0, 1).
@@ -625,11 +884,12 @@ proptest! {
     #[test]
     fn remainder_quotient_is_the_exact_integer_quotient(
         b in wide_f64(),
-        k in prop_oneof![1u64..64, 1u64..(1 << 50)],
+        k in prop_oneof![1u64..64, 1u64..((1 << 51) - 4)],
         nudge in -4i64..=4,
         neg in any::<bool>(),
     ) {
-        // a lies within a few ulps of k·b, where fl(a/b) often rounds onto the integer k.
+        // a lies within a few ulps of k·b, where fl(a/b) often rounds onto the integer k; the
+        // exact quotient is k or k ± 1, below 2^51, where the recovered t is exact.
         let a0 = (k as f64 * b).abs();
         let a = f64::from_bits((a0.to_bits() as i64 + nudge) as u64) * if neg { -1.0 } else { 1.0 };
         let r = D1::constant(a) % D1::new(b, [1.0]);

@@ -5,7 +5,7 @@
 //! nonoverlapping sums of `f64`s (Shewchuk, "Adaptive precision floating-point arithmetic
 //! and fast robust geometric predicates", Discrete Comput. Geom. 18, 1997).
 
-use super::{DoubleDouble, fast_two_sum, two_prod, two_sum};
+use super::{DoubleDouble, fast_two_sum, two_prod, two_sum_safe};
 
 /// Long-division steps allowed: any finite quotient needs at most about 43. The cap, and
 /// [`MAX_CORRECTIONS`], only guarantee termination should an invariant ever break.
@@ -39,7 +39,9 @@ impl Expansion {
         let mut q = b;
         let mut k = 0;
         for i in 0..self.0.len() {
-            let (s, h) = two_sum(q, self.0[i]);
+            // Defensive: with terms added largest first, 2Sum's intermediate overflow (which
+            // needs a component of ±MAX) has not been seen here, but rem is not on a hot path.
+            let (s, h) = two_sum_safe(q, self.0[i]);
             q = s;
             if h != 0.0 {
                 self.0[k] = h;

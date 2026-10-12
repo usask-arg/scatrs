@@ -35,23 +35,34 @@ pub struct DoubleDouble {
     lo: f64,
 }
 
-/// Error-free sum: `s = fl(a + b)` and `s + e = a + b` exactly (Knuth's 2Sum).
+/// Error-free sum: `s = fl(a + b)` and `s + e = a + b` exactly (Knuth's 2Sum), unless an
+/// intermediate overflows.
 ///
-/// 2Sum's intermediate `s - a` can overflow although `s` is finite (operands of opposite
-/// signs near `±MAX`, e.g. `a = 8.2e307`, `b = -MAX`), which would give `e = NaN`. That rare
-/// case is redone as Fast2Sum with the larger-magnitude operand first, which is exact and
-/// cannot overflow when `s` is finite.
+/// The intermediate `fl(s - a)` is `b + δ` rounded, with `|δ| <= ulp(s)/2 <= 2^970`, so it
+/// can overflow (giving `e = NaN` although `s` is finite) only when `|b| = MAX`, e.g.
+/// `a = 8.2e307`, `b = -MAX`; that is also the only failure seen in millions of tests near
+/// `MAX`. Use [`two_sum_safe`] when `b` may be `±MAX`; the hot paths of `add_dd` and
+/// `add_f64` instead check the error word, which they need to inspect anyway.
 #[inline]
 pub(crate) fn two_sum(a: f64, b: f64) -> (f64, f64) {
     let s = a + b;
     let bb = s - a;
     let e = (a - (s - bb)) + (b - bb);
+    (s, e)
+}
+
+/// [`two_sum`] for arbitrary operands, including `±MAX`: exact whenever `fl(a + b)` is finite.
+#[inline]
+pub(crate) fn two_sum_safe(a: f64, b: f64) -> (f64, f64) {
+    let (s, e) = two_sum(a, b);
     if !e.is_finite() && s.is_finite() {
         return two_sum_ordered(a, b);
     }
     (s, e)
 }
 
+/// The rare case where 2Sum's intermediate overflowed although `fl(a + b)` is finite: Fast2Sum
+/// with the larger-magnitude operand first is exact and cannot overflow then.
 #[cold]
 #[inline(never)]
 fn two_sum_ordered(a: f64, b: f64) -> (f64, f64) {
@@ -126,7 +137,7 @@ impl DoubleDouble {
     /// The exact value `hi + lo` of any two `f64`s, renormalised.
     #[inline]
     pub fn new(hi: f64, lo: f64) -> Self {
-        let (s, e) = two_sum(hi, lo);
+        let (s, e) = two_sum_safe(hi, lo);
         if !s.is_finite() {
             return Self { hi: s, lo: 0.0 };
         }
@@ -178,9 +189,13 @@ impl DoubleDouble {
     /// `self + y` (relative error ≤ 2u²).
     #[inline]
     pub fn add_f64(self, y: f64) -> Self {
-        let (sh, sl) = two_sum(self.hi, y);
-        if !sh.is_finite() {
-            return Self { hi: sh, lo: 0.0 };
+        let (mut sh, mut sl) = two_sum(self.hi, y);
+        // One branch covers both overflows: a non-finite sh always makes sl non-finite too.
+        if !sl.is_finite() {
+            if !sh.is_finite() {
+                return Self { hi: sh, lo: 0.0 };
+            }
+            (sh, sl) = two_sum_ordered(self.hi, y); // 2Sum's intermediate overflowed (|y| = MAX)
         }
         Self::renormalize(sh, self.lo + sl).zero_signed_as(sh)
     }
@@ -188,10 +203,16 @@ impl DoubleDouble {
     /// `self + y` (relative error ≤ 3u²).
     #[inline]
     pub fn add_dd(self, y: Self) -> Self {
-        let (sh, sl) = two_sum(self.hi, y.hi);
-        if !sh.is_finite() {
-            return Self { hi: sh, lo: 0.0 };
+        let (mut sh, mut sl) = two_sum(self.hi, y.hi);
+        // One branch covers both overflows: a non-finite sh always makes sl non-finite too.
+        if !sl.is_finite() {
+            if !sh.is_finite() {
+                return Self { hi: sh, lo: 0.0 };
+            }
+            (sh, sl) = two_sum_ordered(self.hi, y.hi); // 2Sum's intermediate overflowed
         }
+        // No guard needed here: low words are at most ulp(hi)/2 <= 2^970 in magnitude, so no
+        // step of this 2Sum can come near the overflow threshold.
         let (th, tl) = two_sum(self.lo, y.lo);
         let c = sl + th;
         let (vh, vl) = fast_two_sum(sh, c);
@@ -337,7 +358,7 @@ impl DoubleDouble {
         if self.lo == 0.0 {
             return Self { hi: f, lo: 0.0 }; // already an integer; keeps the sign of -0
         }
-        let (h, l) = two_sum(f, self.lo.floor());
+        let (h, l) = two_sum(f, self.lo.floor()); // |floor(lo)| <= 2^970: no overflow
         Self { hi: h, lo: l }
     }
 

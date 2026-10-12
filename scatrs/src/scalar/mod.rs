@@ -32,6 +32,11 @@ pub use dual::Dual;
 ///   error of one operation: a `DoubleDouble` division errs by up to about 2.5·epsilon.
 /// * `NumCast::from` another `Real` keeps only its leading word (`to_f64`); use the value
 ///   itself, or [`from_f64_pair`](Real::from_f64_pair), to keep full precision.
+/// * For [`Dual`], `==` and `<` compare values only, while `is_zero`, `is_one`, `is_nan` and
+///   `is_finite` also inspect the derivatives (see its "Comparisons and zero tests"): branch on
+///   comparisons of values, as `x == T::zero()`, where the derivatives should not matter.
+/// * `Dual<T, N>` takes the values of `sin` and `cos` from `T::sin_cos`, so an implementation of
+///   `Real` should make `sin_cos` bitwise `(sin, cos)`, as `f64` and `DoubleDouble` do.
 pub trait Real:
     Float
     + FloatConst

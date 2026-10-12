@@ -10,6 +10,8 @@ use num_traits::{Num, NumCast, One, ToPrimitive, Zero};
 
 use crate::scalar::Real;
 
+mod traits;
+
 /// A value with `N` first-order derivatives: `re + Σᵢ eps[i]·εᵢ`.
 ///
 /// # Comparisons and zero tests
@@ -21,7 +23,28 @@ use crate::scalar::Real;
 /// `is_zero()`, and returns `one()` from `powf`/`powc` when the exponent `is_zero()`. So for a
 /// refractive index `m = n + 0i` with ∂/∂(Im m) seeded, `m.sqrt()` would lose that derivative.
 /// ForwardDiff.jl made the same choice (v1.0, PR #481). `Float::is_nan` and `Float::is_finite`
-/// also inspect the derivatives, so a NaN derivative is never silent.
+/// also inspect the derivatives, so a NaN derivative is never silent; `is_infinite`,
+/// `is_normal`, `is_subnormal`, `classify`, the sign tests and `integer_decode` describe the
+/// value alone. A finite value with an infinite derivative is therefore neither NaN, infinite
+/// nor finite.
+///
+/// In `num_complex::Complex<Dual<T, N>>`, strict zero tests change some values. Where a
+/// component is zero in value but carries a derivative, num-complex skips its shortcut and takes
+/// the general polar path, whose values are not always bitwise those of `Complex<T>` (the
+/// derivatives on these paths are correct):
+///
+/// * `sqrt` on the imaginary axis differs by up to 2 ulps, and `cbrt` there always differs
+///   (within 2 ulps in the tests);
+/// * `sqrt(−4 + 0i)` gives `Re = 2·cos(π/2) ≈ 1.2e-16` instead of 0;
+/// * `powf` with an exponent that is zero in value returns `1 − 0i` when arg z < 0, and NaN for
+///   a NaN base, instead of `1 + 0i`;
+/// * `powc` with such an exponent returns NaN at z = 0 and z = ∞ instead of 1;
+/// * `ToPrimitive` returns `None` when the imaginary part is zero in value but has a
+///   derivative.
+///
+/// And since `is_finite` sees derivatives, `Complex::exp` takes its corner case for `Re z = +∞`
+/// when `Im z` has an infinite or NaN derivative, returning `(+∞, Im z)` instead of
+/// `(∞·cos(Im z), ∞·sin(Im z))`.
 ///
 /// # Arithmetic
 ///
@@ -52,14 +75,92 @@ use crate::scalar::Real;
 /// within (2u + u²)·|t| of `t` (u = 2⁻⁵³), so the recovered `t` is exact for |t| < 2⁵¹ and
 /// within (2u + u²)·|t| + ½ beyond; with `DoubleDouble` it is exact for |t| below about 2¹⁰⁰.
 ///
+/// # Elementary functions
+///
+/// `Dual` implements `num_traits::Float`, `FloatConst` and [`Real`], so generic kernels and
+/// `num_complex::Complex<Dual<T, N>>` carry derivatives, and `Dual<Dual<T, M>, N>` gives second
+/// derivatives. The value of every method is `T`'s method on the value, bit for bit, including
+/// special values and signed zeros (`sin`, `cos` and `sin_cos` take theirs from `T::sin_cos`,
+/// which for `f64` and `DoubleDouble` is bitwise `(T::sin, T::cos)`). Constants (`FloatConst`,
+/// `Real::from_f64`, `nan()`, `epsilon()`, …) have zero derivatives. With `x′` and `y′` the
+/// derivatives of `self` and of the second argument:
+///
+/// | Methods | Derivatives |
+/// |---|---|
+/// | `floor`, `ceil`, `round`, `trunc`, `signum` | 0, also at the jumps |
+/// | `fract` | `x′` |
+/// | `abs`, `copysign` | `−x′` where the sign changes (for `abs`, a set sign bit, −0 too), else `x′` |
+/// | `max`, `min`, `clamp` | those of the operand whose value is returned (see below) |
+/// | `abs_sub` | `x′ − y′` where `x > y`, else 0 |
+/// | `mul_add(a, b)` | `x′·a + x·a′ + b′` |
+/// | `recip` | `−(x′·r)·r` with `r = 1/x` |
+/// | `powi(n)` | `n·xⁿ⁻¹·x′` (0 for `n = 0`) |
+/// | `powf(y)` | `y·(xʸ/x)·x′ + xʸ·ln x·y′`, the second term only if some `y′` is nonzero |
+/// | `sqrt`, `cbrt` | `x′/(2√x)`, `x′/(3·∛x²)` |
+/// | `exp`, `exp2`, `exp_m1` | `eˣ·x′`, `2ˣ·ln 2·x′`, `eˣ·x′` |
+/// | `ln`, `log2`, `log10`, `ln_1p` | `x′/x`, `log₂e·x′/x`, `log₁₀e·x′/x`, `x′/(1 + x)` |
+/// | `log(b)` | `/` (above) applied to `ln x` and `ln b` |
+/// | `hypot(y)` | `x′·x/h + y′·y/h` |
+/// | `sin`, `cos`, `tan` | `cos x·x′`, `−sin x·x′`, `(1 + tan²x)·x′` |
+/// | `asin`, `acos`, `atan` | `±x′/√((1 − x)(1 + x))`, `x′/(1 + x²)` |
+/// | `atan2(x)` (`self` is y) | `(x·y′ − y·x′)/(x² + y²)` |
+/// | `sinh`, `cosh`, `tanh` | `cosh x·x′`, `sinh x·x′`, `x′/cosh²x` |
+/// | `asinh`, `acosh`, `atanh` | `x′/√(x² + 1)`, `x′/√((x − 1)(x + 1))`, `x′/((1 − x)(1 + x))` |
+/// | `to_degrees`, `to_radians` | `x′` times `T::one().to_degrees()` or `.to_radians()` |
+///
+/// Each f′(x) is evaluated in `T` from a form that does not cancel or overflow needlessly:
+/// `asin`, `acos` and `atanh` use (1 − x)(1 + x); `exp_m1` uses (eˣ − 1) + 1 only where
+/// eˣ − 1 ≥ −½, and eˣ below; `tanh` uses (1 − t)(1 + t) only where |t| ≤ ½, and 1/cosh²x beyond;
+/// `sinh` uses √(1 + sinh²x); `sinh`, `asinh` and `acosh` replace √(x² ± 1) by |x| beyond 2⁵⁴;
+/// `hypot` and `atan2` rescale arguments whose squares leave the normal range; and `powf` uses
+/// y·x^(y−1) directly where xʸ is zero, subnormal or infinite. Measured over each whole domain
+/// against high-precision derivatives (`tests/dual_functions.rs`), the derivatives of
+/// `Dual<f64, N>` are within 6u (u = 2⁻⁵³) of the exact derivative at the argument with Apple's
+/// libm, and within bounds that allow 2 ulps for each libm call (up to 17u, for `log` in its
+/// base); those of `Dual<DoubleDouble, N>` are within 2⁻⁹⁶ relative, or 2⁻⁹⁶·|y ln x| for the
+/// powers, whose `DoubleDouble` values are only that accurate.
+///
+/// Special values, for a nonzero derivative `x′`:
+///
+/// * Outside a function's domain, where `T` returns NaN (`ln(−1)`, `asin(2)`, `acosh(½)`,
+///   `sin(∞)`, `fract(∞)`), and for a NaN argument, the derivatives are NaN; the
+///   piecewise-constant methods keep zero derivatives, and `abs`, `copysign`, `max`, `min` and
+///   `clamp` those of the operand they return.
+/// * At a singular point of f′ on the edge of the domain the derivative is the one-sided limit:
+///   +∞ for `sqrt`, `cbrt`, `ln`, `log2` and `log10` at either zero, for `ln_1p` at −1, for
+///   `asin` and `atanh` at ±1 and for `acosh` at 1; −∞ for `acos` at ±1. `recip` and negative
+///   powers at ±0 follow IEEE 754 (`recip` gives −∞).
+/// * At ±∞ the derivatives are the limits: 0 for `sqrt`, `ln`, `atan`, `tanh`, `asinh`, …, and
+///   ±∞ for `exp`, `sinh`, `cosh`, ….
+/// * `powf`: x⁰ = 1 has derivative 0 in x everywhere (also at x = 0, ∞ or NaN); y·x^(y−1) is
+///   +∞, 1 or 0 at x = 0 for 0 < y < 1, y = 1 and y > 1, and 0 where x^(±∞) = 0. The derivative
+///   in y, xʸ·ln x, is 0 where xʸ = 0 with x ≥ 0, and NaN for x < 0, where xʸ is real only at
+///   integers y.
+/// * `exp2` keeps a finite derivative where 2ˣ overflows but 2ˣ·ln 2 does not (x < 1024.53).
+/// * `hypot` at the origin, where |z| has no derivative, has zero derivatives (a subgradient,
+///   as for `sqrt(p * p + q * q)`). `atan2` jumps at the origin and has NaN derivatives there;
+///   with an infinite argument its derivatives are 0. `log` at base ±0 has a NaN derivative in
+///   the base (∞·0 in the quotient rule).
+/// * `max`, `min` and `clamp` take the derivatives of the operand whose value `T` returns: the
+///   larger (or smaller), the one that is not NaN, and at a tie the one whose sign the result
+///   has (`self` if both have it). `clamp` takes a bound's derivatives outside the interval and
+///   `self`'s inside and at its ends; where `f64::clamp` would panic (a NaN bound, or
+///   `min > max`) it returns NaN, as `DoubleDouble` does.
+///
+/// The chain rule multiplies `x′` by f′(x) evaluated in `T`, so where f′(x) itself overflows or
+/// underflows, `x′·f′(x)` is ±∞ or 0 even if it would be representable, as for an intermediate
+/// of `/`: `atan` beyond |x| ≈ 1.3·10¹⁵⁴, where 1/(1 + x²) underflows, has derivative 0 even
+/// for a huge `x′`.
+///
 /// # Special values and signed zeros
 ///
 /// A derivative component that is exactly zero is a *strong zero*: it contributes zero even
 /// when multiplied by an infinite or NaN factor. So a direction on which no operand depends
 /// keeps derivative 0 whatever the values: `Dual::constant(2.0) * Dual::constant(f64::INFINITY)`
 /// has zero derivatives, not NaN, and a derivative never depends on `N` or on the other
-/// directions. With finite operands, a derivative is NaN only if the value is NaN too (`0 / 0`,
-/// `x % 0`) or two terms of its formula overflow with opposite signs (`∞ − ∞`). Otherwise
+/// directions. In arithmetic with finite operands, a derivative is NaN only if the value is NaN
+/// too (`0 / 0`, `x % 0`) or two terms of its formula overflow with opposite signs (`∞ − ∞`)
+/// (for the elementary functions, see above). Otherwise
 /// IEEE 754 rules apply: `x / 0` has derivative `x′/0 = ±∞`, `a / b` at `b = ±0` with `b′ ≠ 0`
 /// is dominated by the `a·b′/b²` term, and a nonzero derivative times an infinite value is
 /// infinite. An infinite or NaN derivative times a zero value is NaN, as in `T`.
@@ -68,7 +169,8 @@ use crate::scalar::Real;
 /// stationary. For `p` seeded at 0, `p * p` rightly has derivative 0, so a square root of it
 /// (`sqrt(p * p)`, or `(p * p).powf(0.25)`) gets derivative 0 at the singular point of the root,
 /// where `|p|` and `|p|^½` have no derivative (the plain chain rule would give 0·∞ = NaN). Write
-/// `abs` or `hypot` rather than the root of a square.
+/// `abs` rather than the root of a square, if ±p′ is wanted there (`hypot` at the origin also
+/// gives zero derivatives, by choice; see "Elementary functions").
 ///
 /// The sign of a zero derivative is unspecified (it may be `+0` or `−0`). It carries no
 /// information, and no operation lets it change a nonzero result.
@@ -76,12 +178,17 @@ use crate::scalar::Real;
 /// # Speed
 ///
 /// Operations are `#[inline]`, and the derivatives are fixed-length arrays that LLVM unrolls;
-/// for `N ≥ 2` it packs them into SIMD lanes where it can (two-lane NEON on aarch64). `*`, `/`,
-/// `* f64`, `/ f64` and the chain rule first check the values for the special cases above
-/// (for `/`, three floating-point comparisons) and hand those to `#[cold]` out-of-line code.
-/// These checks are branches, so unlike the same loop over `f64`, a loop over many `Dual`s is not
-/// vectorised across elements. The correctly rounded value of `/` costs a second division:
-/// `a/b` for the value and `1/b` for the derivatives.
+/// for `N = 4` and `N = 8` it packs them into SIMD lanes (two-lane NEON on aarch64), for
+/// `N = 2` only in some code. `*`, `/`, `* f64`, `/ f64`, the chain rule and the formulas of
+/// `recip`, `powf`, `hypot`, `atan2` and `mul_add` first check the values for the special cases
+/// above (for `/`, three floating-point comparisons) and hand those to `#[cold]` out-of-line
+/// code. These checks are branches, so unlike the same loop over `f64`, a loop over many
+/// `Dual`s is not vectorised across elements. The correctly rounded value of `/` costs a second
+/// division: `a/b` for the value and `1/b` for the derivatives. A function adds to `T`'s the
+/// cost of f′(x) and a multiplication per derivative: little for `sin` (which gets `cos` from
+/// the same `sin_cos`) and `exp`, a division for `sqrt`, and for `DoubleDouble` `sin` a second
+/// series (measured on Apple M4, `Dual<f64, 4>` costs 1.0× `f64` for `sin`, 1.2× for `exp` and
+/// 4.5× for `sqrt`, whose `f64` loop is vectorised; `Dual<DoubleDouble, 1>` costs 2.1× for `sin`).
 #[derive(Clone, Copy, Debug)]
 pub struct Dual<T, const N: usize> {
     re: T,
@@ -130,14 +237,25 @@ impl<T: Real, const N: usize> Dual<T, N> {
     /// Chain rule: value `f`, derivatives scaled by `df` = f′(re).
     ///
     /// Zero derivatives stay zero when `df` is infinite or NaN (a singular point such as
-    /// `sqrt` at 0), so a constant stays a constant.
-    #[allow(dead_code)] // used by the Float impl in Task 8
+    /// `sqrt` at 0), so a constant stays a constant. A NaN value `f` (an argument outside the
+    /// domain, or NaN) makes every nonzero derivative NaN, even where the formula for `df` is
+    /// finite there (`1/x` for `ln` at x < 0).
     #[inline]
     pub(crate) fn chain(self, f: T, df: T) -> Self {
-        let eps = if df.is_finite() {
+        self.chain_or(f, df, |_, _, df| df)
+    }
+
+    /// [`chain`](Self::chain), where the cold path first replaces `df` by `fix(re, f, df)`: the
+    /// derivative at a point where the fast formula for `df` is not finite but has the wrong
+    /// sign or is not the limit (`1/x` at `x = −0` for `ln`). `fix` runs out of line and only
+    /// when `df` is not finite and `f` is not NaN.
+    #[inline]
+    pub(crate) fn chain_or<F: FnOnce(T, T, T) -> T>(self, f: T, df: T, fix: F) -> Self {
+        // Combined without short-circuiting: one branch.
+        let eps = if df.is_finite() & !f.is_nan() {
             self.eps.map(|e| e * df)
         } else {
-            scale_special(self, f, df).eps
+            chain_special(self, f, df, fix).eps
         };
         Self { re: f, eps }
     }
@@ -171,10 +289,21 @@ fn strong_div<T: Real>(e: T, v: T) -> T {
     if e.is_zero() { T::zero() } else { e / v }
 }
 
-/// Value `f`, derivatives `x′·df` with strong zeros (`df` infinite or NaN).
+/// Value `f`, derivatives `x′·df` with strong zeros (`df` infinite or NaN, or `f` NaN), where
+/// `df` is first replaced by NaN if `f` is NaN and by `fix(x, f, df)` otherwise.
 #[cold]
 #[inline(never)]
-fn scale_special<T: Real, const N: usize>(x: Dual<T, N>, f: T, df: T) -> Dual<T, N> {
+fn chain_special<T: Real, const N: usize, F: FnOnce(T, T, T) -> T>(
+    x: Dual<T, N>,
+    f: T,
+    df: T,
+    fix: F,
+) -> Dual<T, N> {
+    let df = if f.is_nan() {
+        T::nan()
+    } else {
+        fix(x.re, f, df)
+    };
     Dual {
         re: f,
         eps: x.eps.map(|e| strong_mul(e, df)),

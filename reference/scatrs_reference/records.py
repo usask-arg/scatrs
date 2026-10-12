@@ -30,12 +30,15 @@ LABELS = ("certified", "high-precision")
 def nearest_double(v: arb) -> float:
     """The double nearest to the midpoint of ``v``.
 
-    Raises ``OverflowError`` if the midpoint is not finite as a double.
+    Raises ``ValueError`` if the midpoint is NaN, and ``OverflowError`` if it is infinite
+    or too large in magnitude to round to a finite double.
     """
     mid = v.mid()
     f = float(mid)
-    if not math.isfinite(f):
-        raise OverflowError(f"{v.str(15)} does not fit in a finite double")
+    if math.isnan(f):
+        raise ValueError(f"midpoint of {v.str(15)} is NaN")
+    if math.isinf(f):
+        raise OverflowError(f"midpoint of {v.str(15)} does not fit in a finite double")
     for cand in (math.nextafter(f, -math.inf), math.nextafter(f, math.inf)):
         if abs(mid - arb(cand)) < abs(mid - arb(f)):
             f = cand
@@ -45,14 +48,19 @@ def nearest_double(v: arb) -> float:
 def upper_double(x: arb) -> float:
     """The smallest double certainly >= every point of ``|x|``.
 
-    Raises ``ValueError`` if the bound is NaN or infinite as a double.
+    Raises ``ValueError`` if the bound is NaN, and ``OverflowError`` if it is infinite or
+    exceeds the largest finite double.
     """
     u = x.abs_upper()
     f = float(u)
-    if not math.isfinite(f):
-        raise ValueError(f"upper bound of |{x.str(15)}| is not finite as a double")
+    if math.isnan(f):
+        raise ValueError(f"upper bound of |{x.str(15)}| is NaN")
+    if math.isinf(f):
+        raise OverflowError(f"upper bound of |{x.str(15)}| does not fit in a finite double")
     while not arb(f) >= u:
         f = math.nextafter(f, math.inf)
+    if math.isinf(f):  # u lies just above the largest finite double
+        raise OverflowError(f"upper bound of |{x.str(15)}| does not fit in a finite double")
     return f
 
 
@@ -60,8 +68,9 @@ def split(v: arb) -> tuple[float, float, float]:
     """Split ``v`` into ``(hi, lo, err)`` with ``|v - (hi + lo)| <= err`` rigorously.
 
     ``hi`` is the double nearest to the midpoint of ``v`` and ``hi + lo == hi`` in
-    floating point. Raises ``ValueError`` if ``v`` is not finite and ``OverflowError`` if
-    any of ``hi``, ``lo`` or ``err`` does not fit in a finite double.
+    floating point. Raises ``ValueError`` if ``v`` is not finite (NaN or infinite midpoint
+    or radius), and ``OverflowError`` if ``hi``, ``lo`` or ``err`` does not fit in a finite
+    double.
     """
     if not v.is_finite():
         raise ValueError(f"cannot split non-finite value {v.str(15)}")
@@ -70,7 +79,7 @@ def split(v: arb) -> tuple[float, float, float]:
     if hi + lo != hi:  # |lo| is exactly half an ulp of hi and rounds away from hi
         lo = math.nextafter(lo, 0.0)
     err = upper_double(v - arb(hi) - arb(lo))
-    if not all(map(math.isfinite, (hi, lo, err))):
+    if not all(map(math.isfinite, (hi, lo, err))):  # unreachable guard; keep the contract
         raise OverflowError(f"{v.str(15)} does not split into finite doubles")
     return hi, lo, err
 

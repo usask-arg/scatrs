@@ -3,11 +3,11 @@ import json
 from pathlib import Path
 
 import pytest
-from flint import ctx
+from flint import arb, ctx
 
 from scatrs_reference.__main__ import main
 from scatrs_reference.generators import GENERATORS, constants
-from scatrs_reference.records import write_jsonl
+from scatrs_reference.records import record, write_jsonl
 
 DATA = Path(__file__).resolve().parent.parent / "data"
 
@@ -50,7 +50,7 @@ def test_generate_does_not_leak_the_working_precision():
 
 
 def test_cli_generates_the_committed_data_from_a_dirty_context(tmp_path):
-    with ctx.workprec(10):  # main() must reset the context before running a generator
+    with ctx.workprec(10):
         assert main(["generate", "--out", str(tmp_path), "--only", "constants"]) == 0
     assert (tmp_path / "constants.jsonl").read_bytes() == (DATA / "constants.jsonl").read_bytes()
     assert set(json.loads((tmp_path / "manifest.json").read_text(encoding="utf-8"))["files"]) == {
@@ -58,11 +58,20 @@ def test_cli_generates_the_committed_data_from_a_dirty_context(tmp_path):
     }
 
 
-def test_constants_values():
-    _, recs = constants.generate()
-    by_case = {r["case"]: r["outputs"]["value"] for r in recs}
-    assert by_case["PI"]["hi"] == [3.141592653589793]
-    assert by_case["INV_FACT_3"]["hi"] == [1 / 6]
-    assert by_case["FRAC_PI_2_TAIL"]["hi"] == [-1.4973849048591698e-33]
-    assert by_case["LN_2_TAIL"]["hi"] == [5.707708438416212e-34]
-    assert by_case["POW10_2POW5"]["lo"] == [-5366162204393472.0]
+def test_cli_resets_the_flint_context_before_each_generator(tmp_path, monkeypatch):
+    seen = {}
+
+    def make(name, leaked_prec):
+        def generate():
+            seen[name] = ctx.prec
+            ctx.prec = leaked_prec  # a careless generator that leaks its precision
+            return ctx.prec, [record(name, "c", {}, {"value": [arb(1)]})]
+
+        return generate
+
+    monkeypatch.setitem(GENERATORS, "dummy_a", make("dummy_a", 77))
+    monkeypatch.setitem(GENERATORS, "dummy_b", make("dummy_b", 91))
+    with ctx.workprec(10):  # the CLI is entered with a dirty context
+        assert main(["generate", "--out", str(tmp_path), "--only", "dummy_a", "dummy_b"]) == 0
+    assert seen == {"dummy_a": 53, "dummy_b": 53}
+    assert (tmp_path / "dummy_a.jsonl").exists() and (tmp_path / "dummy_b.jsonl").exists()

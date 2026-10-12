@@ -7,6 +7,7 @@ Independent ground truth for scatrs tests, computed with Arb ball arithmetic thr
     uv run --directory reference python -m scatrs_reference generate --only constants
     uv run --directory reference python -m pytest
 
-Each value is stored as `hi`/`lo` doubles, a 25-digit decimal `dec`, and a rigorous error
-bound `err` on |true - (hi + lo)|. `label` is `certified` when every source of error
-(including series truncation) is rigorously bounded, otherwise `high-precision`.
+Each value is stored as `hi`/`lo` doubles, a decimal string `dec` (up to 25 significant
+digits, fewer when the ball is wider), and a rigorous error bound `err` on |true - (hi + lo)|.
+`label` is `certified` when every source of error (including series truncation) is
+rigorously bounded, otherwise `high-precision`.

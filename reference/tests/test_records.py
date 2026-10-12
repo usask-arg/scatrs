@@ -1,5 +1,6 @@
 import json
 import math
+import sys
 
 import flint
 import pytest
@@ -92,21 +93,53 @@ def test_split_rejects_non_finite_values(make):
         split(make())
 
 
+MAX = sys.float_info.max
+
+
+def just_above_max():
+    """Exactly MAX + 2**960: it rounds to MAX, yet no finite double is >= it."""
+    return arb(MAX) + arb(2) ** 960  # evaluated under the 400-bit test precision, so exact
+
+
 @pytest.mark.parametrize(
     "make",
-    [lambda: arb(2) ** 1024, lambda: -(arb(2) ** 1024), lambda: arb(10) ** 400],
-    ids=["2^1024", "-2^1024", "10^400"],
+    [
+        lambda: arb(2) ** 1024,
+        lambda: -(arb(2) ** 1024),
+        lambda: arb(10) ** 400,
+        lambda: arb(0, arb(2) ** 1024),
+    ],
+    ids=["2^1024", "-2^1024", "10^400", "huge_radius"],
 )
 def test_split_rejects_values_that_overflow_a_double(make):
     with pytest.raises(OverflowError):
         split(make())
 
 
-def test_upper_double_rejects_a_non_finite_bound():
+def test_split_accepts_the_largest_finite_double():
+    assert split(arb(MAX)) == (MAX, 0.0, 0.0)
+    # Representable as the pair (MAX, 2**960) even though no double is >= the sum.
+    assert split(just_above_max()) == (MAX, 2.0**960, 0.0)
+
+
+def test_nearest_double_exceptions():
+    with pytest.raises(ValueError):
+        nearest_double(arb("nan"))
+    with pytest.raises(ValueError):
+        nearest_double(arb(1) / arb(0))  # NaN midpoint, infinite radius
+    for make in (lambda: arb("inf"), lambda: arb("-inf"), lambda: arb(2) ** 1024):
+        with pytest.raises(OverflowError):
+            nearest_double(make())
+    assert nearest_double(just_above_max()) == MAX  # rounds to the largest finite double
+
+
+def test_upper_double_exceptions():
     with pytest.raises(ValueError):
         upper_double(arb("nan"))
-    with pytest.raises(ValueError):
-        upper_double(arb(2) ** 1024)
+    for make in (lambda: arb("inf"), lambda: arb(2) ** 1024, just_above_max):
+        with pytest.raises(OverflowError):
+            upper_double(make())
+    assert upper_double(arb(MAX)) == MAX
 
 
 def test_nearest_double_and_upper_double():

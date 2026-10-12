@@ -101,6 +101,9 @@ pub(crate) fn two_prod(a: f64, b: f64) -> (f64, f64) {
 /// 2⁻¹¹⁵ = u²/512 relative to `1/y` for `|y| <= 2^960`.
 const DIV_RESCALE_ABOVE: f64 = f64::from_bits((960 + 1023) << 52);
 
+/// 2⁻⁹⁶⁸: `mul_pow2` renormalises scaled-down results below this magnitude.
+const RENORMALIZE_BELOW: f64 = f64::from_bits((1023 - 968) << 52);
+
 /// `2^e` for `-1022 <= e <= 1023`.
 #[inline]
 fn pow2(e: i32) -> f64 {
@@ -299,6 +302,10 @@ impl DoubleDouble {
 
     /// Multiplies by `p`: exactly (barring overflow and underflow) when `p` is `±0`, `±inf` or
     /// a normal power of two; any other `p` is handled by [`mul_f64`](Self::mul_f64).
+    ///
+    /// The result is always normalised. Scaling down to below 2⁻⁹⁶⁸ can round the low word
+    /// to a subnormal equal to ulp(hi)/2 with the tie away from `hi` (or round `hi` itself), so
+    /// such results are renormalised; a zero result is `(±0, +0)`.
     #[inline]
     pub fn mul_pow2(self, p: f64) -> Self {
         // A zero significand field means ±0, ±inf or a normal power of two.
@@ -309,10 +316,23 @@ impl DoubleDouble {
         if !hi.is_finite() {
             return Self { hi, lo: 0.0 };
         }
-        Self {
-            hi,
-            lo: self.lo * p,
+        let lo = self.lo * p;
+        // Above 2⁻⁹⁶⁸, ulp(hi)/2 exceeds every subnormal, so a rounded low word stays below it.
+        if p < 1.0 && hi.abs() < RENORMALIZE_BELOW {
+            return Self::renormalize_tiny(hi, lo);
         }
+        Self { hi, lo }
+    }
+
+    /// Renormalises a scaled-down result below 2⁻⁹⁶⁸ (see [`mul_pow2`](Self::mul_pow2)).
+    #[cold]
+    #[inline(never)]
+    fn renormalize_tiny(hi: f64, lo: f64) -> Self {
+        if hi == 0.0 {
+            return Self { hi, lo: 0.0 };
+        }
+        let (h, l) = fast_two_sum(hi, lo);
+        Self { hi: h, lo: l }
     }
 
     /// `self * 2^e`.

@@ -487,6 +487,28 @@ fn ldexp_and_recip() {
 }
 
 #[test]
+fn scaling_into_the_subnormal_range_stays_normalised() {
+    // The low word rounded to 2^-1074 = ulp(hi)/2 with the tie away from the odd hi, giving
+    // (4.450147717014404e-308, 5e-324) with hi + lo != hi.
+    let x = Dd::new(1.0 + f64::EPSILON, 0.4 * f64::EPSILON);
+    for y in [x.ldexp(-1021), x.mul_pow2(p(-1021))] {
+        assert_eq!(y.hi() + y.lo(), y.hi(), "{y:?} is not normalised");
+        assert!((y.ldexp(1021) - x).abs().hi() <= p(-53), "{y:?}"); // one rounding, 2^-1075
+    }
+    // A zero result is (±0, +0) even when the low word underflows to -0.
+    let negative = Dd::new(-1.0, -p(-60));
+    for z in [
+        negative.ldexp(-1100),
+        negative.mul_pow2(p(-1022)).mul_pow2(p(-100)),
+    ] {
+        assert!(z.hi() == 0.0 && z.hi().is_sign_negative(), "{z:?}");
+        assert_eq!(z.lo().to_bits(), 0, "{z:?}");
+    }
+    let z = Dd::new(1.0, -p(-60)).mul_pow2(0.0);
+    assert!(z.hi().to_bits() == 0 && z.lo().to_bits() == 0, "{z:?}");
+}
+
+#[test]
 fn mul_pow2_falls_back_for_other_factors() {
     let x = Dd::new(1.0, p(-53));
     let y = x.mul_pow2(3.0);
@@ -693,6 +715,27 @@ proptest! {
         if (a.hi() - b.hi()).is_finite() {
             prop_assert_eq!(a - b, twice(h(a) - h(b)));
             prop_assert_eq!(a - b.hi(), twice(h(a) - 0.5 * b.hi()));
+        }
+    }
+
+    #[test]
+    fn scaling_down_to_tiny_magnitudes_stays_normalised(
+        h in 1.0..2.0f64, neg in any::<bool>(), f in lo_frac(), e in -1100..=-900i32,
+    ) {
+        let x = dd(if neg { -h } else { h }, f);
+        let mut ys = vec![x.ldexp(e)];
+        if e >= -1022 {
+            ys.push(x.mul_pow2(p(e)));
+        }
+        for y in ys {
+            prop_assert_eq!(y.hi() + y.lo(), y.hi(), "{:?} * 2^{} = {:?}", x, e, y);
+            if y.hi() == 0.0 {
+                prop_assert_eq!(y.lo().to_bits(), 0);
+                prop_assert_eq!(y.hi().is_sign_negative(), neg);
+            }
+            // Scaling back up is exact; ldexp rounds at most three times by <= 2^-1075 each.
+            let err = (y.ldexp(-e) - x).abs().hi();
+            prop_assert!(err <= p(-1073 - e), "{:?} * 2^{} = {:?}", x, e, y);
         }
     }
 

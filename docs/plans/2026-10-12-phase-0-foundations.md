@@ -871,7 +871,7 @@ if __name__ == "__main__":
 
 Run: `uv run --directory reference python -m scatrs_reference generate && uv run --directory reference python -m pytest -q`
 Expected:
-- `reference/data/constants.jsonl` (61 records) and `reference/data/manifest.json` exist.
+- `reference/data/constants.jsonl` (62 records) and `reference/data/manifest.json` exist.
 - All tests pass.
 
 If `test_constants_values` fails on a value, stop and report it. The expected values were computed independently with Arb on 2026-10-12.

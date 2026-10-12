@@ -58,5 +58,10 @@ These items came out of the Phase 0 reviews and were deliberately deferred. Each
   - **(c) NaN where f64 is finite.** `exp`, `cis`, `from_polar`, `sin`, `cos` and `powc` return NaN when a component exceeds 2⁵⁰, the DD trig domain. Example: `exp(i·2⁵¹)`.
 - **Fused `mul_add`.** `DoubleDouble::mul_add` is not fused (error ≤ 4u²·|x·a|). Add a fused version only if a kernel needs it.
 
+## Dual numbers (Phase 1)
+- **Performance on other architectures.** Measure `Dual` division and `Dual / f64` on x86_64 before settling the formulation. x86 `divsd` throughput is about 1 per 4–5 cycles, versus ≥ 1 per cycle on Apple M4, so the correctly rounded second division will cost more there.
+- **No cross-element vectorisation.** Loops over many `Dual`s are not vectorised across elements, unlike the same loops over `f64`. Within a single `Dual` at N ≥ 4, standalone `*` and `/` do use two-lane NEON across the derivative components. Results are codegen-sensitive: the plan's N=8 multiply chain varied between 10 and 33 cycles across harnesses. Real-kernel Jacobian overhead (§10.1 target ≤ (1+N)×) must be judged on phase 1 kernels. A structure-of-arrays layout across sizes may be needed.
+- **Strong-zero caveat.** sqrt(p²) or (p²)^¼ at p = 0 give derivative 0, not inf/NaN. Kernels must use `abs`/`hypot` rather than sqrt of squares.
+
 ## Platform notes
 - On aarch64, `f64::max`/`f64::min` return NaN for a signaling NaN, contrary to Rust's documentation. `DoubleDouble` follows the documented rule. No DD operation produces a signaling NaN.

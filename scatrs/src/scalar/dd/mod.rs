@@ -7,8 +7,17 @@
 //! `* f64` 2u², `/` 10u², `/ f64` 3u². They rely on a correctly rounded fused multiply-add,
 //! which `f64::mul_add` provides on every platform (in software where hardware lacks FMA).
 //!
-//! Non-finite results are returned as `(hi, 0.0)` so that infinities do not become NaN.
+//! Non-finite results are returned as `(hi, 0.0)` so that infinities do not become NaN, and a
+//! zero result carries the IEEE 754 sign of the `f64` operation on the leading words.
 //! Full relative precision requires magnitudes above about 2⁻⁹⁶⁹ ≈ 2·10⁻²⁹².
+//! A result within about an ulp of `f64::MAX` may overflow early: for example `add_dd` adds
+//! the leading words first, so it overflows when `hi + hi` reaches the overflow threshold
+//! (`MAX` plus half an ulp, rounded to infinity) even if the trailing words would bring the
+//! sum back below it.
+//!
+//! Speed: `f64::mul_add` is a single instruction where FMA is enabled, but on x86_64 builds
+//! without the `fma` target feature (the default) it is a much slower libm call; build with
+//! `-C target-feature=+fma` or `-C target-cpu=native` where the hardware has FMA.
 
 use core::cmp::Ordering;
 use core::ops::{
@@ -16,6 +25,7 @@ use core::ops::{
 };
 
 mod consts;
+mod rem;
 
 /// A double-double number: the exact sum `hi + lo` with `hi == fl(hi + lo)`.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -33,7 +43,12 @@ pub(crate) fn two_sum(a: f64, b: f64) -> (f64, f64) {
     (s, e)
 }
 
-/// Error-free sum, valid when `|a| >= |b|` or `a == 0`.
+/// Error-free sum, valid when `|a| >= |b|` or `a == 0`, and more generally whenever `a` is an
+/// integer multiple of `ulp(b)` (the grid condition).
+///
+/// `div_dd` relies on the general form: for normal `y.hi`, `rh = 1 - y.hi·th` is exact and a
+/// multiple of `ulp(y.hi)·ulp(th) >= 2^-105`, while `|rl| <= 2^-53` gives `ulp(rl) <= 2^-105`,
+/// so `rh` lies on the grid of `rl` even when `|rh| < |rl|`.
 #[inline]
 pub(crate) fn fast_two_sum(a: f64, b: f64) -> (f64, f64) {
     let s = a + b;
@@ -48,6 +63,12 @@ pub(crate) fn two_prod(a: f64, b: f64) -> (f64, f64) {
     let e = a.mul_add(b, -p);
     (p, e)
 }
+
+/// Above this magnitude a divisor's reciprocal, and the correction terms of `div_dd`, are
+/// close enough to the subnormal range to lose accuracy, so `div_dd` rescales first. The
+/// rounding errors of subnormal intermediates are at most 2⁻¹⁰⁷⁵ absolute, below
+/// 2⁻¹¹⁵ = u²/512 relative to `1/y` for `|y| <= 2^960`.
+const DIV_RESCALE_ABOVE: f64 = f64::from_bits((960 + 1023) << 52);
 
 /// `2^e` for `-1022 <= e <= 1023`.
 #[inline]
@@ -111,10 +132,28 @@ impl DoubleDouble {
         self.lo
     }
 
+    /// Fast2Sum of a result's words; an overflowing sum gives `(±inf, 0)`.
     #[inline]
     fn renormalize(hi: f64, lo: f64) -> Self {
         let (h, l) = fast_two_sum(hi, lo);
+        if !h.is_finite() {
+            return Self { hi: h, lo: 0.0 };
+        }
         Self { hi: h, lo: l }
+    }
+
+    /// Gives a zero result the sign of `lead`, the `f64` operation on the leading words, as
+    /// the IEEE 754 sign rules require (`-0 + -0 = -0`, `0 * -1 = -0`, `x - x = +0`).
+    #[inline]
+    fn zero_signed_as(self, lead: f64) -> Self {
+        if self.hi == 0.0 {
+            Self {
+                hi: 0.0_f64.copysign(lead),
+                lo: 0.0,
+            }
+        } else {
+            self
+        }
     }
 
     /// `self + y` (relative error ≤ 2u²).
@@ -124,7 +163,7 @@ impl DoubleDouble {
         if !sh.is_finite() {
             return Self { hi: sh, lo: 0.0 };
         }
-        Self::renormalize(sh, self.lo + sl)
+        Self::renormalize(sh, self.lo + sl).zero_signed_as(sh)
     }
 
     /// `self + y` (relative error ≤ 3u²).
@@ -137,8 +176,11 @@ impl DoubleDouble {
         let (th, tl) = two_sum(self.lo, y.lo);
         let c = sl + th;
         let (vh, vl) = fast_two_sum(sh, c);
+        if !vh.is_finite() {
+            return Self { hi: vh, lo: 0.0 };
+        }
         let w = tl + vl;
-        Self::renormalize(vh, w)
+        Self::renormalize(vh, w).zero_signed_as(sh)
     }
 
     /// `self * y` (relative error ≤ 2u²).
@@ -149,7 +191,7 @@ impl DoubleDouble {
             return Self { hi: ch, lo: 0.0 };
         }
         let cl3 = self.lo.mul_add(y, cl1);
-        Self::renormalize(ch, cl3)
+        Self::renormalize(ch, cl3).zero_signed_as(ch)
     }
 
     /// `self * y` (relative error ≤ 4u²).
@@ -163,7 +205,7 @@ impl DoubleDouble {
         let tl1 = self.hi.mul_add(y.lo, tl0);
         let cl2 = self.lo.mul_add(y.hi, tl1);
         let cl3 = cl1 + cl2;
-        Self::renormalize(ch, cl3)
+        Self::renormalize(ch, cl3).zero_signed_as(ch)
     }
 
     /// `self / y` (relative error ≤ 3u²).
@@ -174,11 +216,15 @@ impl DoubleDouble {
             return Self { hi: th, lo: 0.0 };
         }
         let (ph, pl) = two_prod(th, y);
+        if !ph.is_finite() {
+            // fl(th·y) overflowed although th is finite (|self| near MAX): halve, divide, double.
+            return self.mul_pow2(0.5).div_f64(y).mul_pow2(2.0);
+        }
         let dh = self.hi - ph;
         let dt = dh - pl;
         let d = dt + self.lo;
         let tl = d / y;
-        Self::renormalize(th, tl)
+        Self::renormalize(th, tl).zero_signed_as(th)
     }
 
     /// `self / y` (relative error ≤ 10u²).
@@ -190,19 +236,34 @@ impl DoubleDouble {
         }
         let th = 1.0 / y.hi;
         if !th.is_finite() {
-            // |y.hi| < 2^-1024, so |self| < 2 since q is finite: scaling both by 2^106 is exact.
+            // |y.hi| <= 2^-1024, so |self| < 1 since q is finite: scaling both by 2^106 is exact.
             return self.mul_pow2(pow2(106)).div_dd(y.mul_pow2(pow2(106)));
+        }
+        if y.hi.abs() > DIV_RESCALE_ABOVE {
+            // th would be near-subnormal. Scaling both by 2^-106 is exact unless |self| is
+            // below about 2^-860, and then the quotient underflows anyway.
+            return self.mul_pow2(pow2(-106)).div_dd(y.mul_pow2(pow2(-106)));
         }
         let rh = (-y.hi).mul_add(th, 1.0);
         let rl = -y.lo * th;
         let (eh, el) = fast_two_sum(rh, rl);
         let m = Self { hi: eh, lo: el }.mul_f64(th).add_f64(th);
-        self.mul_dd(m)
+        let z = self.mul_dd(m);
+        if z.hi.is_infinite() {
+            // fl(self.hi·m.hi) overflowed although q is finite: halve, divide, double.
+            return self.mul_pow2(0.5).div_dd(y).mul_pow2(2.0);
+        }
+        z
     }
 
-    /// Multiplies by `p`, which must be a power of two (exact unless over/underflow).
+    /// Multiplies by `p`: exactly (barring overflow and underflow) when `p` is `±0`, `±inf` or
+    /// a normal power of two; any other `p` is handled by [`mul_f64`](Self::mul_f64).
     #[inline]
     pub fn mul_pow2(self, p: f64) -> Self {
+        // A zero significand field means ±0, ±inf or a normal power of two.
+        if p.to_bits() & ((1 << 52) - 1) != 0 {
+            return self.mul_f64(p);
+        }
         let hi = self.hi * p;
         if !hi.is_finite() {
             return Self { hi, lo: 0.0 };
@@ -216,7 +277,8 @@ impl DoubleDouble {
     /// `self * 2^e`.
     pub fn ldexp(self, e: i32) -> Self {
         let mut x = self;
-        let mut e = e;
+        // Beyond ±2200 every finite nonzero value overflows or underflows anyway.
+        let mut e = e.clamp(-2200, 2200);
         while e > 1000 {
             x = x.mul_pow2(pow2(1000));
             e -= 1000;
@@ -250,12 +312,14 @@ impl DoubleDouble {
             return self;
         }
         let f = self.hi.floor();
-        if f == self.hi {
-            let (h, l) = two_sum(f, self.lo.floor());
-            Self { hi: h, lo: l }
-        } else {
-            Self { hi: f, lo: 0.0 }
+        if f != self.hi {
+            return Self { hi: f, lo: 0.0 };
         }
+        if self.lo == 0.0 {
+            return Self { hi: f, lo: 0.0 }; // already an integer; keeps the sign of -0
+        }
+        let (h, l) = two_sum(f, self.lo.floor());
+        Self { hi: h, lo: l }
     }
 
     /// Smallest integer not less than `self`.
@@ -330,14 +394,21 @@ impl Div for DoubleDouble {
     }
 }
 
+/// The truncated remainder `self - y * trunc(self / y)`, like `f64`'s `%`: it has the sign of
+/// `self` (including a zero result), magnitude below `|y|`, `x % ±inf == x` for finite `x`,
+/// and NaN when `self` is infinite or `y` is zero.
+///
+/// Accuracy: the remainder is computed exactly, by long division on floating-point
+/// expansions (any quotient, up to 2²⁰⁹⁸), and then rounded once, so the result is within
+/// `2u²·|y|` of the true remainder (u = 2⁻⁵³). The error is at most about `u²·|result|`,
+/// except when the true remainder lies within that distance below `|y|` and rounding would
+/// reach `|y|`; then a double-double one step of the low word below `|y|` is returned. The
+/// remainder of two `f64`s, which is itself an `f64`, is returned exactly. As for the other
+/// operations, full precision requires magnitudes above about 2⁻⁹⁶⁹.
 impl Rem for DoubleDouble {
     type Output = Self;
-    /// `self - y * trunc(self / y)`, with the sign of `self` (like `f64`'s `%`).
     fn rem(self, y: Self) -> Self {
-        if y.hi.is_infinite() && self.hi.is_finite() {
-            return self; // as for f64; the formula below would give inf * 0 = NaN
-        }
-        self - y * (self / y).trunc()
+        rem::rem(self, y)
     }
 }
 

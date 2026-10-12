@@ -13,8 +13,8 @@
       "generator": "dd_arith",
       "precision_bits": 600,
       "python_flint": "0.9.0",
-      "records": 7,
-      "sha256": "983d17f4184d28ec24c756d7ee6eeb6b74e184a507cf609fe437db18fab9d535"
+      "records": 9,
+      "sha256": "39fa02d77d508f496362b3d689b647e5f20090b7be0592edf1fee1fb095f9e4a"
     }
   },
   "format_version": 1

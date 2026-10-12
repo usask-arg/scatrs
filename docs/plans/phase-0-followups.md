@@ -61,6 +61,7 @@ These items came out of the Phase 0 reviews and were deliberately deferred. Each
 ## Dual numbers (Phase 1)
 - **Performance on other architectures.** Measure `Dual` division and `Dual / f64` on x86_64 before settling the formulation. x86 `divsd` throughput is about 1 per 4–5 cycles, versus ≥ 1 per cycle on Apple M4, so the correctly rounded second division will cost more there.
 - **No cross-element vectorisation.** Loops over many `Dual`s are not vectorised across elements, unlike the same loops over `f64`. Within a single `Dual` at N ≥ 4, standalone `*` and `/` do use two-lane NEON across the derivative components. Results are codegen-sensitive: the plan's N=8 multiply chain varied between 10 and 33 cycles across harnesses. Real-kernel Jacobian overhead (§10.1 target ≤ (1+N)×) must be judged on phase 1 kernels. A structure-of-arrays layout across sizes may be needed.
+- **N=2 throughput regression in one harness.** The one-branch division check (b609ea7) cost N=2 its NEON packing in the Task 7 reviewer's element-wise harness, 1.33 → 1.71 ns per element (+28%). N=1 improved by 10%, and N=4, N=8 and the chains were unchanged. The trade-off depends on codegen, so re-check it in the phase 1 kernels.
 - **Strong-zero caveat.** sqrt(p²) or (p²)^¼ at p = 0 give derivative 0, not inf/NaN. Kernels must use `abs`/`hypot` rather than sqrt of squares.
 
 ## Platform notes

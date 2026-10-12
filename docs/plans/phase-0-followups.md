@@ -13,7 +13,8 @@ These items came out of the Phase 0 reviews and were deliberately deferred. Each
 - **`ln_1p_series` (about 200 ns).** Use reciprocal tables, or an f64 tail for terms below 2⁻⁵³.
 - **x86_64 builds without FMA.**
   - **Problem:** `f64::mul_add` becomes a libm call, which makes every DD operation about 10× slower in default wheels.
-  - **Fix:** select Dekker's split `two_prod` when `cfg(not(target_feature = "fma"))`, and consider shipping x86-64-v3 wheels as well. Decide this before Task 13's wheels are published.
+  - **Fix:** select Dekker's split `two_prod` when `cfg(not(target_feature = "fma"))`, and consider shipping x86-64-v3 wheels as well. Decide this before Task 13's wheels are published. A non-FMA build also has to change `mul_dd` and `mul_f64`, which use FMA in their non-exact steps. Those operations then need the non-FMA error bounds from Joldes, Muller & Popescu (2017), not just a different `two_prod`. FMA and non-FMA builds will then give bitwise different results. The spec allows this, since it only requires determinism across thread counts.
+- **`mul_pow2` zero inputs:** these deliberately take the cold `renormalize_tiny` path, which turns a −0 low word into +0. Do not optimise this away.
 - **`DoubleDouble::rem`** allocates a `Vec` on every call. The expansion length bound is unproven; 6 components is the most observed. Switch to a stack buffer if a bound can be proved.
 
 ## Correctness and robustness (low priority, outside the documented domain)

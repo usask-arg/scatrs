@@ -52,6 +52,10 @@ These items came out of the Phase 0 reviews and were deliberately deferred. Each
   - Smith or Baudin–Smith division;
   - `ln` via `ln_1p` near 1;
   - a stable `hypot`/`abs`.
+- **`Complex<DoubleDouble>` hazards** (found in the Task 6 review):
+  - **(a) `sqrt` breaks the principal branch next to the negative real axis.** `sqrt(-9 + 1e-300i)` gives Re = −4.49e-33, but the true value is +1.7e-301. The DD π sits about 3e-33 above π, so θ/2 overshoots −π/2. Kernels that choose a branch by the sign of Re would flip the root. Fix: a scatrs-owned Kahan- or Hull-style `csqrt`.
+  - **(b) DD complex division loses precision for |w| ≲ 2⁻⁴⁸⁴ (~1e-146).** This happens because `norm_sqr` falls below 2⁻⁹⁶⁹. Measured errors: 3.5e5 u² at 2⁻⁴⁹⁰ and 1.8e11 u² at 2⁻⁵⁰⁰. f64 is still exact there. Fix: scaled Smith division.
+  - **(c) NaN where f64 is finite.** `exp`, `cis`, `from_polar`, `sin`, `cos` and `powc` return NaN when a component exceeds 2⁵⁰, the DD trig domain. Example: `exp(i·2⁵¹)`.
 - **Fused `mul_add`.** `DoubleDouble::mul_add` is not fused (error ≤ 4u²·|x·a|). Add a fused version only if a kernel needs it.
 
 ## Platform notes

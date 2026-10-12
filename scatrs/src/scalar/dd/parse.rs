@@ -32,12 +32,21 @@ use core::fmt;
 use core::str::FromStr;
 
 use super::consts::POW10_2I;
-use super::traits::from_u128;
-use super::{DoubleDouble as Dd, pow2, two_sum};
+use super::{DoubleDouble as Dd, from_u128, pow2, scale_down_tiny};
 
 /// Error returned when a string is not a decimal floating-point literal.
+///
+/// It carries no detail yet; `#[non_exhaustive]` leaves room to add some (such as the kind of
+/// error) without a breaking change.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct ParseDoubleDoubleError;
+
+impl ParseDoubleDoubleError {
+    pub(crate) const fn new() -> Self {
+        Self
+    }
+}
 
 impl fmt::Display for ParseDoubleDoubleError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -71,7 +80,8 @@ impl Dd {
     /// Parses a decimal literal: an optional sign, then `inf`, `infinity` or `nan` in any case,
     /// or `digits[.digits][(e|E)[+-]digits]`, where either digit string before the exponent may
     /// be empty but not both. This is the grammar of `f64::from_str`, except that leading and
-    /// trailing whitespace is ignored.
+    /// trailing whitespace is ignored; `str::parse` (`FromStr`) does not ignore it, and accepts
+    /// exactly the strings that `f64` accepts.
     ///
     /// Relative error ≤ 2⁻¹⁰⁰ for results in [2⁻⁹⁶⁹, MAX]; exact for integers below 2¹⁰⁶ and for
     /// doubles whose significant digits form an integer below 2⁵³ with at most 22 of them after
@@ -83,32 +93,37 @@ impl Dd {
     /// subnormal give ±0, and zero, NaN and infinite results keep the literal's sign (`"-0"` is
     /// −0). Digits beyond the 38th significant one round the 38th, half up.
     pub fn from_decimal_str(s: &str) -> Result<Self, ParseDoubleDoubleError> {
-        let t = s.trim().as_bytes();
-        let (negative, body) = match t.split_first() {
-            Some((b'-', rest)) => (true, rest),
-            Some((b'+', rest)) => (false, rest),
-            _ => (false, t),
-        };
-        let magnitude =
-            if body.eq_ignore_ascii_case(b"inf") || body.eq_ignore_ascii_case(b"infinity") {
-                Self::INFINITY
-            } else if body.eq_ignore_ascii_case(b"nan") {
-                Self::NAN
-            } else {
-                let (m, e) = parse_decimal(body).ok_or(ParseDoubleDoubleError)?;
-                from_decimal(m, e)
-            };
-        Ok(if negative { -magnitude } else { magnitude })
+        parse_literal(s.trim().as_bytes())
     }
 }
 
 impl FromStr for Dd {
     type Err = ParseDoubleDoubleError;
 
-    /// [`DoubleDouble::from_decimal_str`](Dd::from_decimal_str).
+    /// [`DoubleDouble::from_decimal_str`](Dd::from_decimal_str), but strict like `f64`:
+    /// surrounding whitespace is an error, so generic `T: FromStr` code (and parsing a
+    /// `Complex<DoubleDouble>`) accepts exactly the strings it accepts for `f64`.
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        Self::from_decimal_str(s)
+        parse_literal(s.as_bytes())
     }
+}
+
+/// `[+-](inf|infinity|nan|digits[.digits][(e|E)[+-]digits])`, without surrounding whitespace.
+fn parse_literal(t: &[u8]) -> Result<Dd, ParseDoubleDoubleError> {
+    let (negative, body) = match t.split_first() {
+        Some((b'-', rest)) => (true, rest),
+        Some((b'+', rest)) => (false, rest),
+        _ => (false, t),
+    };
+    let magnitude = if body.eq_ignore_ascii_case(b"inf") || body.eq_ignore_ascii_case(b"infinity") {
+        Dd::INFINITY
+    } else if body.eq_ignore_ascii_case(b"nan") {
+        Dd::NAN
+    } else {
+        let (m, e) = parse_decimal(body).ok_or(ParseDoubleDoubleError::new())?;
+        from_decimal(m, e)
+    };
+    Ok(if negative { -magnitude } else { magnitude })
 }
 
 /// The significand m (at most 38 digits) and exponent e of `digits[.digits][(e|E)[+-]digits]`:
@@ -249,62 +264,12 @@ fn mul_pow10_halved(m: u128, e: u32) -> Dd {
 }
 
 /// m·10⁻ᵏ below 2⁻⁹⁶⁸: computed at scale 2¹²⁸ (with full precision down to 2⁻¹⁰⁹⁶, below which
-/// the result is zero anyway), then scaled back by [`scale_down_tiny`].
+/// the result is zero anyway), then scaled back keeping the leading word correctly rounded.
 #[cold]
 #[inline(never)]
 fn tiny_quotient(m: u128, k: u32) -> Dd {
     let v = div_pow10(from_u128(m).mul_pow2(pow2(TINY_SCALE_EXPONENT)), k);
     scale_down_tiny(v, TINY_SCALE_EXPONENT)
-}
-
-/// v·2⁻ˢ for |v| < 2¹⁰²³ and 54 <= s <= 1000, keeping the leading word the correctly rounded
-/// double of the value (`mul_pow2` instead rounds the trailing word to the subnormal grid and
-/// renormalises, which can move the leading word when that rounding reaches half an ulp of it).
-///
-/// A subnormal result is rounded once by [`round_to_subnormal`]. Otherwise the leading word
-/// scales exactly and the trailing word is rounded to the subnormal grid, then stepped once
-/// towards zero if it reached half an ulp of an odd leading word (or a whole ulp, in the
-/// lowest binade, where it becomes zero); the trailing word's error is then at most 2⁻¹⁰⁷⁴.
-pub(super) fn scale_down_tiny(v: Dd, s: i32) -> Dd {
-    if v.hi.abs() < pow2(s - 1022) {
-        return Dd::from_f64(round_to_subnormal(v, s));
-    }
-    let hi = v.hi * pow2(-s);
-    let mut lo = v.lo * pow2(-s);
-    if hi + lo != hi {
-        lo -= f64::from_bits(1).copysign(lo);
-    }
-    Dd::from_parts_unchecked(hi, if lo == 0.0 { 0.0 } else { lo })
-}
-
-/// (v.hi + v.lo)·2⁻ˢ rounded once to the nearest subnormal (or ±2⁻¹⁰²²), ties to even, for
-/// |v| < 2^(s − 1022) and 54 <= s <= 1000; the sign of v is kept, also when the result is zero.
-///
-/// Scaling the leading word alone rounds once, but can land on the wrong side when the trailing
-/// word decides a tie (or near-tie) of the leading word. With q the scaled leading word,
-/// d = v.hi − q·2ˢ is that rounding's error, exact (both terms are multiples of ulp(v.hi) and
-/// |d| is at most half the scaled subnormal spacing G = 2^(s − 1074)); the true residual
-/// d + v.lo is then compared with G/2. As ulp(v.hi) ≤ G, |v.lo| ≤ G/2 and the residual is below
-/// G, so q moves by at most one step.
-fn round_to_subnormal(v: Dd, s: i32) -> f64 {
-    const STEP: f64 = f64::from_bits(1); // 2^-1074
-    if v.hi.is_sign_negative() {
-        return -round_to_subnormal(-v, s);
-    }
-    let q = v.hi * pow2(-s);
-    let d = v.hi - q * pow2(s);
-    let (r, r_lo) = two_sum(d, v.lo); // the residual r + r_lo, exactly
-    let half = pow2(s - 1075);
-    let above = r > half || (r == half && r_lo > 0.0);
-    let below = r < -half || (r == -half && r_lo < 0.0);
-    let tie = r.abs() == half && r_lo == 0.0 && q.to_bits() & 1 == 1;
-    if above || (tie && r > 0.0) {
-        q + STEP
-    } else if below || (tie && r < 0.0) {
-        q - STEP
-    } else {
-        q
-    }
 }
 
 #[cfg(test)]
@@ -316,44 +281,5 @@ mod tests {
         for (k, &p) in POW10_F64.iter().enumerate() {
             assert_eq!(p as u128, 10u128.pow(k as u32), "10^{k}");
         }
-    }
-
-    #[test]
-    fn subnormal_rounding_uses_the_trailing_word() {
-        let s = TINY_SCALE_EXPONENT;
-        let g = pow2(s - 1074); // the scaled subnormal spacing
-        // 2.5 steps: a tie, decided by the trailing word.
-        let v = Dd::from_f64(2.5 * g);
-        assert_eq!(round_to_subnormal(v, s), f64::from_bits(2)); // ties to even
-        assert_eq!(
-            round_to_subnormal(Dd::new(2.5 * g, 1e-310), s),
-            f64::from_bits(3)
-        );
-        assert_eq!(
-            round_to_subnormal(Dd::new(3.5 * g, -1e-310), s),
-            f64::from_bits(3)
-        );
-        assert_eq!(
-            round_to_subnormal(Dd::from_f64(3.5 * g), s),
-            f64::from_bits(4)
-        );
-        assert_eq!(
-            round_to_subnormal(Dd::new(0.5 * g, 1e-310), s),
-            f64::from_bits(1)
-        );
-        assert_eq!(round_to_subnormal(Dd::from_f64(0.5 * g), s), 0.0);
-        assert_eq!(round_to_subnormal(Dd::ZERO, s).to_bits(), 0);
-        assert_eq!(
-            round_to_subnormal(-Dd::ZERO, s).to_bits(),
-            (-0.0f64).to_bits()
-        );
-        assert_eq!(
-            round_to_subnormal(Dd::new(-2.5 * g, -1e-310), s),
-            -f64::from_bits(3)
-        );
-        assert_eq!(
-            round_to_subnormal(Dd::from_f64(-0.25 * g), s).to_bits(),
-            (-0.0f64).to_bits()
-        );
     }
 }

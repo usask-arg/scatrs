@@ -246,7 +246,7 @@ fn decimal_parsing_matches_reference() {
             let rel = v.dd_error(i, got.hi(), got.lo()) / exact.abs().hi();
             worst = worst.max(rel);
             // Tightened from the plan's 4·TOL to the documented bound 2^-100 (the error
-            // analysis in parse.rs gives at most 41u²).
+            // analysis in parse.rs gives at most 34u²).
             assert!(
                 rel <= TOL,
                 "{text}: got {got:?}, reference {exact:?}, rel {rel:e}"
@@ -326,20 +326,55 @@ fn malformed_literals_are_rejected_like_f64() {
     ];
     for s in bad {
         assert!(s.parse::<f64>().is_err(), "{s:?} is a valid f64");
-        assert_eq!(
-            Dd::from_decimal_str(s),
-            Err(ParseDoubleDoubleError),
-            "{s:?}"
-        );
+        assert!(Dd::from_decimal_str(s).is_err(), "{s:?}");
+        assert!(s.parse::<Dd>().is_err(), "{s:?}");
     }
     for radix in [2, 8, 16, 36] {
         assert!(<Dd as Num>::from_str_radix("1", radix).is_err());
     }
-    let e = ParseDoubleDoubleError;
+    let e: ParseDoubleDoubleError = "x".parse::<Dd>().unwrap_err();
     assert_eq!(e.to_string(), "invalid double-double literal");
     let boxed: Box<dyn std::error::Error> = Box::new(e.clone());
     assert_eq!(boxed.to_string(), e.to_string());
-    assert_eq!("x".parse::<Dd>(), Err(e));
+    assert_eq!(Dd::from_decimal_str("1e"), Err(e));
+}
+
+#[test]
+fn from_str_is_strict_like_f64() {
+    // from_decimal_str and Num::from_str_radix ignore surrounding whitespace; str::parse does
+    // not, as for f64.
+    for s in [" 1.5", "1.5 ", "\t-inf", "1.5\n", " nan "] {
+        assert!(s.parse::<f64>().is_err(), "{s:?}");
+        assert!(s.parse::<Dd>().is_err(), "{s:?}");
+        assert!(Dd::from_decimal_str(s).is_ok(), "{s:?}");
+        assert!(<Dd as Num>::from_str_radix(s, 10).is_ok(), "{s:?}");
+    }
+    assert!(same("1.5".parse::<Dd>().unwrap(), Dd::from_f64(1.5)));
+    assert!(same("-0".parse::<Dd>().unwrap(), Dd::from_f64(-0.0)));
+    // So Complex<DoubleDouble> parses exactly the strings that Complex<f64> parses.
+    for s in [
+        "1.5+2.5i",
+        "1.5 + 2.5i",
+        " 1.5+2.5i",
+        "1.5+2.5i ",
+        "2i",
+        "-1e3-4.5e-2i",
+        "1.5+ 2.5 i",
+        "i",
+        "-i",
+        "1.5",
+        "inf-nani",
+        "1.5+2.5j",
+        "1.5++2.5i",
+        "",
+    ] {
+        let (got, want) = (s.parse::<Complex<Dd>>(), s.parse::<Complex<f64>>());
+        assert_eq!(got.is_ok(), want.is_ok(), "{s:?}");
+        if let (Ok(g), Ok(w)) = (got, want) {
+            let ok = |a: Dd, b: f64| a.hi().to_bits() == b.to_bits() || (a.is_nan() && b.is_nan());
+            assert!(ok(g.re, w.re) && ok(g.im, w.im), "{s:?}: {g:?} vs {w:?}");
+        }
+    }
 }
 
 #[test]
@@ -526,6 +561,7 @@ proptest! {
     fn parsing_never_panics_and_accepts_what_f64_accepts(s in any::<String>()) {
         let got = Dd::from_decimal_str(&s);
         prop_assert_eq!(got.is_ok(), s.trim().parse::<f64>().is_ok(), "{:?}", s);
+        prop_assert_eq!(s.parse::<Dd>().is_ok(), s.parse::<f64>().is_ok(), "{:?}", s);
     }
 
     #[test]
@@ -534,6 +570,13 @@ proptest! {
         t in "[-+.eE0-9iInNaAfFtTyY]{0,12}",
     ) {
         for s in [s, t] {
+            // str::parse is strict: it accepts what f64 accepts, and agrees with
+            // from_decimal_str there.
+            let strict = s.parse::<Dd>();
+            prop_assert_eq!(strict.is_ok(), s.parse::<f64>().is_ok(), "{:?}", s);
+            if let Ok(x) = strict {
+                prop_assert!(same(x, Dd::from_decimal_str(&s).unwrap()), "{:?}", s);
+            }
             let want = s.trim().parse::<f64>();
             let got = Dd::from_decimal_str(&s);
             prop_assert_eq!(got.is_ok(), want.is_ok(), "{:?}", s);
@@ -620,6 +663,11 @@ fn integer_conversions_are_exact_at_the_extremes() {
         Some(u128::MAX)
     );
     assert_eq!(cast(i64::MIN.into()).to_i64(), Some(i64::MIN));
+    // Next to a tie of the leading word: 2^126 + 2^73 + 1 gives (2^126, 2^73), off by 1, although
+    // the nearest double is 2^126 + 2^74.
+    let n: i128 = (1 << 126) + (1 << 73) + 1;
+    assert!(same(cast(n), Dd::new(two_pow(126), two_pow(73))));
+    assert!(same(cast(-n), -Dd::new(two_pow(126), two_pow(73))));
     // Beyond 2^106 the nearest double-double: 2^120 + 2^66 + 1 needs 121 bits.
     let n: i128 = (1 << 120) + (1 << 66) + 1;
     assert!(same(cast(n), Dd::new(two_pow(120), two_pow(66))));
@@ -821,23 +869,48 @@ proptest! {
     }
 
     #[test]
-    fn wide_integers_are_rounded_once(j in any::<i128>(), v in any::<u128>()) {
-        // The leading word is the nearest double and the trailing word the residual rounded
-        // once, so the error is at most ulp(lo)/2 <= u²|j|.
+    fn wide_integers_are_within_u2(
+        j in prop_oneof![any::<i128>(), near_tie().prop_map(|n| (n >> 1) as i128)],
+        v in prop_oneof![any::<u128>(), near_tie()],
+        neg in any::<bool>(),
+    ) {
+        // Exact below 2^106 in magnitude, within u²|n| above. (Next to a tie the leading word
+        // need not be the nearest double: see from_u128.)
+        let j = if neg { j.wrapping_neg() } else { j };
         let x = <Dd as NumCast>::from(j).unwrap();
-        prop_assert_eq!(x.hi(), j as f64);
-        let residual = if x.hi() == two_pow(127) { (j - i128::MAX) - 1 } else { j - x.hi() as i128 };
-        prop_assert_eq!(x.lo(), residual as f64, "{}", j);
+        prop_assert!(x.hi() + x.lo() == x.hi(), "{:?}", x);
+        // Both words are integers: the error x − j, exactly.
+        let d = if x.hi() == two_pow(127) { (i128::MAX - j) + 1 } else { x.hi() as i128 - j };
+        let err = d + x.lo() as i128;
+        prop_assert!(within_u2(err, j.unsigned_abs()), "{}: {:?} is off by {}", j, x, err);
         let y = <Dd as NumCast>::from(v).unwrap();
-        prop_assert_eq!(y.hi(), v as f64);
-        let residual = if y.hi() == two_pow(127) * 2.0 {
-            -(((u128::MAX - v) + 1) as f64)
-        } else if v >= y.hi() as u128 {
-            (v - y.hi() as u128) as f64
+        prop_assert!(y.hi() + y.lo() == y.hi(), "{:?}", y);
+        let d = if y.hi() == two_pow(127) * 2.0 {
+            ((u128::MAX - v) + 1) as i128
+        } else if y.hi() as u128 >= v {
+            (y.hi() as u128 - v) as i128
         } else {
-            -((y.hi() as u128 - v) as f64)
+            -((v - y.hi() as u128) as i128)
         };
-        prop_assert_eq!(y.lo(), residual, "{}", v);
+        let err = d + y.lo() as i128;
+        prop_assert!(within_u2(err, v), "{}: {:?} is off by {}", v, y, err);
+    }
+}
+
+/// Integers within 2 of a tie between two doubles (a double plus half its ulp), up to 2^128.
+fn near_tie() -> impl Strategy<Value = u128> {
+    (54..=127u32, (1u128 << 52)..(1u128 << 53), -2i128..=2).prop_map(|(e, m, delta)| {
+        let tie = (m << (e - 52)) + (1u128 << (e - 53));
+        tie.checked_add_signed(delta).unwrap_or(tie)
+    })
+}
+
+/// |err| is 0 for n below 2^106, and at most u²·n above.
+fn within_u2(err: i128, n: u128) -> bool {
+    if n < 1 << 106 {
+        err == 0
+    } else {
+        err.unsigned_abs() as f64 <= U2 * n as f64
     }
 }
 
@@ -995,20 +1068,22 @@ fn signs_max_min_and_clamp() {
     assert!(Float::copysign(Dd::NAN, d(-1.0)).hi().is_sign_negative());
     assert!(same(Float::abs(Dd::new(-1.0, 1e-20)), Dd::new(1.0, -1e-20)));
     assert!(is_f64(Float::abs(d(-0.0)), 0.0));
-    // max and min compare whole double-doubles, ignore a NaN argument, and treat a pair of
-    // zeros as f64 does.
+    // max and min compare whole double-doubles, ignore a NaN argument, and of two zeros give
+    // +0 and −0 respectively unless both are equal (IEEE 754-2019), in either order.
     let (a, b) = (Dd::new(1.0, 1e-20), Dd::new(1.0, -1e-20));
     assert!(same(Float::max(a, b), a) && same(Float::max(b, a), a));
     assert!(same(Float::min(a, b), b) && same(Float::min(b, a), b));
-    for (x, y) in [
-        (0.0, -0.0),
-        (-0.0, 0.0),
-        (-0.0, -0.0),
-        (f64::NAN, 1.0),
-        (1.0, f64::NAN),
+    for (x, y, max, min) in [
+        (0.0, -0.0, 0.0, -0.0),
+        (-0.0, 0.0, 0.0, -0.0),
+        (-0.0, -0.0, -0.0, -0.0),
+        (0.0, 0.0, 0.0, 0.0),
+        (f64::NAN, 1.0, 1.0, 1.0),
+        (1.0, f64::NAN, 1.0, 1.0),
+        (f64::NAN, -0.0, -0.0, -0.0),
     ] {
-        assert!(is_f64(Float::max(d(x), d(y)), x.max(y)), "max({x}, {y})");
-        assert!(is_f64(Float::min(d(x), d(y)), x.min(y)), "min({x}, {y})");
+        assert!(is_f64(Float::max(d(x), d(y)), max), "max({x}, {y})");
+        assert!(is_f64(Float::min(d(x), d(y)), min), "min({x}, {y})");
     }
     assert!(Float::max(Dd::NAN, Dd::NAN).is_nan());
     // clamp follows f64 for valid bounds, and gives NaN (instead of panicking) for invalid ones.
@@ -1253,10 +1328,14 @@ proptest! {
         let (dx, dy, dz) = (Dd::from_f64(x), Dd::from_f64(y), Dd::from_f64(z));
         // max and min ignore a NaN argument, as documented for f64 (aarch64's f64::max and
         // f64::min instead return NaN for a signaling NaN, which no double-double operation
-        // produces).
+        // produces), and of two zeros follow IEEE 754-2019 (f64 leaves that unspecified).
         let (max, min) = match (x.is_nan(), y.is_nan()) {
             (true, _) => (y, y),
             (_, true) => (x, x),
+            _ if x == 0.0 && y == 0.0 => (
+                if x.is_sign_negative() && y.is_sign_negative() { -0.0 } else { 0.0 },
+                if x.is_sign_positive() && y.is_sign_positive() { 0.0 } else { -0.0 },
+            ),
             _ => (x.max(y), x.min(y)),
         };
         prop_assert!(is_f64(Float::max(dx, dy), max), "max({:?}, {:?})", x, y);

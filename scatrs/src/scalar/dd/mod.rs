@@ -38,6 +38,42 @@ pub use parse::ParseDoubleDoubleError;
 ///
 /// The error bounds stated on its methods hold for results of magnitude at least 2⁻⁹⁶⁹; below
 /// that the low word is subnormal and precision degrades gradually.
+///
+/// # Use as `num_traits::Float`
+///
+/// `DoubleDouble` implements `num_traits::Float`, `FloatConst`, `NumCast`, `ToPrimitive` and
+/// [`Real`](crate::Real), so generic kernels and `num_complex::Complex<DoubleDouble>` work.
+/// `Float` delegates arithmetic and the elementary functions to the inherent methods, with their
+/// documented accuracy. Rounding (`floor`, `ceil`, `round`, `trunc`, `fract`), `abs`, `signum`,
+/// `copysign`, `max`, `min`, `clamp` and `abs_sub` act on the whole double-double;
+/// classification (`classify`, `is_normal`, `is_subnormal`, …), the sign tests and
+/// `integer_decode` describe the leading word. Special values and signed zeros follow `f64`
+/// (the tests compare these methods with `f64` on `f64` arguments, bit for bit where the `f64`
+/// result is exact). Where a double-double differs from `f64`:
+///
+/// * `epsilon()` is 2⁻¹⁰⁴, a unit rather than a bound on the error of one operation (a division
+///   errs by up to 10u² ≈ 2.5·epsilon, u = 2⁻⁵³), and `min_positive_value()` is 2⁻⁹⁶⁹, the
+///   smallest magnitude with full precision; `classify` and `is_normal` still call values in
+///   [2⁻¹⁰²², 2⁻⁹⁶⁹) normal.
+/// * `mul_add` is not fused: the product is rounded to a double-double before the addition, so
+///   the error is up to 4u²|x·a| + 3u²|x·a + b|. The product of two doubles is exact, so for
+///   `f64` arguments it is the fused result to double-double precision. Special values, signed
+///   zeros, overflow (never of the product alone) and subnormal results follow `f64::mul_add`.
+/// * `max` and `min` ignore a NaN argument (even a signaling one, for which aarch64's `f64::max`
+///   returns NaN) and, of two zeros, follow IEEE 754-2019 maximum and minimum:
+///   max(−0, +0) = +0 and min(−0, +0) = −0 in either order (`f64` leaves this unspecified).
+/// * `clamp` returns NaN instead of panicking when `min > max` or a bound is NaN.
+/// * `integer_decode` decodes the leading word only.
+///
+/// `ToPrimitive` truncates towards zero exactly and returns `None` outside the target range, as
+/// for `f64`; `to_f64` is the leading word (the correctly rounded double) and `to_f32` also
+/// rounds once. `NumCast::from` is exact for `f32`, `f64` and primitive integers below 2¹⁰⁶ in
+/// magnitude, and within u²·|n| of wider integers; from another `DoubleDouble` it keeps only the
+/// leading word (or the integer part beyond 2⁵³).
+///
+/// Parsing: [`from_decimal_str`](Self::from_decimal_str) and `Num::from_str_radix` (radix 10)
+/// ignore surrounding whitespace; `str::parse` (`FromStr`) does not, accepting exactly the
+/// strings that `f64` accepts.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct DoubleDouble {
     hi: f64,
@@ -117,6 +153,83 @@ const RENORMALIZE_BELOW: f64 = f64::from_bits((1023 - 968) << 52);
 fn pow2(e: i32) -> f64 {
     debug_assert!((-1022..=1023).contains(&e));
     f64::from_bits(((e + 1023) as u64) << 52)
+}
+
+/// 2¹²⁸.
+const TWO_POW_128: f64 = f64::from_bits((1023 + 128) << 52);
+
+/// `n` as a double-double: exact below 2¹⁰⁶, and within u²·n above (u = 2⁻⁵³).
+///
+/// The leading word is the nearest double and the residual is rounded once, then the pair is
+/// renormalised. Next to a tie of the leading word that can move it: n = 2¹²⁶ + 2⁷³ + 1 rounds to
+/// the double 2¹²⁶ + 2⁷⁴, the residual −(2⁷³ − 1) to −2⁷³, and the pair renormalises to
+/// (2¹²⁶, 2⁷³), which is off by 1 (and is the nearest double-double).
+pub(crate) fn from_u128(n: u128) -> DoubleDouble {
+    if n >> 53 == 0 {
+        return DoubleDouble::from_f64(n as u64 as f64);
+    }
+    let hi = n as f64; // rounded to nearest, at most 2^128
+    let residual = if hi == TWO_POW_128 {
+        -((u128::MAX - n + 1) as f64) // n − 2^128, at most 2^75 in magnitude
+    } else {
+        let h = hi as u128; // exact
+        if n >= h {
+            (n - h) as f64
+        } else {
+            -((h - n) as f64)
+        }
+    };
+    DoubleDouble::new(hi, residual)
+}
+
+/// v·2⁻ˢ for |v| < 2¹⁰²³ and 54 <= s <= 1000, keeping the leading word the correctly rounded
+/// double of the value (`mul_pow2` instead rounds the trailing word to the subnormal grid and
+/// renormalises, which can move the leading word when that rounding reaches half an ulp of it).
+///
+/// A subnormal result is rounded once by [`round_to_subnormal`]. Otherwise the leading word
+/// scales exactly and the trailing word is rounded to the subnormal grid, then stepped once
+/// towards zero if it reached half an ulp of an odd leading word (or a whole ulp, in the
+/// lowest binade, where it becomes zero); the trailing word's error is then at most 2⁻¹⁰⁷⁴.
+pub(crate) fn scale_down_tiny(v: DoubleDouble, s: i32) -> DoubleDouble {
+    if v.hi.abs() < pow2(s - 1022) {
+        return DoubleDouble::from_f64(round_to_subnormal(v, s));
+    }
+    let hi = v.hi * pow2(-s);
+    let mut lo = v.lo * pow2(-s);
+    if hi + lo != hi {
+        lo -= f64::from_bits(1).copysign(lo);
+    }
+    DoubleDouble::from_parts_unchecked(hi, if lo == 0.0 { 0.0 } else { lo })
+}
+
+/// (v.hi + v.lo)·2⁻ˢ rounded once to the nearest subnormal (or ±2⁻¹⁰²²), ties to even, for
+/// |v| < 2^(s − 1022) and 54 <= s <= 1000; the sign of v is kept, also when the result is zero.
+///
+/// Scaling the leading word alone rounds once, but can land on the wrong side when the trailing
+/// word decides a tie (or near-tie) of the leading word. With q the scaled leading word,
+/// d = v.hi − q·2ˢ is that rounding's error, exact (both terms are multiples of ulp(v.hi) and
+/// |d| is at most half the scaled subnormal spacing G = 2^(s − 1074)); the true residual
+/// d + v.lo is then compared with G/2. As ulp(v.hi) ≤ G, |v.lo| ≤ G/2 and the residual is below
+/// G, so q moves by at most one step.
+fn round_to_subnormal(v: DoubleDouble, s: i32) -> f64 {
+    const STEP: f64 = f64::from_bits(1); // 2^-1074
+    if v.hi.is_sign_negative() {
+        return -round_to_subnormal(-v, s);
+    }
+    let q = v.hi * pow2(-s);
+    let d = v.hi - q * pow2(s);
+    let (r, r_lo) = two_sum(d, v.lo); // the residual r + r_lo, exactly
+    let half = pow2(s - 1075);
+    let above = r > half || (r == half && r_lo > 0.0);
+    let below = r < -half || (r == -half && r_lo < 0.0);
+    let tie = r.abs() == half && r_lo == 0.0 && q.to_bits() & 1 == 1;
+    if above || (tie && r > 0.0) {
+        q + STEP
+    } else if below || (tie && r < 0.0) {
+        q - STEP
+    } else {
+        q
+    }
 }
 
 impl DoubleDouble {
@@ -590,5 +703,62 @@ impl PartialOrd for DoubleDouble {
             Ordering::Equal => self.lo.partial_cmp(&other.lo),
             ord => Some(ord),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn subnormal_rounding_uses_the_trailing_word() {
+        let s = 128;
+        let g = pow2(s - 1074); // the scaled subnormal spacing
+        // 2.5 steps: a tie, decided by the trailing word.
+        let v = DoubleDouble::from_f64(2.5 * g);
+        assert_eq!(round_to_subnormal(v, s), f64::from_bits(2)); // ties to even
+        assert_eq!(
+            round_to_subnormal(DoubleDouble::new(2.5 * g, 1e-310), s),
+            f64::from_bits(3)
+        );
+        assert_eq!(
+            round_to_subnormal(DoubleDouble::new(3.5 * g, -1e-310), s),
+            f64::from_bits(3)
+        );
+        assert_eq!(
+            round_to_subnormal(DoubleDouble::from_f64(3.5 * g), s),
+            f64::from_bits(4)
+        );
+        assert_eq!(
+            round_to_subnormal(DoubleDouble::new(0.5 * g, 1e-310), s),
+            f64::from_bits(1)
+        );
+        assert_eq!(round_to_subnormal(DoubleDouble::from_f64(0.5 * g), s), 0.0);
+        assert_eq!(round_to_subnormal(DoubleDouble::ZERO, s).to_bits(), 0);
+        assert_eq!(
+            round_to_subnormal(-DoubleDouble::ZERO, s).to_bits(),
+            (-0.0f64).to_bits()
+        );
+        assert_eq!(
+            round_to_subnormal(DoubleDouble::new(-2.5 * g, -1e-310), s),
+            -f64::from_bits(3)
+        );
+        assert_eq!(
+            round_to_subnormal(DoubleDouble::from_f64(-0.25 * g), s).to_bits(),
+            (-0.0f64).to_bits()
+        );
+    }
+
+    #[test]
+    fn from_u128_is_within_u2_next_to_ties() {
+        // 2^126 + 2^73 + 1 is just above a tie of the leading word.
+        let n: u128 = (1 << 126) + (1 << 73) + 1;
+        let x = from_u128(n);
+        assert_eq!((x.hi, x.lo), (pow2(126), pow2(73)));
+        assert_ne!(x.hi, n as f64); // the renormalisation moved the leading word
+        let below = from_u128((1 << 126) + (1 << 73) - 1);
+        assert_eq!((below.hi, below.lo), (pow2(126), pow2(73)));
+        assert_eq!(from_u128(u128::MAX).hi, pow2(127) * 2.0);
+        assert_eq!(from_u128((1 << 106) - 1).lo, -1.0);
     }
 }

@@ -1,39 +1,15 @@
-//! num-traits and `Real` implementations for `DoubleDouble`.
-//!
-//! `Float` delegates arithmetic and the elementary functions to the inherent methods, with
-//! their documented accuracy. Rounding (`floor`, `ceil`, `round`, `trunc`, `fract`), `abs`,
-//! `signum`, `copysign`, `max`, `min`, `clamp` and `abs_sub` act on the whole double-double;
-//! classification (`classify`, `is_normal`, `is_subnormal`, …), the sign tests and
-//! `integer_decode` describe the leading word. Special values and signed zeros follow `f64`:
-//! the tests compare each of these methods with `f64` on `f64` arguments, bit for bit where the
-//! `f64` result is exact (`abs_sub` and `mul_add` keep the exact difference or the fused sum
-//! that `f64` rounds). Where a double-double differs from `f64`:
-//!
-//! * `epsilon` is 2⁻¹⁰⁴ and `min_positive_value` is 2⁻⁹⁶⁹, the smallest magnitude with full
-//!   precision; `classify` and `is_normal` still call values in [2⁻¹⁰²², 2⁻⁹⁶⁹) normal;
-//! * `max` and `min` ignore any NaN argument, as documented for `f64` (on aarch64, `f64::max`
-//!   and `f64::min` return NaN for a signaling NaN, which no double-double operation produces);
-//! * `mul_add` rounds the product to a double-double before adding it, so its error is up to
-//!   4u²|x·a| + 3u²|x·a + b| (u = 2⁻⁵³); the product of two doubles is exact, so for `f64`
-//!   arguments it is the fused result to double-double precision;
-//! * `clamp` returns NaN instead of panicking when `min > max` or a bound is NaN;
-//! * `integer_decode` decodes the leading word only.
-//!
-//! `ToPrimitive` truncates towards zero exactly and returns `None` outside the target range
-//! (as for `f64`); `to_f64` is the leading word, the correctly rounded double, and `to_f32`
-//! also rounds once. `NumCast::from` is exact for `f32`, `f64` and every primitive integer below
-//! 2¹⁰⁶ in magnitude, and rounds wider integers once (relative error ≤ u²). From any other
-//! `ToPrimitive` type, including another `DoubleDouble`, it converts `to_f64()`, or `to_i128()`
-//! (or `to_u128()`) when that is at least 2⁵³ in magnitude: the value itself when it is a
-//! primitive, but only the leading word, or the integer part beyond 2⁵³, of a `DoubleDouble`.
+//! num-traits and `Real` implementations for `DoubleDouble`; their semantics are documented
+//! on [`DoubleDouble`] ("Use as `num_traits::Float`").
 
 use core::cmp::Ordering;
 use core::num::FpCategory;
 
 use num_traits::{Float, FloatConst, Num, NumCast, One, ToPrimitive, Zero};
 
-use super::parse::scale_down_tiny;
-use super::{DoubleDouble as Dd, ParseDoubleDoubleError, consts, pow2};
+use super::{
+    DoubleDouble as Dd, ParseDoubleDoubleError, TWO_POW_128, consts, from_u128, pow2,
+    scale_down_tiny,
+};
 use crate::scalar::Real;
 
 /// 2⁻¹⁰⁴: `Float::epsilon`.
@@ -44,8 +20,6 @@ const MIN_POSITIVE_FULL_PRECISION: f64 = f64::from_bits((1023 - 969) << 52);
 const TWO_POW_53: f64 = f64::from_bits((1023 + 53) << 52);
 /// 2¹²⁷.
 const TWO_POW_127: f64 = f64::from_bits((1023 + 127) << 52);
-/// 2¹²⁸.
-const TWO_POW_128: f64 = f64::from_bits((1023 + 128) << 52);
 /// `mul_add` adds the product directly when its leading word lies in [2⁻⁹⁶⁸, MAX], where the
 /// product has full precision.
 const MUL_ADD_DIRECT_MIN: f64 = f64::from_bits((1023 - 968) << 52);
@@ -56,27 +30,7 @@ const MUL_ADD_SMALL_ADDEND: f64 = f64::from_bits((1023 - 800) << 52);
 /// stays below 2¹¹⁶ and the scaled addend below 2⁻²⁰⁰.
 const MUL_ADD_SCALE: i32 = 600;
 
-/// The double-double nearest to `n`: the nearest double and the residual rounded once, exact
-/// below 2¹⁰⁶ (relative error ≤ u² above).
-pub(super) fn from_u128(n: u128) -> Dd {
-    if n >> 53 == 0 {
-        return Dd::from_f64(n as u64 as f64);
-    }
-    let hi = n as f64; // rounded to nearest, at most 2^128
-    let residual = if hi == TWO_POW_128 {
-        -((u128::MAX - n + 1) as f64) // n − 2^128, at most 2^75 in magnitude
-    } else {
-        let h = hi as u128; // exact
-        if n >= h {
-            (n - h) as f64
-        } else {
-            -((h - n) as f64)
-        }
-    };
-    Dd::new(hi, residual)
-}
-
-/// The double-double nearest to `n` (see [`from_u128`]).
+/// `n` as a double-double (see [`from_u128`]).
 fn from_i128(n: i128) -> Dd {
     let m = from_u128(n.unsigned_abs());
     if n < 0 { -m } else { m }
@@ -157,10 +111,11 @@ impl One for Dd {
 impl Num for Dd {
     type FromStrRadixErr = ParseDoubleDoubleError;
 
-    /// [`DoubleDouble::from_decimal_str`](Dd::from_decimal_str); only radix 10 is supported.
+    /// [`DoubleDouble::from_decimal_str`](Dd::from_decimal_str), which ignores surrounding
+    /// whitespace (unlike `f64`'s, and unlike `str::parse`); only radix 10 is supported.
     fn from_str_radix(s: &str, radix: u32) -> Result<Self, Self::FromStrRadixErr> {
         if radix != 10 {
-            return Err(ParseDoubleDoubleError);
+            return Err(ParseDoubleDoubleError::new());
         }
         Dd::from_decimal_str(s)
     }
@@ -227,7 +182,10 @@ impl ToPrimitive for Dd {
 }
 
 impl NumCast for Dd {
-    /// Exact for `f32`, `f64` and integers below 2¹⁰⁶ in magnitude (see the module documentation).
+    /// Exact for `f32`, `f64` and primitive integers below 2¹⁰⁶ in magnitude, and within u²·|n|
+    /// (u = 2⁻⁵³) of wider integers. Any other `ToPrimitive` type, including `DoubleDouble`
+    /// itself, goes through `to_f64`, or `to_i128` or `to_u128` at or beyond 2⁵³ in magnitude:
+    /// a `DoubleDouble` keeps only its leading word (or its integer part beyond 2⁵³).
     fn from<T: ToPrimitive>(n: T) -> Option<Self> {
         let f = n.to_f64()?;
         // to_f64 rounds integers beyond 2^53: take them exactly instead.
@@ -301,16 +259,22 @@ impl Float for Dd {
         self.hi.is_finite()
     }
 
+    /// Describes the leading word only: values in [2⁻¹⁰²², 2⁻⁹⁶⁹) are `Normal`, yet below
+    /// `min_positive_value()`, the smallest magnitude with full precision.
     #[inline]
     fn is_normal(self) -> bool {
         self.hi.is_normal()
     }
 
+    /// Describes the leading word only: values in [2⁻¹⁰²², 2⁻⁹⁶⁹) are `Normal`, yet below
+    /// `min_positive_value()`, the smallest magnitude with full precision.
     #[inline]
     fn is_subnormal(self) -> bool {
         self.hi.is_subnormal()
     }
 
+    /// Describes the leading word only: values in [2⁻¹⁰²², 2⁻⁹⁶⁹) are `Normal`, yet below
+    /// `min_positive_value()`, the smallest magnitude with full precision.
     #[inline]
     fn classify(self) -> FpCategory {
         self.hi.classify()
@@ -433,29 +397,27 @@ impl Float for Dd {
         self / 180.0 * consts::PI
     }
 
-    /// The larger value; a NaN argument is ignored, and for two zeros the result is that of
-    /// `f64::max`.
+    /// The larger value; a NaN argument is ignored, and of two zeros the result is +0 unless both
+    /// are −0 (IEEE 754-2019 maximum), whatever their order.
     #[inline]
     fn max(self, other: Self) -> Self {
         match self.partial_cmp(&other) {
             Some(Ordering::Less) => other,
-            Some(Ordering::Greater) => self,
-            Some(Ordering::Equal) if self.hi == 0.0 => Dd::from_f64(self.hi.max(other.hi)),
-            Some(Ordering::Equal) => self,
+            Some(Ordering::Equal) if self.hi.is_sign_negative() => other, // −0 vs ±0
+            Some(Ordering::Greater | Ordering::Equal) => self,
             None if self.hi.is_nan() => other,
             None => self,
         }
     }
 
-    /// The smaller value; a NaN argument is ignored, and for two zeros the result is that of
-    /// `f64::min`.
+    /// The smaller value; a NaN argument is ignored, and of two zeros the result is −0 unless both
+    /// are +0 (IEEE 754-2019 minimum), whatever their order.
     #[inline]
     fn min(self, other: Self) -> Self {
         match self.partial_cmp(&other) {
-            Some(Ordering::Less) => self,
             Some(Ordering::Greater) => other,
-            Some(Ordering::Equal) if self.hi == 0.0 => Dd::from_f64(self.hi.min(other.hi)),
-            Some(Ordering::Equal) => self,
+            Some(Ordering::Equal) if self.hi.is_sign_positive() => other, // +0 vs ±0
+            Some(Ordering::Less | Ordering::Equal) => self,
             None if self.hi.is_nan() => other,
             None => self,
         }

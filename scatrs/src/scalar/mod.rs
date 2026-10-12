@@ -16,6 +16,20 @@ pub use dd::{DoubleDouble, ParseDoubleDoubleError};
 /// `num_complex::Complex<T>` usable for every `T: Real`.
 /// Mixed operations with `f64` take the `f64` on the right (`x * 2.0`, not `2.0 * x`);
 /// for `Complex<T>` use `z.scale(T::from_f64(2.0))`.
+///
+/// # Notes for generic code
+///
+/// `DoubleDouble` follows `f64` closely, but generic code must not assume more than `Float`
+/// promises (see [`DoubleDouble`]'s "Use as `num_traits::Float`"):
+///
+/// * `mul_add` is fused for `f64` but not for `DoubleDouble`, which rounds the product before
+///   adding. Error-free transformations must not rely on it: Kahan's idiom
+///   `e = b.mul_add(c, -(b * c))` gives exactly 0 for `DoubleDouble`, not the rounding error
+///   of `b * c`.
+/// * `epsilon()` is a unit (2⁻⁵² for `f64`, 2⁻¹⁰⁴ for `DoubleDouble`), not a bound on the
+///   error of one operation: a `DoubleDouble` division errs by up to about 2.5·epsilon.
+/// * `NumCast::from` another `Real` keeps only its leading word (`to_f64`); use the value
+///   itself, or [`from_f64_pair`](Real::from_f64_pair), to keep full precision.
 pub trait Real:
     Float
     + FloatConst

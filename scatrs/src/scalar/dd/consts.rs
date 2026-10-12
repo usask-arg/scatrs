@@ -1,6 +1,4 @@
 //! Double-double constants: the certified splits in `reference/data/constants.jsonl`.
-// Used by the elementary, trigonometric and FloatConst code added in Tasks 4-6.
-#![allow(dead_code)]
 
 use super::DoubleDouble as Dd;
 

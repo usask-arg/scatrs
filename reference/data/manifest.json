@@ -16,6 +16,14 @@
       "records": 9,
       "sha256": "733cd6ee291ab18f7fe7c977daa943b5a62dc99a10216c035032595cd860a3ef"
     },
+    "dd_complex.jsonl": {
+      "flint": "3.6.0",
+      "generator": "dd_complex",
+      "precision_bits": 600,
+      "python_flint": "0.9.0",
+      "records": 4,
+      "sha256": "ea2cb9462f13112a8d826049f4e9b57ed79f4fdc016608d0677afc2d9925f8bc"
+    },
     "dd_elementary.jsonl": {
       "flint": "3.6.0",
       "generator": "dd_elementary",
@@ -23,6 +31,14 @@
       "python_flint": "0.9.0",
       "records": 38,
       "sha256": "b1712f081d888ceb526d52609099554c330475d22fa11e812af82d1471faaf1a"
+    },
+    "dd_parse.jsonl": {
+      "flint": "3.6.0",
+      "generator": "dd_parse",
+      "precision_bits": 600,
+      "python_flint": "0.9.0",
+      "records": 2,
+      "sha256": "87e9cab9dbbe60692ef34e8146e5108cf44383ef48fd6af0684eea0845acdce7"
     },
     "dd_trig.jsonl": {
       "flint": "3.6.0",

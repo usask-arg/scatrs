@@ -27,8 +27,12 @@ use core::ops::{
 
 mod consts;
 mod elementary;
+mod parse;
 mod rem;
+mod traits;
 mod trig;
+
+pub use parse::ParseDoubleDoubleError;
 
 /// A double-double number: the exact sum `hi + lo` with `hi == fl(hi + lo)`.
 ///

@@ -7,7 +7,7 @@ use num_traits::{Float, FloatConst};
 
 mod dd;
 
-pub use dd::DoubleDouble;
+pub use dd::{DoubleDouble, ParseDoubleDoubleError};
 
 /// A real scalar type for generic kernels.
 ///

@@ -28,6 +28,7 @@ use core::ops::{
 mod consts;
 mod elementary;
 mod rem;
+mod trig;
 
 /// A double-double number: the exact sum `hi + lo` with `hi == fl(hi + lo)`.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]

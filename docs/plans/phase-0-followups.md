@@ -18,6 +18,14 @@ These items came out of the Phase 0 reviews and were deliberately deferred. Each
 - **`DoubleDouble::rem`** allocates a `Vec` on every call. The expansion length bound is unproven; 6 components is the most observed. Switch to a stack buffer if a bound can be proved.
 
 ## Correctness and robustness (low priority, outside the documented domain)
+- **DD `sin`/`cos`/`tan` return NaN for |x| > 2⁵⁰.**
+  - **Decision (controller, Task 5):** this is a documented domain limit, like `sqrt(-1)`, so it is not a silent failure. Kernels never pass such arguments and must validate their own domains.
+  - **If ever needed:** Payne–Hanek reduction, with a table of about 1200 bits of 2/π.
+- **DD trig accuracy near nonzero multiples of π/2 is only absolute (2⁻¹⁰⁰).** Callers that need relative accuracy there, for example sin θ near θ = π in Wigner/T-matrix code, must reduce θ themselves.
+- **DD trig speed.**
+  - sin/cos take about 176 ns and atan2 about 390 ns, dominated by a 13-step double-double Taylor series.
+  - Options: compute the high-order terms in f64, or use a table of sin/cos(jπ/64) with about 8 terms. Expected 2–3× faster.
+  - Phase 1 performance work.
 - `ldexp` can double-round subnormal results, i.e. results below 2⁻⁹⁶⁹. This is outside the documented full-precision domain.
 
 ## Packaging (Task 13)

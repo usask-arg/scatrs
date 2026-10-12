@@ -1,11 +1,12 @@
 """Arb values of double-double elementary functions at random double-double inputs.
 
-Each function has a record of N random inputs (``SAMPLERS``) and a record ``<name>_edges`` of
-hand-picked inputs at the edges of its domain and of its algorithm's branches (``EDGES``):
-overflow and underflow thresholds, subnormal inputs, values next to 1, and the switch
-points between series and reduction formulas. Every edge input is an exact normalised
-double-double, and edge cases whose value is zero, non-finite, at least ``MAX`` or below
-2^-969 in magnitude (the full-precision domain) are dropped.
+Each function (the unary ``SAMPLERS``, and ``hypot``, ``powf``, ``powi`` and ``log(x, base)``)
+has a record of N random inputs and a record ``<name>_edges`` of hand-picked inputs at the
+edges of its domain and of its algorithm's branches: overflow and underflow thresholds,
+subnormal inputs, values next to 1, and the switch points between series, reduction and
+fast/wide-range formulas. Every edge input is an exact normalised double-double, and edge
+cases whose value is zero, non-finite, at least ``MAX`` or below 2^-969 in magnitude (the
+full-precision domain) are dropped.
 """
 
 from __future__ import annotations
@@ -147,13 +148,14 @@ def _in_domain(v: arb) -> bool:
 
 SQRT_CBRT_EDGES = [TINY, 3 * TINY, 1e-310, 2.0**-1022, 2.0**-969, 1e-300, 1e-30, 1e-3]
 SQRT_CBRT_EDGES += [_below(1.0), 1.0, _above(1.0), 2.0, 3.0, 4.0, 8.0, 27.0, 0.5]
-SQRT_CBRT_EDGES += [1e300, 2.0**1023, _below(MAX), MAX]
+SQRT_CBRT_EDGES += [1e300, 2.0**1023, _below(MAX), MAX, *_around(2.0**-900), *_around(2.0**1000)]
 LOG_EDGES = [TINY, 3 * TINY, 1e-310, 2.0**-1022, 2.0**-969, 1e-300, *_around(1e-270)]
 LOG_EDGES += [*_around(1e270), 1e300, _below(MAX), MAX]
 LOG_EDGES += [*_around(1.0), 1.0 + 1e-10, 1.0 - 1e-10, *_around(0.75), *_around(1.25)]
 LOG_EDGES += [0.7, 0.74, 0.76, 1.24, 1.26, 1.3, 0.5, 2.0, math.e, 10.0, 1024.0]
 TINY_RESULTS = [2.0**-960, 1e-290, 1e-100, 1e-30, 1e-17, 1e-10]
 HYPERBOLIC = [*TINY_RESULTS, *_around(2.0**-11), *_around(HALF_LN_2), 0.45, *_around(0.5)]
+HYPERBOLIC += [*_around(0.55)]
 HYPERBOLIC += [1.0, 10.0, *_around(40.0), 100.0, 700.0, 709.0, *_around(LN_MAX)]
 HYPERBOLIC += [710.0, 710.4, 710.475, *_around(LN_2MAX)]
 
@@ -173,13 +175,15 @@ def _edges() -> dict[str, list[tuple[float, float]]]:
     return {
         "sqrt": _variants(SQRT_CBRT_EDGES),
         "exp": _variants(
-            [*_around(LN_MAX), 709.0, 708.5, -670.0, -669.5, -600.0, -100.0, 100.0]
+            [*_around(LN_MAX), 709.0, *_around(708.0), *_around(-670.0), -669.5, -600.0]
+            + [-100.0, 100.0]
             + [1e-300, 2.0**-960]
             + _both_signs([*_around(HALF_LN_2), 0.5, 1.0, 1e-20, *_around(2.0**-11)])
         )
         + _near_multiples_of_ln_2(),
         "exp_m1": _variants(
-            _both_signs([*TINY_RESULTS, *_around(2.0**-11), *_around(HALF_LN_2), 0.5, 1.0, 40.0])
+            _both_signs([*TINY_RESULTS, *_around(2.0**-11), *_around(HALF_LN_2), *_around(0.5)])
+            + _both_signs([1.0, 40.0])
             + [-700.0, 700.0, *_around(LN_MAX)]
         ),
         "ln": _variants(LOG_EDGES),
@@ -195,8 +199,11 @@ def _edges() -> dict[str, list[tuple[float, float]]]:
         "cosh": _variants([0.0, *_both_signs(HYPERBOLIC)]),
         "tanh": _variants(
             _both_signs([*TINY_RESULTS, *_around(2.0**-12), *_around(HALF_LN_2 / 2), 0.5, 1.0])
-            + _both_signs([10.0, 19.0, 20.0, *_around(40.0), 100.0, 1e300, MAX])
-        ),
+            + _both_signs([*_around(0.55), 10.0, 15.0, 19.0, 20.0, 25.0, 39.13816673365962])
+            + _both_signs([*_around(40.0), 100.0, 1e300, MAX])
+        )
+        # tanh exceeded 1 here when it used e/(e + 2) for large x.
+        + [(s * 39.13816673365962, s * -2.8828789447226485e-15) for s in (1.0, -1.0)],
         "asinh": _variants(
             _both_signs([*TINY_RESULTS, 0.1, 0.25, 0.5, 1.0, 2.0, 1e10, *_around(1e150)])
             + _both_signs([1e154, 1e300, _below(MAX), MAX])
@@ -210,7 +217,8 @@ def _edges() -> dict[str, list[tuple[float, float]]]:
         )
         + [(s, s * f) for s in (1.0, -1.0) for f in (-(2.0**-60), -(2.0**-100))],
         "exp2": _variants(
-            [-969.0, -968.5, -960.0, 1e-300, 1000.0, 1023.0, 1023.5, _below(1024.0)]
+            [-969.0, -968.5, -960.0, *_around(-966.0), *_around(1022.0), 1e-300, 1000.0]
+            + [1023.0, 1023.5, _below(1024.0)]
             + _both_signs([0.5, 1.0, 10.0])
         )
         + [(1024.0, -(2.0**-50)), (1024.0, -(2.0**-45))],
@@ -229,8 +237,12 @@ POWF_EDGES = [
     (4.0, 0.5), (3.0, 2.0), (2.0, 0.5), (0.5, -1000.0), (TINY, -0.9), (TINY, 0.9),
     (-2.0, 3.0), (-2.0, 4.0), (-1.5, 11.0), (-1.5, -11.0), (-1.000001, 1000001.0),
     (-1.000001, -1000001.0), (-0.999999, 1000000.0), (-3.0, 7.0), (-3.0, 8.0), (-3.0, -7.0),
-    (-10.0, 300.0), (-1e-300, -1.0), (-2.0, 1023.0),
+    (-10.0, 300.0), (-1e-300, -1.0), (-2.0, 1023.0), (1e300, 1.0), (TINY, 1.0), (MAX, -1.0),
+    (-3.0, 5.0), (0.3, -7.0), (1.0000001, 7.0), (-1.5, 7.0), (2.0**-1000, -1.0), (7.0, 8.0),
 ]
+LOG_X = [TINY, 2.0**-969, 1e-300, 0.5, _above(1.0), 2.0, 10.0, 1e300, MAX]
+LOG_BASES = [2.0, 10.0, math.e, 0.5, 1.5, 0.9, 1e-300, 1e300, MAX]
+LOG_EDGES_2 = [(x, b) for x in LOG_X for b in LOG_BASES]
 POWI_EDGES = [
     (1e-3, -100), (0.71, -2000), (0.5, -969), (2.0, 1023), (2.0, -969), (1.0001, 100000),
     (-1.5, 1001), (-1.5, -1000), (10.0, 308), (10.0, -290), (MAX, 1), (2.0**-1000, -1),
@@ -279,6 +291,16 @@ def _pow(a: arb, b: arb | int) -> arb:
     return a**b
 
 
+def _log(a: arb, b: arb) -> arb:
+    return a.log() / b.log()
+
+
+def _log_base(r: random.Random) -> float:
+    """A positive base away from 1 (|log10 base| >= 0.05)."""
+    e = r.uniform(0.05, 2.0) if r.random() < 0.5 else r.uniform(2.0, 300.0)
+    return 10.0 ** _signed(r, e)
+
+
 def _edge_pairs(
     pairs: list[tuple[float, float | int]],
 ) -> list[tuple[tuple[float, float], tuple[float, float] | int]]:
@@ -316,6 +338,9 @@ def generate() -> tuple[int, list[dict]]:
         xs = [_dd(rng, _signed(rng, _logu(rng, -3, 3))) for _ in range(N)]
         ns = [rng.randint(-100, 100) for _ in range(N)]
         recs.append(_binary_record("powi", list(zip(xs, ns)), _pow, "n"))
+        xs = [_dd(rng, SAMPLERS["ln"](rng)) for _ in range(N)]
+        ys = [_dd(rng, _log_base(rng)) for _ in range(N)]
+        recs.append(_binary_record("log", list(zip(xs, ys)), _log, "y"))
 
         for name, pairs in _edges().items():
             kept = [(p, v) for p in pairs if _in_domain(v := FUNCTIONS[name](_as_arb(p)))]
@@ -331,6 +356,7 @@ def generate() -> tuple[int, list[dict]]:
             ("hypot_edges", HYPOT_EDGES, _hypot, "y"),
             ("powf_edges", POWF_EDGES, _pow, "y"),
             ("powi_edges", POWI_EDGES, _pow, "n"),
+            ("log_edges", LOG_EDGES_2, _log, "y"),
         ):
             recs.append(_binary_record(case, _edge_pairs(pairs), f, second, edges=True))
         return PRECISION_BITS, recs

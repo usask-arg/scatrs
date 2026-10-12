@@ -23,19 +23,46 @@ fn dd_input(r: &Record, prefix: &str) -> Vec<Dd> {
     hi.iter().zip(&lo).map(|(&h, &l)| Dd::new(h, l)).collect()
 }
 
+/// The arguments of one reference record, parsed once: `x`, and `y` or `n` when present.
+struct Inputs {
+    x: Vec<Dd>,
+    y: Vec<Dd>,
+    n: Vec<i64>,
+}
+
+impl Inputs {
+    fn parse(r: &Record) -> Self {
+        let has = |key: &str| r.inputs.contains_key(key);
+        Self {
+            x: dd_input(r, "x"),
+            y: if has("y_hi") {
+                dd_input(r, "y")
+            } else {
+                Vec::new()
+            },
+            n: if has("n") {
+                r.input_i64s("n")
+            } else {
+                Vec::new()
+            },
+        }
+    }
+}
+
 /// Asserts |got − ref| / |ref| <= tol(i) for every case of `case` and of its edge-case
 /// record `{case}_edges`, measuring the error against the three-word reference.
-fn check(case: &str, got: impl Fn(&Record, usize) -> Dd, tol: impl Fn(&Record, usize) -> f64) {
+fn check(case: &str, got: impl Fn(&Inputs, usize) -> Dd, tol: impl Fn(&Inputs, usize) -> f64) {
     let recs = load("dd_elementary.jsonl");
     for name in [case.to_owned(), format!("{case}_edges")] {
         let r = find(&recs, &name);
+        let inputs = Inputs::parse(r);
         let v = r.output("value");
         let mut worst = 0.0_f64;
         for i in 0..v.hi.len() {
             let exact = Dd::new(v.hi[i], v.lo[i]);
-            let g = got(r, i);
+            let g = got(&inputs, i);
             let rel = v.dd_error(i, g.hi(), g.lo()) / exact.abs().hi();
-            let t = tol(r, i);
+            let t = tol(&inputs, i);
             worst = worst.max(rel / t);
             assert!(
                 rel <= t,
@@ -47,7 +74,7 @@ fn check(case: &str, got: impl Fn(&Record, usize) -> Dd, tol: impl Fn(&Record, u
 }
 
 fn unary(case: &str, f: fn(Dd) -> Dd, tol: f64) {
-    check(case, |r, i| f(dd_input(r, "x")[i]), |_, _| tol);
+    check(case, |inp, i| f(inp.x[i]), |_, _| tol);
 }
 
 #[test]
@@ -109,21 +136,20 @@ fn atanh() {
 
 #[test]
 fn exp2() {
-    // exp2(x) = exp(x ln 2): rounding x·ln 2 costs a factor |x| (conditioning).
-    check(
-        "exp2",
-        |r, i| dd_input(r, "x")[i].exp2(),
-        |r, i| TOL * dd_input(r, "x")[i].hi().abs().max(1.0),
-    );
+    // exp2 splits off the nearest integer n and evaluates e^((x − n) ln 2) with |x − n| <= 1/2,
+    // so its error does not grow with |x| (the planned 2^-100·max(1, |x|) is tightened).
+    unary("exp2", Dd::exp2, TOL)
 }
 
 #[test]
 fn hypot() {
-    check(
-        "hypot",
-        |r, i| dd_input(r, "x")[i].hypot(dd_input(r, "y")[i]),
-        |_, _| TOL,
-    );
+    check("hypot", |inp, i| inp.x[i].hypot(inp.y[i]), |_, _| TOL);
+}
+
+#[test]
+fn log() {
+    // ln x / ln base: two logarithms and a quotient (bases away from 1).
+    check("log", |inp, i| inp.x[i].log(inp.y[i]), |_, _| 2.0 * TOL);
 }
 
 #[test]
@@ -132,9 +158,9 @@ fn powf() {
     // bases (edge cases with integer y) use ln |x|.
     check(
         "powf",
-        |r, i| dd_input(r, "x")[i].powf(dd_input(r, "y")[i]),
-        |r, i| {
-            let (x, y) = (dd_input(r, "x")[i].hi(), dd_input(r, "y")[i].hi());
+        |inp, i| inp.x[i].powf(inp.y[i]),
+        |inp, i| {
+            let (x, y) = (inp.x[i].hi(), inp.y[i].hi());
             2.0 * TOL * (y * x.abs().ln()).abs().max(1.0)
         },
     );
@@ -145,8 +171,8 @@ fn powi() {
     // Binary powering: each squaring doubles the accumulated relative error.
     check(
         "powi",
-        |r, i| dd_input(r, "x")[i].powi(r.input_i64s("n")[i] as i32),
-        |r, i| 16.0 * (r.input_i64s("n")[i].unsigned_abs() as f64 + 1.0) * U2,
+        |inp, i| inp.x[i].powi(inp.n[i] as i32),
+        |inp, i| 16.0 * (inp.n[i].unsigned_abs() as f64 + 1.0) * U2,
     );
 }
 
@@ -169,7 +195,9 @@ fn special_values() {
     assert!(d(-2.0).ln_1p().hi().is_nan());
     assert_eq!(d(1.0).atanh().hi(), f64::INFINITY);
     assert!(d(0.5).acosh().hi().is_nan());
-    assert_eq!(d(-8.0).cbrt(), d(-2.0));
+    // f64::cbrt(-8) is -2 on common platforms, but no platform guarantees it (portable check).
+    let c = d(-8.0).cbrt();
+    assert!(((c + 2.0) / 2.0).abs().hi() <= 2.0 * TOL, "{c:?}");
     assert_eq!(d(3.0).hypot(d(4.0)), d(5.0));
     assert_eq!(d(0.0).powf(d(2.0)), Dd::ZERO);
     assert_eq!(d(-2.0).powf(d(3.0)), d(-8.0));
@@ -177,6 +205,87 @@ fn special_values() {
     assert_eq!(d(7.0).powi(0), Dd::ONE);
     assert_eq!(d(2.0).powi(-2), d(0.25));
     assert_eq!(d(100.0).log(d(10.0)).hi(), 2.0);
+}
+
+#[test]
+fn sqrt_of_squares_is_exact() {
+    // Gauss–Legendre and Wigner code takes square roots of integers: √(n²) must be n exactly.
+    for n in 1..=1_000_000_u32 {
+        let n = f64::from(n);
+        assert_eq!(Dd::from_f64(n * n).sqrt(), Dd::from_f64(n), "sqrt({n}^2)");
+    }
+    // Larger n, whose squares need both words, also scaled into the rescaled ranges.
+    let mut s = 0x9e37_79b9_7f4a_7c15_u64;
+    for _ in 0..20_000 {
+        s ^= s << 13;
+        s ^= s >> 7;
+        s ^= s << 17;
+        let n = (s >> 11) as f64; // an integer below 2^53
+        let square = Dd::from_f64(n) * Dd::from_f64(n); // exact
+        for k in [0, -480, -300, -1, 1, 300, 450] {
+            let x = square.ldexp(2 * k);
+            assert_eq!(x.sqrt(), Dd::from_f64(n).ldexp(k), "sqrt({n}^2 * 4^{k})");
+        }
+    }
+}
+
+#[test]
+fn powf_with_small_integer_exponents_is_exact() {
+    let d = Dd::from_f64;
+    assert_eq!(d(3.0).powf(d(2.0)), d(9.0));
+    assert_eq!(d(2.0).powf(d(7.0)), d(128.0));
+    assert_eq!(d(-3.0).powf(d(3.0)), d(-27.0));
+    assert_eq!(d(2.0).powf(d(-3.0)), d(0.125));
+    assert_eq!(d(-2.0).powf(d(-3.0)), d(-0.125));
+    for x in [
+        Dd::new(3.0, 1.1e-16),
+        Dd::new(-0.7, 2.3e-17),
+        Dd::new(1e-300, 3.7e-317),
+        Dd::new(7.5e250, -2.9e234),
+        d(f64::MAX),
+        d(TINY),
+        d(-TINY),
+    ] {
+        assert_eq!(x.powf(d(1.0)), x, "{x:?}^1");
+        assert_eq!(x.powf(d(0.0)), Dd::ONE, "{x:?}^0");
+    }
+    for x in [
+        d(2.0),
+        d(9.0),
+        d(0.25),
+        Dd::new(3.0, 1.1e-16),
+        d(1e300),
+        d(TINY),
+    ] {
+        assert_eq!(x.powf(d(0.5)), x.sqrt(), "{x:?}^0.5");
+    }
+}
+
+#[test]
+fn tanh_never_exceeds_one() {
+    // e/(e + 2) for large x carried an error larger than 1 − tanh x: this gave (1, 3.08e-33),
+    // whose atanh is NaN.
+    let x = Dd::new(39.13816673365962, -2.8828789447226485e-15);
+    for x in [x, -x] {
+        let t = x.tanh();
+        assert!(t.abs() <= Dd::ONE, "tanh {x:?} = {t:?}");
+        assert!(!t.atanh().hi().is_nan(), "tanh {x:?} = {t:?}");
+    }
+    // About 0.7% of [15, 40] failed, too rare for a quick property test: sweep deterministically.
+    let mut s = 0x2545_f491_4f6c_dd1d_u64;
+    let mut next = || {
+        s ^= s << 13;
+        s ^= s >> 7;
+        s ^= s << 17;
+        (s >> 11) as f64 / (1u64 << 53) as f64
+    };
+    for _ in 0..200_000 {
+        let h = 0.5 + 40.0 * next();
+        let x = Dd::new(h, (next() - 0.5) * ulp(h));
+        let t = x.tanh();
+        assert!(t <= Dd::ONE && -t == (-x).tanh(), "tanh {x:?} = {t:?}");
+        assert!(!t.atanh().hi().is_nan(), "tanh {x:?} = {t:?}");
+    }
 }
 
 // ---- Agreement with `f64` at special values and range ends ------------------------------
@@ -741,6 +850,27 @@ proptest! {
                 prop_assert_eq!(z.lo().to_bits(), 0, "{}({:?}, {:?}, {}) = {:?}", name, x, y, n, z);
             }
         }
+    }
+
+    #[test]
+    fn tanh_is_at_most_one_in_magnitude(
+        x in prop_oneof![wide_dd(), (-45.0..45.0f64, -0.5..0.5f64).prop_map(|(h, f)| with_lo(h, f))]
+    ) {
+        let t = x.tanh();
+        prop_assert!(t.abs() <= Dd::ONE, "tanh {:?} = {:?}", x, t);
+        prop_assert_eq!(t.hi().is_sign_negative(), x.hi().is_sign_negative());
+        if x.hi().abs() < 40.0 {
+            prop_assert!(!t.atanh().hi().is_nan(), "tanh {:?} = {:?}", x, t);
+        }
+    }
+
+    #[test]
+    fn powf_agrees_with_powi_for_small_integer_exponents(x in wide_dd(), n in -7..=7i32) {
+        let (p, q) = (x.powf(Dd::from_f64(f64::from(n))), x.powi(n));
+        prop_assert!(
+            p.hi().to_bits() == q.hi().to_bits() && p.lo().to_bits() == q.lo().to_bits(),
+            "{:?}^{}: powf {:?} powi {:?}", x, n, p, q
+        );
     }
 
     #[test]

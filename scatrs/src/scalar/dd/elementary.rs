@@ -8,7 +8,8 @@
 //!   ln a = x₀ + ln(1 + t) ≈ x₀ + t − t²/2; the t²/2 term removes the quadratic error of the
 //!   plain step x₀ + t, which reaches several 2⁻¹⁰⁰ relative when |ln a| is in the hundreds.
 //!   Near 1 it uses the series ln(1 + x) = 2 atanh(x / (2 + x)) on the exact x − 1.
-//! * `sqrt`: Karp & Markstein, √a ≈ y + (a − y²)·(1/√a)/2 with y² computed exactly.
+//! * `sqrt`: one correction of the correctly rounded `f64` root y, √a ≈ y + (a − y²)/(2y)
+//!   with y² computed exactly, so the square root of an exactly representable square is exact.
 //! * `cbrt`: one correction of the `f64` cube root y with its second-order term,
 //!   ∛a ≈ y + d − d²/y where d = (a − y³)/(3y²) is formed in `f64`. The truncation error is
 //!   cubic in the error of y, and rounding d adds about 4k·u² for a start k ulps off, so a
@@ -23,11 +24,13 @@
 //!
 //! | Functions | Bound |
 //! |---|---|
-//! | `sqrt`, `exp`, `exp_m1`, `ln`, `ln_1p`, `log2`, `log10`, `cbrt`, `tanh`, `asinh`, `acosh`, `atanh`, `hypot` | 2⁻¹⁰⁰ |
-//! | `sinh`, `cosh` | 2⁻⁹⁹ |
-//! | `exp2(x)` | 2⁻¹⁰⁰·max(1, \|x\|) |
+//! | `sqrt`, `exp`, `exp_m1`, `exp2`, `ln`, `ln_1p`, `log2`, `log10`, `cbrt`, `tanh`, `asinh`, `acosh`, `atanh`, `hypot` | 2⁻¹⁰⁰ |
+//! | `sinh`, `cosh`, `log(x, base)` | 2⁻⁹⁹ |
 //! | `powf(x, y)` | 2⁻⁹⁹·max(1, \|y ln \|x\|\|) |
 //! | `powi(x, n)` | 16(\|n\| + 1)u², u = 2⁻⁵³ |
+//!
+//! `powf` with an integer exponent of magnitude at most 7 uses `powi`, so `x.powf(1) == x` and
+//! small integer powers of small integers are exact; `x.powf(0.5)` is `x.sqrt()` for x > 0.
 //!
 //! `exp` is validated for x ∈ [−670, 709.78]. Special values (zeros, infinities, NaN,
 //! out-of-domain arguments) follow `f64`, including the sign of zero: for example
@@ -44,15 +47,19 @@ use super::{DoubleDouble as Dd, pow2, two_prod};
 
 /// |x| below which ln(1 + x) uses the atanh series (and ln(a) uses it for |a − 1| below this).
 const LN_1P_SERIES_LIMIT: f64 = 0.25;
-/// ln(2)/2: below this |x|, exp_m1 avoids the cancellation in exp(x) − 1.
-const HALF_LN_2: f64 = 0.34657359027997264;
-/// For x in [EXP_FAST_MIN, EXP_FAST_MAX], eˣ = 2ᵐ·eʳ with −967 <= m <= 1021: scaling by 2ᵐ
-/// is exact and keeps the result normalised (it is at least 2⁻⁹⁶⁸, so the low word cannot
-/// round to a subnormal ulp(hi)/2). This is the validated domain of `exp`.
+/// Below this |x|, exp_m1 uses the kernel and squarings directly (no cancellation in
+/// exp(x) − 1); the kernel needs at most 9 halvings here.
+const EXP_M1_SMALL: f64 = 0.5;
+/// For 2|x| below this (|tanh x| < 1/2), tanh is e/(e + 2) with e = exp_m1(2|x|); above it,
+/// 1 − 2/(e^(2|x|) + 1), which is accurate relative to 1 − |tanh x| and never exceeds 1.
+const TANH_SWITCH: f64 = 1.1;
+/// For x in [EXP_FAST_MIN, EXP_FAST_MAX], eˣ = 2ᵐ·eʳ with −967 <= m <= 1021 cannot over- or
+/// underflow and scaling by 2ᵐ is exact (the result is at least 2⁻⁹⁶⁸). This is the
+/// validated domain of `exp`; outside it a cold path handles overflow and underflow.
 const EXP_FAST_MIN: f64 = -670.0;
 /// Upper end of the fast range of `exp`.
 const EXP_FAST_MAX: f64 = 708.0;
-/// For x in [EXP2_FAST_MIN, EXP2_FAST_MAX], 2ˣ needs no over- or underflow handling (as for exp).
+/// For x in [EXP2_FAST_MIN, EXP2_FAST_MAX], 2ˣ cannot over- or underflow (as for exp).
 const EXP2_FAST_MIN: f64 = -966.0;
 /// Upper end of the fast range of `exp2`.
 const EXP2_FAST_MAX: f64 = 1022.0;
@@ -64,7 +71,8 @@ const HYPERBOLIC_EXP_ONLY: f64 = 40.0;
 const LN_NEWTON_MIN: f64 = 1e-270;
 /// Upper end of the direct Newton range of ln.
 const LN_NEWTON_MAX: f64 = 1e270;
-/// Above this, asinh(x) = ln(2x) and acosh(x) = ln(2x) to working precision (and x² overflows).
+/// Above this, asinh(x) = ln(2x) and acosh(x) = ln(2x) to working precision; switching here
+/// keeps x² (in asinh) well before it overflows, above about 1.3·10¹⁵⁴.
 const LN_2X_ABOVE: f64 = 1e150;
 /// `sqrt` and `cbrt` need no rescaling for leading words in [2⁻⁹⁰⁰, 2¹⁰⁰⁰]: y² and y³ and
 /// their rounding errors are then normal and finite.
@@ -75,8 +83,9 @@ const ROOT_MAX: f64 = two_pow(1000);
 const ROOT_RESCALE: i32 = 600;
 /// `powi` uses plain binary powering when all intermediate powers lie in [2⁻⁹⁶⁰, 2⁹⁶⁰].
 const POWI_PLAIN_EXPONENT: i64 = 960;
-/// `powf` of a negative base with an integer exponent of at most this magnitude uses `powi`
-/// (exact for small powers, and 16(|n| + 1)u² <= 2⁻⁹⁹ here); larger ones use exp and ln.
+/// `powf` with an integer exponent of at most this magnitude uses `powi` (exact for small
+/// powers, and 16(|n| + 1)u² <= 2⁻⁹⁹ here); larger ones use exp and ln, whose error does not
+/// grow with the exponent.
 const POWF_POWI_LIMIT: f64 = 7.0;
 
 /// 2ᵉ for −1022 <= e <= 1023.
@@ -91,14 +100,9 @@ fn exponent(x: f64) -> i32 {
     ((x.to_bits() >> 52) & 0x7ff) as i32 - 1023
 }
 
-/// x·2ᵉ for any `e`, normalised, with a zero result returned as (±0, +0).
+/// x·2ᵉ for any `e` (`ldexp` clamps the exponent, so any `i64` is fine).
 fn scale(x: Dd, e: i64) -> Dd {
-    let r = x.ldexp(e.clamp(-2200, 2200) as i32);
-    if r.hi == 0.0 {
-        return Dd { hi: r.hi, lo: 0.0 };
-    }
-    // Below 2⁻⁹⁶⁸ the low word may round to exactly ulp(hi)/2 with the tie away from hi.
-    Dd::new(r.hi, r.lo)
+    x.ldexp(e.clamp(-2200, 2200) as i32)
 }
 
 /// eʳ − 1 for |r| < 2⁻¹⁰ (truncation error below 2⁻¹²⁵ relative).
@@ -112,7 +116,6 @@ fn expm1_kernel(r: Dd) -> Dd {
 }
 
 /// eˣ − 1 for |x| < 1/2: the kernel at x/2ᵏ, then k squarings of 1 + s.
-#[inline]
 fn expm1_small(x: Dd) -> Dd {
     // |x| < 2^(e + 1), so k = e + 11 halvings bring it below 2^-10; k <= 9 as |x| < 1/2.
     let k = (exponent(x.hi) + 11).clamp(0, 9);
@@ -124,7 +127,6 @@ fn expm1_small(x: Dd) -> Dd {
 }
 
 /// eˣ = 2ᵐ·p for finite |x| <= 746, with p = eʳ, |r| <= ln(2)/2 + tiny.
-#[inline]
 fn exp_reduced(x: Dd) -> (Dd, i32) {
     let m = (x.hi * LOG2_E.hi()).round();
     let (a, b) = two_prod(m, LN_2.hi());
@@ -213,11 +215,12 @@ fn ln_wide(a: Dd) -> Dd {
 /// √x for leading words in [ROOT_MIN, ROOT_MAX].
 #[inline]
 fn sqrt_kernel(x: Dd) -> Dd {
-    let inv = 1.0 / x.hi.sqrt();
-    let y = x.hi * inv;
+    // y is correctly rounded, so y = √x exactly (and the residual is 0) when x is the exact
+    // square of a double.
+    let y = x.hi.sqrt();
     let (p, e) = two_prod(y, y);
     let resid = (x - Dd::from_parts_unchecked(p, e)).hi;
-    Dd::new(y, resid * inv * 0.5)
+    Dd::new(y, resid / (2.0 * y))
 }
 
 /// √x outside [ROOT_MIN, ROOT_MAX]: special values, and exact rescaling of tiny and huge x.
@@ -367,10 +370,8 @@ fn powf_special(x: Dd, y: Dd) -> Dd {
         }
     } else if !integer {
         return Dd::NAN;
-    } else if y.hi.abs() <= POWF_POWI_LIMIT {
-        return x.powi(y.hi as i32);
     } else {
-        ax.powf(y)
+        ax.powf(y) // |y| > 7 (smaller integers took the powi path in powf)
     };
     if x.hi.is_sign_negative() && integer && is_odd(y) {
         -magnitude
@@ -390,7 +391,6 @@ impl Dd {
     }
 
     /// eˣ.
-    #[inline]
     pub fn exp(self) -> Self {
         if (EXP_FAST_MIN..=EXP_FAST_MAX).contains(&self.hi) {
             let (p, m) = exp_reduced(self);
@@ -401,7 +401,7 @@ impl Dd {
 
     /// eˣ − 1, accurate near zero.
     pub fn exp_m1(self) -> Self {
-        if self.hi.abs() < HALF_LN_2 {
+        if self.hi.abs() < EXP_M1_SMALL {
             return expm1_small(self);
         }
         self.exp() - 1.0
@@ -448,7 +448,7 @@ impl Dd {
         self.ln() * LOG10_E
     }
 
-    /// Logarithm in an arbitrary base.
+    /// Logarithm in an arbitrary base, ln(self)/ln(base) (relative error at most 2⁻⁹⁹).
     pub fn log(self, base: Self) -> Self {
         self.ln() / base.ln()
     }
@@ -469,7 +469,17 @@ impl Dd {
 
     /// `self` raised to a real power (negative bases only for integer exponents).
     pub fn powf(self, y: Self) -> Self {
-        if self.hi > 0.0 && self.hi < f64::INFINITY && y.hi.is_finite() {
+        let x = self.hi;
+        if y.lo == 0.0 && y.hi.abs() <= POWF_POWI_LIMIT && y.hi == y.hi.trunc() {
+            // Small integer exponent: exact where the power is representable. Zero, infinite
+            // and NaN bases (for y != 0) keep the special rules of f64::powf.
+            if (x.is_finite() && x != 0.0) || y.hi == 0.0 {
+                return self.powi(y.hi as i32);
+            }
+        } else if x > 0.0 && x < f64::INFINITY && y.hi.is_finite() {
+            if y.hi == 0.5 && y.lo == 0.0 {
+                return self.sqrt();
+            }
             return (y * self.ln()).exp();
         }
         powf_special(self, y)
@@ -505,8 +515,7 @@ impl Dd {
         let a = self.hi.abs();
         if a < 0.5 {
             let e = self.exp_m1();
-            // `* 0.5` (not mul_pow2) renormalises results below 2⁻⁹⁶⁸ whose low word rounds.
-            return e * (e + 2.0) / (e + 1.0) * 0.5;
+            return (e * (e + 2.0) / (e + 1.0)).mul_pow2(0.5);
         }
         if a <= HYPERBOLIC_EXP_ONLY {
             let ex = self.exp();
@@ -526,11 +535,19 @@ impl Dd {
         exp_half(a)
     }
 
-    /// Hyperbolic tangent.
+    /// Hyperbolic tangent (|tanh x| <= 1 always).
     pub fn tanh(self) -> Self {
         if self.hi.abs() <= HYPERBOLIC_EXP_ONLY {
-            let e = self.mul_pow2(2.0).exp_m1();
-            return e / (e + 2.0);
+            let a = self.abs().mul_pow2(2.0);
+            let r = if a.hi < TANH_SWITCH {
+                let e = a.exp_m1();
+                e / (e + 2.0)
+            } else {
+                // e/(e + 2) would carry an error of order u², larger than 1 − tanh x for
+                // large x, and could exceed 1; this form is below 1 by construction.
+                1.0 - 2.0 / (a.exp() + 1.0)
+            };
+            return if self.hi.is_sign_negative() { -r } else { r };
         }
         if self.hi.is_nan() {
             return Self::NAN;
@@ -576,7 +593,7 @@ impl Dd {
             return Self::NAN;
         }
         // atanh is odd; on |x| the argument 2|x|/(1 − |x|) of ln_1p never cancels against 1.
-        let r = (a.mul_pow2(2.0) / (Self::ONE - a)).ln_1p() * 0.5; // `* 0.5`: see sinh
+        let r = (a.mul_pow2(2.0) / (Self::ONE - a)).ln_1p().mul_pow2(0.5);
         if self.hi.is_sign_negative() { -r } else { r }
     }
 }

@@ -15,6 +15,14 @@
       "python_flint": "0.9.0",
       "records": 9,
       "sha256": "733cd6ee291ab18f7fe7c977daa943b5a62dc99a10216c035032595cd860a3ef"
+    },
+    "dd_elementary.jsonl": {
+      "flint": "3.6.0",
+      "generator": "dd_elementary",
+      "precision_bits": 600,
+      "python_flint": "0.9.0",
+      "records": 36,
+      "sha256": "fa777fdbfe4882e343ae391f8e8546d19872982ee997c038a54846cbbc878ecd"
     }
   },
   "format_version": 2

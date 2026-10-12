@@ -53,7 +53,7 @@ These apply to every task.
 
 **Reference data** (`reference/data/*.jsonl`)
 - One JSON object per line, with keys `generator`, `case`, `label`, `inputs`, `outputs`.
-- Each output is a set of parallel arrays: `hi`, `lo` (doubles), `dec` (25 significant digits) and `err` (a rigorous bound on |true − (hi + lo)|).
+- Each output is a set of parallel arrays: `hi`, `lo`, `lo2` (doubles), `dec` (up to 25 significant digits) and `err` (a rigorous bound on |true − (hi + lo + lo2)|). This format (version 2) was adopted during the Task 3 review. Tests measure errors with `RefValues::dd_error`, so the reference's own rounding is negligible (~2⁻¹⁵⁰ relative).
 - `label` is `certified` or `high-precision`.
 - `manifest.json` records the python-flint and FLINT versions, the precision and the SHA-256 of each file.
 - Total committed data must stay at or below 20 MB.

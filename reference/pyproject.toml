@@ -1,0 +1,13 @@
+[project]
+name = "scatrs-reference"
+version = "0.1.0"
+description = "Arb (python-flint) reference-value generator for scatrs validation"
+requires-python = ">=3.11"
+# Pinned exactly: regenerated data must be byte-identical for the scheduled drift check.
+dependencies = ["python-flint==0.9.0"]
+
+[dependency-groups]
+dev = ["pytest>=8"]
+
+[tool.uv]
+package = false

@@ -1,0 +1,13 @@
+{
+  "files": {
+    "constants.jsonl": {
+      "generator": "constants",
+      "precision_bits": 400,
+      "records": 62,
+      "sha256": "f43be0243e5bf8699c149b78e2e4b1d345ba64a296b4ed2a9c32e6b4ac5122c3"
+    }
+  },
+  "flint": "3.6.0",
+  "format_version": 1,
+  "python_flint": "0.9.0"
+}

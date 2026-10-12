@@ -41,3 +41,18 @@ These items came out of the Phase 0 reviews and were deliberately deferred. Each
 - Ship `LICENSE` inside the `scatrs` crate package, for example by copying it to `scatrs/LICENSE`.
 - Use absolute GitHub URLs in `README.md`, since crates.io breaks relative links.
 - `scatrs/tests/common/mod.rs` reads `../reference/data`. Exclude the reference-backed tests from the published crate, or make them skip when the data is absent.
+
+## Complex arithmetic (Phase 1, before the Mie kernels)
+- **Accuracy of num-complex.** num-complex's formulas give only norm-wise accuracy. This was found in the Task 6 review and holds for `Complex<f64>` as well as `Complex<DoubleDouble>`:
+  - **Division** uses `(ac + bd)/(c² + d²)`, which overflows for |c|, |d| > ~1e154 in f64 and has no componentwise accuracy.
+  - **`ln` near z = 1** loses relative accuracy.
+  - **Componentwise accuracy fails** near cancellation.
+
+  Mie and T-matrix recurrences can reach large |ξₙ| with absorbing particles. Phase 1 should add scatrs-owned complex helpers for these operations and validate them against Arb:
+  - Smith or Baudin–Smith division;
+  - `ln` via `ln_1p` near 1;
+  - a stable `hypot`/`abs`.
+- **Fused `mul_add`.** `DoubleDouble::mul_add` is not fused (error ≤ 4u²·|x·a|). Add a fused version only if a kernel needs it.
+
+## Platform notes
+- On aarch64, `f64::max`/`f64::min` return NaN for a signaling NaN, contrary to Rust's documentation. `DoubleDouble` follows the documented rule. No DD operation produces a signaling NaN.

@@ -8,7 +8,8 @@
 //! which `f64::mul_add` provides on every platform (in software where hardware lacks FMA).
 //!
 //! Non-finite results are returned as `(hi, 0.0)` so that infinities do not become NaN, and a
-//! zero result carries the IEEE 754 sign of the `f64` operation on the leading words.
+//! zero result is `(±0.0, +0.0)`, with the IEEE 754 sign of the `f64` operation on the
+//! leading words.
 //! Full relative precision requires magnitudes above about 2⁻⁹⁶⁹ ≈ 2·10⁻²⁹².
 //! A result within about an ulp of `f64::MAX` may overflow early: for example `add_dd` adds
 //! the leading words first, so it overflows when `hi + hi` reaches the overflow threshold
@@ -34,13 +35,31 @@ pub struct DoubleDouble {
     lo: f64,
 }
 
-/// Error-free sum: `s = fl(a + b)` and `s + e = a + b` exactly.
+/// Error-free sum: `s = fl(a + b)` and `s + e = a + b` exactly (Knuth's 2Sum).
+///
+/// 2Sum's intermediate `s - a` can overflow although `s` is finite (operands of opposite
+/// signs near `±MAX`, e.g. `a = 8.2e307`, `b = -MAX`), which would give `e = NaN`. That rare
+/// case is redone as Fast2Sum with the larger-magnitude operand first, which is exact and
+/// cannot overflow when `s` is finite.
 #[inline]
 pub(crate) fn two_sum(a: f64, b: f64) -> (f64, f64) {
     let s = a + b;
     let bb = s - a;
     let e = (a - (s - bb)) + (b - bb);
+    if !e.is_finite() && s.is_finite() {
+        return two_sum_ordered(a, b);
+    }
     (s, e)
+}
+
+#[cold]
+#[inline(never)]
+fn two_sum_ordered(a: f64, b: f64) -> (f64, f64) {
+    if a.abs() >= b.abs() {
+        fast_two_sum(a, b)
+    } else {
+        fast_two_sum(b, a)
+    }
 }
 
 /// Error-free sum, valid when `|a| >= |b|` or `a == 0`, and more generally whenever `a` is an
@@ -357,7 +376,7 @@ impl Neg for DoubleDouble {
     fn neg(self) -> Self {
         Self {
             hi: -self.hi,
-            lo: -self.lo,
+            lo: 0.0 - self.lo, // exactly -lo, except that a zero low word stays +0
         }
     }
 }

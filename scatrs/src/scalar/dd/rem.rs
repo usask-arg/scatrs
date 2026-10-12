@@ -7,7 +7,20 @@
 
 use super::{DoubleDouble, fast_two_sum, two_prod, two_sum};
 
+/// Long-division steps allowed: any finite quotient needs at most about 43. The cap, and
+/// [`MAX_CORRECTIONS`], only guarantee termination should an invariant ever break.
+const MAX_DIVISION_STEPS: usize = 64;
+/// Final ±|y| corrections allowed: at most two are needed.
+const MAX_CORRECTIONS: usize = 4;
+
 /// An exact sum of nonzero, nonoverlapping `f64`s stored in order of increasing magnitude.
+///
+/// The length stays small (at most 6 components over 2·10⁶ random remainders spanning the
+/// whole finite range), but no bound is proven for Compress's output, so the components live
+/// in a `Vec` rather than a fixed array.
+///
+/// Terms are always added largest first, so the partial sums stay near the final value:
+/// adding a small term first could take a sum near `MAX` past the overflow threshold.
 struct Expansion(Vec<f64>);
 
 impl Expansion {
@@ -40,13 +53,13 @@ impl Expansion {
     }
 
     fn add_dd(&mut self, y: DoubleDouble) {
-        self.add(y.lo);
         self.add(y.hi);
+        self.add(y.lo);
     }
 
     fn sub_dd(&mut self, y: DoubleDouble) {
-        self.add(-y.lo);
         self.add(-y.hi);
+        self.add(-y.lo);
     }
 
     /// Subtracts `n * y` exactly, for an integer `n` with `|n| < 2^53` and `|n * y| <= MAX`.
@@ -54,7 +67,7 @@ impl Expansion {
     fn sub_multiple(&mut self, n: f64, y: DoubleDouble) {
         let (p1, e1) = two_prod(n, y.hi);
         let (p2, e2) = two_prod(n, y.lo);
-        for t in [e2, p2, e1, p1] {
+        for t in [p1, e1, p2, e2] {
             self.add(-t);
         }
         self.compress();
@@ -150,14 +163,18 @@ pub(super) fn rem(x: DoubleDouble, y: DoubleDouble) -> DoubleDouble {
     if xa < ya {
         return x;
     }
+    // The exact arithmetic below keeps every partial sum finite for finite inputs, so the
+    // NaN returns are unreachable; they only ensure termination if that ever failed (a NaN
+    // approximation would otherwise keep the loops going).
     let mut r = Expansion::of(xa);
     // Long division: while the quotient exceeds 2^52, remove about 50 of its leading bits
     // at a time by subtracting an exact multiple of ya * 2^k. Each step lowers the exponent
     // of the partial remainder by at least 49, so there are at most about 43 steps.
-    loop {
-        let a = r.approx();
-        if a == 0.0 {
-            break; // r is exactly zero
+    let mut a = r.approx();
+    let mut steps = 0;
+    while a != 0.0 {
+        if !a.is_finite() || steps == MAX_DIVISION_STEPS {
+            return DoubleDouble::NAN;
         }
         let k = exponent(a) - exponent(ya.hi) - 51;
         if k <= 0 {
@@ -167,15 +184,22 @@ pub(super) fn rem(x: DoubleDouble, y: DoubleDouble) -> DoubleDouble {
         // |a / ys.hi| lies in [2^50, 2^52); shrink it slightly so that n * ys.hi <= |a|.
         let n = (a / ys.hi * (1.0 - 2f64.powi(-50))).trunc();
         r.sub_multiple(n, ys);
+        a = r.approx();
+        steps += 1;
     }
     // Now |r| < 2^53 * ya: one more quotient step, then exact corrections into [0, ya).
-    let mut n = (r.approx() / ya.hi).trunc();
+    let mut n = (a / ya.hi).trunc();
     if !(n * ya.hi).is_finite() {
         n -= n.signum(); // |x| is within an ulp of MAX
     }
     r.sub_multiple(n, ya);
+    let mut corrections = 0;
     while r.is_negative() {
         r.add_dd(ya);
+        corrections += 1;
+        if corrections > MAX_CORRECTIONS {
+            return DoubleDouble::NAN;
+        }
     }
     loop {
         r.sub_dd(ya);
@@ -183,6 +207,13 @@ pub(super) fn rem(x: DoubleDouble, y: DoubleDouble) -> DoubleDouble {
             r.add_dd(ya);
             break;
         }
+        corrections += 1;
+        if corrections > MAX_CORRECTIONS {
+            return DoubleDouble::NAN;
+        }
+    }
+    if !r.approx().is_finite() {
+        return DoubleDouble::NAN;
     }
     // r is exact and 0 <= r < ya; the final rounding may reach ya, so step back below it.
     let mut z = r.into_dd();

@@ -13,7 +13,12 @@ const U2: f64 = 1.232_595_164_407_831e-32;
 
 fn ulp(x: f64) -> f64 {
     let a = x.abs();
-    f64::from_bits(a.to_bits() + 1) - a
+    let next = f64::from_bits(a.to_bits() + 1);
+    if next.is_infinite() {
+        a - f64::from_bits(a.to_bits() - 1) // ulp(MAX) = 2^971
+    } else {
+        next - a
+    }
 }
 
 fn p(e: i32) -> f64 {
@@ -153,6 +158,78 @@ fn special_values() {
 }
 
 #[test]
+fn sums_near_max_do_not_overflow_in_intermediate_steps() {
+    // fl(a - MAX) is finite, but 2Sum's intermediate fl(s - a) overflowed and gave NaN.
+    let a = 8.228043741193672e307;
+    let want = a - f64::MAX; // -9.748887607429486e307
+    let exact = Dd::from_f64(-f64::MAX) + Dd::from_f64(a); // operand order that never failed
+    assert_eq!(exact.hi(), want);
+    assert_eq!(Dd::from_f64(a) - Dd::from_f64(f64::MAX), exact);
+    assert_eq!(Dd::from_f64(a) - f64::MAX, exact);
+    assert_eq!(a - Dd::from_f64(f64::MAX), exact);
+    assert_eq!(Dd::new(a, -f64::MAX), exact);
+    assert_eq!(Dd::new(-f64::MAX, a), exact);
+    assert_eq!(Dd::from_f64(-a) + Dd::from_f64(f64::MAX), -exact);
+    // Halving makes every step overflow-free, and the double-double sum scales exactly.
+    let halved = (Dd::from_f64(a * 0.5) - Dd::from_f64(f64::MAX * 0.5)).mul_pow2(2.0);
+    assert_eq!(exact, halved);
+}
+
+#[test]
+fn remainder_near_max_terminates_and_is_exact() {
+    // These looped forever: adding the small terms first overflowed the expansion to NaN.
+    // Expected values are exact remainders from rational arithmetic (all double-doubles).
+    let tenth = Dd::ONE / Dd::from_f64(10.0); // (0.1, -5.551115123125783e-18)
+    let cases = [
+        (
+            Dd::from_f64(f64::MAX),
+            tenth,
+            Dd::from_f64(1.3877787807814455e-17),
+        ),
+        (
+            Dd::from_f64(f64::MAX),
+            Dd::new(1.0 + p(-52), -0.99 * p(-53)),
+            Dd::new(0.1236719002634557, 1.1200685685205952e-18),
+        ),
+        (
+            Dd::new(f64::MAX, 1.9 * p(969)),
+            Dd::new(f64::MAX, -1.9 * p(969)),
+            Dd::from_f64(1.8960482940579837e292),
+        ),
+    ];
+    for (x, y, want) in cases {
+        for (x, y, want) in [(x, y, want), (-x, y, -want), (x, -y, want), (-x, -y, -want)] {
+            let got = x % y;
+            let err = (got - want).abs().hi();
+            assert!(
+                err <= 2.0 * U2 * y.abs().hi(),
+                "{x:?} % {y:?} = {got:?}, want {want:?}"
+            );
+            assert!(got.abs() < y.abs());
+        }
+    }
+}
+
+#[test]
+fn zero_results_have_a_positive_zero_low_word() {
+    let zeros = [
+        Dd::from_f64(-0.3).ceil(),
+        Dd::from_f64(-0.3).round(),
+        Dd::from_f64(-0.3).trunc(),
+        Dd::from_f64(-4.0) % Dd::from_f64(2.0),
+        Dd::from_f64(4.0) % Dd::from_f64(-2.0),
+        Dd::from_f64(-0.0).abs(),
+        -Dd::ZERO,
+        Dd::from_f64(-0.0) * Dd::ONE,
+        Dd::ZERO / Dd::from_f64(-3.0),
+    ];
+    for z in zeros {
+        assert_eq!(z.hi(), 0.0);
+        assert_eq!(z.lo().to_bits(), 0, "{z:?}");
+    }
+}
+
+#[test]
 fn overflow_gives_exact_infinity() {
     // Each true result exceeds the overflow threshold MAX + 2^970 only through the low words,
     // so the final renormalisation overflows; it must give (±inf, 0), not NaN or (inf, -inf).
@@ -230,6 +307,10 @@ fn zero_signs_and_exact_results_match_f64() {
                 } else {
                     assert_eq!(got.hi().to_bits(), want.to_bits(), "{a:?} {name} {b:?}");
                     assert_eq!(got.lo(), 0.0, "{a:?} {name} {b:?}");
+                    if want == 0.0 {
+                        // A zero result is (±0, +0).
+                        assert_eq!(got.lo().to_bits(), 0, "{a:?} {name} {b:?}");
+                    }
                 }
             }
         }
@@ -477,6 +558,56 @@ fn any_finite() -> impl Strategy<Value = f64> {
         .prop_filter("finite", |x| x.is_finite())
 }
 
+/// ±MAX, or within 2^16 ulps of it.
+fn near_max() -> impl Strategy<Value = f64> {
+    (prop_oneof![Just(0u64), 0u64..1 << 16], any::<bool>()).prop_map(|(k, neg)| {
+        let x = f64::from_bits(f64::MAX.to_bits() - k);
+        if neg { -x } else { x }
+    })
+}
+
+/// |x| in [2^1021, MAX] with a random significand.
+fn big_hi() -> impl Strategy<Value = f64> {
+    (1021u64..=1023, any::<u64>(), any::<bool>()).prop_map(|(e, m, neg)| {
+        let x = f64::from_bits(((e + 1023) << 52) | (m & ((1 << 52) - 1)));
+        if neg { -x } else { x }
+    })
+}
+
+/// A low word as a fraction of ulp(hi), often near ±1/2.
+fn lo_frac() -> impl Strategy<Value = f64> {
+    prop_oneof![
+        -0.5..0.5f64,
+        0.49..=0.5f64,
+        -0.5..=-0.49f64,
+        Just(0.5),
+        Just(-0.5)
+    ]
+}
+
+fn finite_dd(hi: impl Strategy<Value = f64>) -> impl Strategy<Value = Dd> {
+    (hi, lo_frac()).prop_map(|(hi, f)| {
+        let d = dd(hi, f);
+        // MAX + ulp/2 overflows; keep the leading word alone rather than rejecting the case.
+        if d.hi().is_finite() {
+            d
+        } else {
+            Dd::from_f64(hi)
+        }
+    })
+}
+
+/// Finite double-doubles from the whole range, weighted towards ±MAX and the top binades,
+/// with low words often near ±ulp(hi)/2.
+fn wide_dd() -> impl Strategy<Value = Dd> {
+    finite_dd(prop_oneof![any_finite(), near_max(), big_hi()])
+}
+
+/// Finite double-doubles with |hi| in [2^1021, MAX].
+fn big_dd() -> impl Strategy<Value = Dd> {
+    finite_dd(prop_oneof![near_max(), big_hi()])
+}
+
 proptest! {
     #[test]
     fn results_are_normalised(ah in -1e30..1e30f64, af in -0.5..0.5f64, bh in -1e30..1e30f64, bf in -0.5..0.5f64) {
@@ -485,12 +616,6 @@ proptest! {
         for z in [a + b, a - b, a * b, a / b, a + bh, a * bh, a / bh, a % b] {
             prop_assert_eq!(z.hi() + z.lo(), z.hi());
         }
-    }
-
-    #[test]
-    fn addition_commutes(ah in -1e30..1e30f64, af in -0.5..0.5f64, bh in -1e30..1e30f64, bf in -0.5..0.5f64) {
-        let (a, b) = (dd(ah, af), dd(bh, bf));
-        prop_assert_eq!(a + b, b + a);
     }
 
     #[test]
@@ -506,7 +631,7 @@ proptest! {
             (d.round(), x.round()),
         ] {
             prop_assert_eq!(got.hi().to_bits(), want.to_bits(), "{:?}", x);
-            prop_assert_eq!(got.lo(), 0.0);
+            prop_assert_eq!(got.lo().to_bits(), 0); // +0, not -0
         }
     }
 
@@ -516,7 +641,7 @@ proptest! {
         prop_assume!(y != 0.0);
         let got = Dd::from_f64(x) % Dd::from_f64(y);
         prop_assert_eq!(got.hi().to_bits(), (x % y).to_bits(), "{:?} % {:?}", x, y);
-        prop_assert_eq!(got.lo(), 0.0);
+        prop_assert_eq!(got.lo().to_bits(), 0); // +0, not -0
     }
 
     #[test]
@@ -528,5 +653,56 @@ proptest! {
         let r = a % b;
         prop_assert!(r.abs() < b.abs(), "{:?} % {:?} = {:?}", a, b, r);
         prop_assert_eq!(r.hi().is_sign_negative(), a.hi().is_sign_negative());
+    }
+}
+
+proptest! {
+    // Whole-range inputs near ±MAX hit rare overflow paths; use more cases than the default.
+    #![proptest_config(ProptestConfig::with_cases(4096))]
+
+    #[test]
+    fn results_are_normalised_over_the_whole_range(a in wide_dd(), b in wide_dd()) {
+        prop_assume!(b.hi() != 0.0);
+        let bh = b.hi();
+        for z in [a + b, a - b, a * b, a / b, a + bh, a - bh, a * bh, a / bh, a % b] {
+            prop_assert!(!z.hi().is_nan() && !z.lo().is_nan(), "{:?} {:?} -> {:?}", a, b, z);
+            prop_assert_eq!(z.hi() + z.lo(), z.hi());
+        }
+    }
+
+    #[test]
+    fn addition_commutes(a in wide_dd(), b in wide_dd()) {
+        let s = a + b;
+        prop_assert!(!s.hi().is_nan(), "{:?} + {:?} = {:?}", a, b, s);
+        prop_assert_eq!(s, b + a);
+        prop_assert_eq!(a + b.hi(), b.hi() + a);
+    }
+
+    #[test]
+    fn sums_near_max_match_halved_sums(a in big_dd(), b in big_dd()) {
+        // Halving is exact here and removes every intermediate overflow; double-double sums
+        // commute with exact scaling. (When fl(a.hi + b.hi) itself overflows, the sum may
+        // overflow early by design, so those cases are skipped.)
+        let h = |x: Dd| x.mul_pow2(0.5);
+        let twice = |x: Dd| x.mul_pow2(2.0);
+        if (a.hi() + b.hi()).is_finite() {
+            prop_assert_eq!(a + b, twice(h(a) + h(b)));
+            prop_assert_eq!(a + b.hi(), twice(h(a) + 0.5 * b.hi()));
+            prop_assert_eq!(Dd::new(a.hi(), b.hi()), twice(Dd::new(0.5 * a.hi(), 0.5 * b.hi())));
+        }
+        if (a.hi() - b.hi()).is_finite() {
+            prop_assert_eq!(a - b, twice(h(a) - h(b)));
+            prop_assert_eq!(a - b.hi(), twice(h(a) - 0.5 * b.hi()));
+        }
+    }
+
+    #[test]
+    fn remainder_terminates_and_is_reduced_over_the_whole_range(x in wide_dd(), y in wide_dd()) {
+        prop_assume!(y.hi() != 0.0);
+        let r = x % y;
+        prop_assert!(!r.hi().is_nan(), "{:?} % {:?} = {:?}", x, y, r);
+        prop_assert!(r.abs() < y.abs(), "{:?} % {:?} = {:?}", x, y, r);
+        prop_assert_eq!(r.hi().is_sign_negative(), x.hi().is_sign_negative());
+        prop_assert_eq!(r.hi() + r.lo(), r.hi());
     }
 }

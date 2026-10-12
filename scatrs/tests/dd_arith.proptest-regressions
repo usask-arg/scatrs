@@ -5,3 +5,6 @@
 # It is recommended to check this file in to source control so that
 # everyone who runs the test benefits from these saved cases.
 cc 36a158429adda6eb7e309d6ac7264df1cb97069f724f44f4801cd43aecd051a8 # shrinks to x = 6.94744002929672e-151, y = 1.5e-323
+cc b689e33f97f4a893608882ed4e10e0369cb7d523894da975370d2d54de39745c # shrinks to a = DoubleDouble { hi: 1.7976931348623157e308, lo: 0.0 }, b = DoubleDouble { hi: -6.548741632501288e307, lo: 0.0 }
+cc 57ad15a3d8d97995261eac8feeba42b84d99b7446e3c4c80081ffd2bb70b43e6 # shrinks to a = DoubleDouble { hi: 4.134285931398002e307, lo: 0.0 }, b = DoubleDouble { hi: -1.7976931348623157e308, lo: 0.0 }
+cc ef7d6a6dbb91773733d0c8cbae0b2aa454479b5f084d51c0b05af4da185c788d # shrinks to a = DoubleDouble { hi: 3.675586060656997e307, lo: -2.4948003869184e291 }, b = DoubleDouble { hi: 1.7976931348623157e308, lo: 0.0 }

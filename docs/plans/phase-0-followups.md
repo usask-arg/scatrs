@@ -21,12 +21,21 @@ These items came out of the Phase 0 reviews and were deliberately deferred. Each
 - **DD `sin`/`cos`/`tan` return NaN for |x| > 2⁵⁰.**
   - **Decision (controller, Task 5):** this is a documented domain limit, like `sqrt(-1)`, so it is not a silent failure. Kernels never pass such arguments and must validate their own domains.
   - **If ever needed:** Payne–Hanek reduction, with a table of about 1200 bits of 2/π.
-- **DD trig accuracy near nonzero multiples of π/2 is only absolute (2⁻¹⁰⁰).** Callers that need relative accuracy there, for example sin θ near θ = π in Wigner/T-matrix code, must reduce θ themselves.
-- **DD trig speed.**
-  - sin/cos take about 176 ns and atan2 about 390 ns, dominated by a 13-step double-double Taylor series.
-  - Options: compute the high-order terms in f64, or use a table of sin/cos(jπ/64) with about 8 terms. Expected 2–3× faster.
-  - Phase 1 performance work.
-- `ldexp` can double-round subnormal results, i.e. results below 2⁻⁹⁶⁹. This is outside the documented full-precision domain.
+- **DD trig accuracy near nonzero multiples of π/2.** The contract only promises absolute accuracy there, but the actual bounds are better. These were derived in the Task 5 follow-up, checked on 30k Arb inputs, and are now documented in `trig.rs`:
+  - The absolute error floor is |k|·2⁻¹⁶¹ for f64 arguments and |k|·2⁻¹⁵⁸ for DD arguments.
+  - Relative error stays ≤ 2⁻¹⁰⁰ whenever |x − kπ/2| ≥ |k|·2⁻⁶⁰ (f64) or |k|·2⁻⁵⁷ (DD).
+  - Only arguments closer than that to a multiple need callers to reduce them first.
+- **Platform dependence of the DD `atan2` seed.** atan2, atan, asin and acos start from the platform `f64::atan2`.
+  - A seed that differs by one ulp changes the final DD bits in about 26% of cases, by up to 2⁻¹⁰³·⁷ relative.
+  - Accuracy is unaffected: the Newton step tolerates seeds up to 2¹⁶ ulps off.
+  - Bitwise golden tests across operating systems would fail, however.
+  - Fix: a Rust port of fdlibm atan2 as the seed, or a table-driven DD atan that needs no seed. The same applies to the `ln`/`cbrt` seeds.
+- **Kernels that take user-supplied angles** must validate them before converting to DD, because DD sin/cos return NaN for |x| > 2⁵⁰ where f64 gives finite values.
+- **DD trig speed.** sin/cos take about 170 ns, atan2 about 370 ns and asin/acos about 400 ns, against 2.3 ns for f64 sin. Measured options from the Task 5 review:
+  1. **f64 Horner tail for orders above 17.** sin goes from 148 to 82 ns (1.8×) with an identical result to 2⁻¹⁰⁶. For cos, start the tail at order 20.
+  2. **cos as √((1−s)(1+s)) inside sin_cos.** 117 ns versus 302 ns (2.6×), with a difference of 2⁻¹⁰⁴·⁵. This breaks the documented bitwise guarantee `sin_cos == (sin, cos)`, so it needs either an internal-only variant for atan2 or a relaxed guarantee.
+  3. **sin/cos(j/64) tables.** An estimated 3–4× on sin_cos.
+  4. **A table-driven DD atan.** This avoids sin_cos and the libm seed.
 
 ## Packaging (Task 13)
 - Ship `LICENSE` inside the `scatrs` crate package, for example by copying it to `scatrs/LICENSE`.

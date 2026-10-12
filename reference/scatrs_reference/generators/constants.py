@@ -40,7 +40,7 @@ def _constants() -> dict[str, arb]:
     for i in range(9):
         c[f"POW10_2POW{i}"] = arb(fmpz(10)) ** (2**i)
     for name, base in (("FRAC_PI_2_TAIL", pi / 2), ("LN_2_TAIL", two.log())):
-        hi, lo, _ = split(base)
+        hi, lo, _, _ = split(base)
         c[name] = base - arb(hi) - arb(lo)
     return c
 

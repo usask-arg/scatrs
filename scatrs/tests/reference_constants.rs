@@ -38,11 +38,13 @@ fn std_f64_constants_equal_reference_hi_words() {
 fn every_constant_is_known_to_double_double_accuracy() {
     for r in load("constants.jsonl") {
         let v = r.output("value");
+        // |value - (hi + lo)| <= |lo2| + err, since err bounds |value - (hi + lo + lo2)|.
+        let dd_err = v.lo2[0].abs() + v.err[0];
         assert!(
-            v.err[0] <= 2f64.powi(-105) * v.hi[0].abs(),
-            "{}: err {:e} too large",
+            dd_err <= 2f64.powi(-105) * v.hi[0].abs(),
+            "{}: double-double error {:e} too large",
             r.case,
-            v.err[0]
+            dd_err
         );
     }
 }

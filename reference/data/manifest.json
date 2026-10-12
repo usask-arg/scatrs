@@ -6,7 +6,7 @@
       "precision_bits": 400,
       "python_flint": "0.9.0",
       "records": 62,
-      "sha256": "f43be0243e5bf8699c149b78e2e4b1d345ba64a296b4ed2a9c32e6b4ac5122c3"
+      "sha256": "1d1321b8610a0676c517a3da76fe0b49dd4af089da3fa50b9f46272c6ef902d7"
     },
     "dd_arith.jsonl": {
       "flint": "3.6.0",
@@ -14,8 +14,8 @@
       "precision_bits": 600,
       "python_flint": "0.9.0",
       "records": 9,
-      "sha256": "39fa02d77d508f496362b3d689b647e5f20090b7be0592edf1fee1fb095f9e4a"
+      "sha256": "733cd6ee291ab18f7fe7c977daa943b5a62dc99a10216c035032595cd860a3ef"
     }
   },
-  "format_version": 1
+  "format_version": 2
 }

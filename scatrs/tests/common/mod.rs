@@ -7,12 +7,44 @@ use std::path::PathBuf;
 use serde::Deserialize;
 
 /// Parallel arrays describing reference values (see `reference/scatrs_reference/records.py`).
+///
+/// Value `i` is `hi[i] + lo[i] + lo2[i]` to within `err[i]` (about 2^-160 relative), and
+/// `(hi[i], lo[i])` is a normalised double-double.
 #[derive(Debug, Deserialize)]
 pub struct RefValues {
     pub hi: Vec<f64>,
     pub lo: Vec<f64>,
+    pub lo2: Vec<f64>,
     pub dec: Vec<String>,
     pub err: Vec<f64>,
+}
+
+impl RefValues {
+    /// `|got - v|` for the double-double `got_hi + got_lo` and the reference value `v` of
+    /// case `i`, as `|got - (hi + lo + lo2)| + err`.
+    ///
+    /// The difference is formed from error-free transformations and summed with
+    /// compensation (Ogita, Rump & Oishi's Sum2), so it is as accurate as if computed in
+    /// twice the working precision: the result is within about 2^-150 |v| of a rigorous bound,
+    /// negligible against double-double errors of order u^2 = 2^-106.
+    pub fn dd_error(&self, i: usize, got_hi: f64, got_lo: f64) -> f64 {
+        let (s1, e1) = two_sum(got_hi, -self.hi[i]);
+        let (s2, e2) = two_sum(got_lo, -self.lo[i]);
+        let (mut sum, mut comp) = (0.0, 0.0);
+        for t in [s1, s2, e1, e2, -self.lo2[i]] {
+            let (s, e) = two_sum(sum, t);
+            sum = s;
+            comp += e;
+        }
+        (sum + comp).abs() + self.err[i]
+    }
+}
+
+/// Error-free sum: `s = fl(a + b)` and `s + e = a + b` exactly.
+fn two_sum(a: f64, b: f64) -> (f64, f64) {
+    let s = a + b;
+    let bb = s - a;
+    (s, (a - (s - bb)) + (b - bb))
 }
 
 /// One reference record.
@@ -81,7 +113,8 @@ pub fn data_path(file: &str) -> PathBuf {
 }
 
 /// Load and validate a reference file: every line must parse, every output must have
-/// equal-length `hi`/`lo`/`dec`/`err` arrays, and case names must be unique within the file.
+/// equal-length `hi`/`lo`/`lo2`/`dec`/`err` arrays, and case names must be unique within the
+/// file.
 pub fn load(file: &str) -> Vec<Record> {
     let path = data_path(file);
     let text = std::fs::read_to_string(&path).unwrap_or_else(|e| {
@@ -112,14 +145,17 @@ fn validate(file: &str, records: &[Record]) {
             r.case
         );
         for (name, v) in &r.outputs {
-            assert!(
-                v.hi.len() == v.lo.len() && v.hi.len() == v.dec.len() && v.hi.len() == v.err.len(),
-                "{file}: case {} output {name}: hi/lo/dec/err lengths differ ({}/{}/{}/{})",
-                r.case,
+            let lens = [
                 v.hi.len(),
                 v.lo.len(),
+                v.lo2.len(),
                 v.dec.len(),
-                v.err.len()
+                v.err.len(),
+            ];
+            assert!(
+                lens.iter().all(|&n| n == lens[0]),
+                "{file}: case {} output {name}: hi/lo/lo2/dec/err lengths differ {lens:?}",
+                r.case
             );
         }
     }

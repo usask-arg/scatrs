@@ -20,8 +20,10 @@ fn p(e: i32) -> f64 {
     2f64.powi(e)
 }
 
-/// Checks |op(a, b) - exact| + ref_err <= bound * u² * scale(b, exact) over every case of
-/// the reference record `case`. A zero scale (an exact zero result) requires an exact answer.
+/// Checks |op(a, b) - exact| <= bound * u² * scale(b, exact) over every case of the reference
+/// record `case`, measuring the error against the three-word reference (`RefValues::dd_error`),
+/// so the measured error is the true error to within about 2^-150 |exact|. A zero scale (an
+/// exact zero result) requires an exact answer.
 fn check_scaled(
     case: &str,
     bound: f64,
@@ -39,7 +41,7 @@ fn check_scaled(
         let b = Dd::new(b_hi[i], b_lo[i]);
         let got = f(a, b, b_hi[i]);
         let exact = Dd::new(z.hi[i], z.lo[i]);
-        let err = (got - exact).abs().hi() + z.err[i];
+        let err = z.dd_error(i, got.hi(), got.lo());
         let s = scale(b, exact);
         let rel = match (s == 0.0, err == 0.0) {
             (false, _) => err / s,
@@ -56,7 +58,7 @@ fn check_scaled(
     eprintln!("{case}: worst {worst:.3} u^2 (bound {bound} u^2)");
 }
 
-/// Checks the relative error |op(a, b) - exact| + ref_err <= bound * u² * |exact|.
+/// Checks the relative error |op(a, b) - exact| <= bound * u² * |exact|.
 fn check(case: &str, bound: f64, f: impl Fn(Dd, Dd, f64) -> Dd) {
     check_scaled(case, bound, f, |_, exact| exact.abs().hi())
 }
@@ -103,10 +105,9 @@ fn div_f64_within_3u2() {
 }
 
 #[test]
-fn rem_within_4u2_of_divisor() {
-    // `%` is within 2u^2 |y| of the true remainder (see `Rem for DoubleDouble`); the reference
-    // split is within u^2 |r| <= u^2 |y| of it, and enters this measurement twice.
-    check_scaled("rem", 4.0, |a, b, _| a % b, |b, _| b.abs().hi());
+fn rem_within_2u2_of_divisor() {
+    // `%` is within 2u^2 |y| of the true remainder (see `Rem for DoubleDouble`).
+    check_scaled("rem", 2.0, |a, b, _| a % b, |b, _| b.abs().hi());
     let recs = load("dd_arith.jsonl");
     let r = find(&recs, "rem");
     let (a_hi, a_lo) = (r.input_f64s("a_hi"), r.input_f64s("a_lo"));

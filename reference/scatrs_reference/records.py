@@ -2,11 +2,14 @@
 
 Every stored value v is represented three ways:
 
-* ``hi``/``lo``: two doubles with ``hi`` the double nearest to the ball midpoint and
-  ``hi == fl(hi + lo)``, whose exact sum approximates v;
+* ``hi``/``lo``/``lo2``: three doubles whose exact sum approximates v to about 160 bits.
+  ``hi`` is the double nearest to the ball midpoint and ``hi == fl(hi + lo)``, so
+  ``(hi, lo)`` is a normalised double-double; ``lo2`` is the double nearest to the
+  remainder, which lets tests measure double-double errors almost exactly;
 * ``dec``: v as printed by Arb with up to 25 significant digits, or fewer when the ball is
-  too wide to justify 25 (for humans; tests use ``hi``/``lo``);
-* ``err``: a rigorous upper bound on ``|v - (hi + lo)|``, including the Arb ball radius.
+  too wide to justify 25 (for humans; tests use the doubles);
+* ``err``: a rigorous upper bound on ``|v - (hi + lo + lo2)|``, including the Arb ball
+  radius.
 
 Values that are not finite, or whose double representation overflows, are rejected.
 """
@@ -22,7 +25,7 @@ from pathlib import Path
 import flint
 from flint import arb
 
-FORMAT_VERSION = 1
+FORMAT_VERSION = 2  # 2: added lo2
 DECIMAL_DIGITS = 25
 LABELS = ("certified", "high-precision")
 
@@ -64,13 +67,16 @@ def upper_double(x: arb) -> float:
     return f
 
 
-def split(v: arb) -> tuple[float, float, float]:
-    """Split ``v`` into ``(hi, lo, err)`` with ``|v - (hi + lo)| <= err`` rigorously.
+def split(v: arb) -> tuple[float, float, float, float]:
+    """Split ``v`` into ``(hi, lo, lo2, err)`` with ``|v - (hi + lo + lo2)| <= err`` rigorously.
 
     ``hi`` is the double nearest to the midpoint of ``v`` and ``hi + lo == hi`` in
-    floating point. Raises ``ValueError`` if ``v`` is not finite (NaN or infinite midpoint
-    or radius), and ``OverflowError`` if ``hi``, ``lo`` or ``err`` does not fit in a finite
-    double.
+    floating point, so ``(hi, lo)`` is a normalised double-double. ``lo2`` is the double
+    nearest to the midpoint of ``v - hi - lo``: ``|lo2| <= ulp(lo)/2``, or ``<= 2 ulp(lo)``
+    when ``lo`` was moved towards zero to keep ``hi + lo == hi``. It may underflow; ``err``
+    covers that. Raises ``ValueError`` if ``v`` is not finite (NaN or infinite midpoint or
+    radius), and ``OverflowError`` if ``hi``, ``lo``, ``lo2`` or ``err`` does not fit in a
+    finite double.
     """
     if not v.is_finite():
         raise ValueError(f"cannot split non-finite value {v.str(15)}")
@@ -78,19 +84,22 @@ def split(v: arb) -> tuple[float, float, float]:
     lo = nearest_double(v - arb(hi))
     if hi + lo != hi:  # |lo| is exactly half an ulp of hi and rounds away from hi
         lo = math.nextafter(lo, 0.0)
-    err = upper_double(v - arb(hi) - arb(lo))
-    if not all(map(math.isfinite, (hi, lo, err))):  # unreachable guard; keep the contract
+    rest = v - arb(hi) - arb(lo)
+    lo2 = nearest_double(rest)
+    err = upper_double(rest - arb(lo2))
+    if not all(map(math.isfinite, (hi, lo, lo2, err))):  # unreachable; keep the contract
         raise OverflowError(f"{v.str(15)} does not split into finite doubles")
-    return hi, lo, err
+    return hi, lo, lo2, err
 
 
 def values(vs: Iterable[arb]) -> dict[str, list]:
     """Encode Arb balls as the parallel arrays stored in a record."""
-    out: dict[str, list] = {"hi": [], "lo": [], "dec": [], "err": []}
+    out: dict[str, list] = {"hi": [], "lo": [], "lo2": [], "dec": [], "err": []}
     for v in vs:
-        hi, lo, err = split(v)
+        hi, lo, lo2, err = split(v)
         out["hi"].append(hi)
         out["lo"].append(lo)
+        out["lo2"].append(lo2)
         out["dec"].append(v.str(DECIMAL_DIGITS, radius=False))
         out["err"].append(err)
     return out

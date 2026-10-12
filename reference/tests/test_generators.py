@@ -33,7 +33,8 @@ def test_committed_file_matches_manifest(name):
         rec = json.loads(line)
         assert rec["label"] in ("certified", "high-precision")
         for out in rec["outputs"].values():
-            assert len(out["hi"]) == len(out["lo"]) == len(out["dec"]) == len(out["err"])
+            n = len(out["hi"])
+            assert all(len(out[k]) == n for k in ("lo", "lo2", "dec", "err"))
 
 
 def test_constants_regenerate_identically(tmp_path):

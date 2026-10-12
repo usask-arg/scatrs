@@ -44,38 +44,60 @@ CASES = {
 }
 
 
+def _lo2_bound(v, hi, lo):
+    """|lo2| <= ulp(lo)/2, or 2 ulp(lo) when lo was moved towards zero (the tie case)."""
+    moved = lo != nearest_double(v - arb(hi))
+    return (2.0 if moved else 0.5) * math.ulp(lo)
+
+
 def test_split_is_normalised_and_certified():
     v = arb.pi()
-    hi, lo, err = split(v)
+    hi, lo, lo2, err = split(v)
     assert hi == math.pi
     assert hi + lo == hi
-    assert err <= 2.0**-105 * abs(hi)
-    assert abs(v - arb(hi) - arb(lo)) <= arb(err)
+    assert abs(lo2) <= math.ulp(lo) / 2
+    assert lo2 != 0.0
+    assert err <= 2.0**-158 * abs(hi)  # about 160 bits, not just a double-double
+    assert abs(v - arb(hi) - arb(lo) - arb(lo2)) <= arb(err)
 
 
 @pytest.mark.parametrize("name", CASES)
 def test_split_is_certified_normalised_and_nearest(name):
     v = CASES[name]()
-    hi, lo, err = split(v)
-    assert abs(v - arb(hi) - arb(lo)) <= arb(err)
+    hi, lo, lo2, err = split(v)
+    assert abs(v - arb(hi) - arb(lo) - arb(lo2)) <= arb(err)
     assert hi + lo == hi
     assert hi == nearest_double(v)
+    assert abs(lo2) <= _lo2_bound(v, hi, lo)
+    assert lo2 == nearest_double(v - arb(hi) - arb(lo))
 
 
 @pytest.mark.parametrize("radius", [1e-20, 1e-50])
 def test_split_error_covers_the_ball_radius(radius):
-    _, _, err = split(_pi_ball(radius))
+    _, _, _, err = split(_pi_ball(radius))
     assert err >= radius
 
 
 def test_split_keeps_hi_nearest_on_a_near_tie():
-    hi, lo, _ = split(_near_tie())
+    hi, lo, lo2, _ = split(_near_tie())
     assert hi == 1.0 + 2.0**-52
     assert lo == math.nextafter(2.0**-53, 0.0)
+    # v - hi - lo = 2**-106 - 2**-200: one ulp of lo, which the third word recovers.
+    assert lo2 == 2.0**-106 == math.ulp(lo)
 
 
 def test_split_of_a_double_is_exact():
-    assert split(arb(0.1)) == (0.1, 0.0, 0.0)
+    assert split(arb(0.1)) == (0.1, 0.0, 0.0, 0.0)
+
+
+def test_split_hi_lo_do_not_depend_on_the_third_word():
+    for make in CASES.values():
+        v = make()
+        hi, lo, _, _ = split(v)
+        expected_lo = nearest_double(v - arb(hi))
+        if hi + expected_lo != hi:
+            expected_lo = math.nextafter(expected_lo, 0.0)
+        assert (hi, lo) == (nearest_double(v), expected_lo)
 
 
 @pytest.mark.parametrize(
@@ -117,9 +139,9 @@ def test_split_rejects_values_that_overflow_a_double(make):
 
 
 def test_split_accepts_the_largest_finite_double():
-    assert split(arb(MAX)) == (MAX, 0.0, 0.0)
+    assert split(arb(MAX)) == (MAX, 0.0, 0.0, 0.0)
     # Representable as the pair (MAX, 2**960) even though no double is >= the sum.
-    assert split(just_above_max()) == (MAX, 2.0**960, 0.0)
+    assert split(just_above_max()) == (MAX, 2.0**960, 0.0, 0.0)
 
 
 def test_nearest_double_exceptions():
@@ -159,7 +181,7 @@ def test_record_layout():
     r = record("g", "c", {"n": 3}, {"value": [arb(1) / 3, arb(2)]})
     assert r["label"] == "certified"
     v = r["outputs"]["value"]
-    assert set(v) == {"hi", "lo", "dec", "err"}
+    assert set(v) == {"hi", "lo", "lo2", "dec", "err"}
     assert v["hi"] == [1 / 3, 2.0]
     assert v["dec"][1].startswith("2")
 

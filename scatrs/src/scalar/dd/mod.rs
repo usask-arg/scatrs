@@ -31,6 +31,9 @@ mod rem;
 mod trig;
 
 /// A double-double number: the exact sum `hi + lo` with `hi == fl(hi + lo)`.
+///
+/// The error bounds stated on its methods hold for results of magnitude at least 2⁻⁹⁶⁹; below
+/// that the low word is subnormal and precision degrades gradually.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct DoubleDouble {
     hi: f64,

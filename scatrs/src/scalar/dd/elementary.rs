@@ -382,6 +382,8 @@ fn powf_special(x: Dd, y: Dd) -> Dd {
 
 impl Dd {
     /// Square root.
+    ///
+    /// Relative error ≤ 2⁻¹⁰⁰; NaN for x < 0.
     #[inline]
     pub fn sqrt(self) -> Self {
         if (ROOT_MIN..=ROOT_MAX).contains(&self.hi) {
@@ -391,6 +393,8 @@ impl Dd {
     }
 
     /// eˣ.
+    ///
+    /// Relative error ≤ 2⁻¹⁰⁰ for x ∈ [−670, 709.78]; overflow and underflow as for `f64::exp`.
     pub fn exp(self) -> Self {
         if (EXP_FAST_MIN..=EXP_FAST_MAX).contains(&self.hi) {
             let (p, m) = exp_reduced(self);
@@ -400,6 +404,8 @@ impl Dd {
     }
 
     /// eˣ − 1, accurate near zero.
+    ///
+    /// Relative error ≤ 2⁻¹⁰⁰.
     pub fn exp_m1(self) -> Self {
         if self.hi.abs() < EXP_M1_SMALL {
             return expm1_small(self);
@@ -408,6 +414,8 @@ impl Dd {
     }
 
     /// Natural logarithm.
+    ///
+    /// Relative error ≤ 2⁻¹⁰⁰; NaN for x < 0.
     pub fn ln(self) -> Self {
         let x = self.hi;
         if (x - 1.0).abs() < LN_1P_SERIES_LIMIT {
@@ -420,6 +428,8 @@ impl Dd {
     }
 
     /// ln(1 + x), accurate near zero.
+    ///
+    /// Relative error ≤ 2⁻¹⁰⁰; NaN for x < −1.
     pub fn ln_1p(self) -> Self {
         if self.hi.abs() < LN_1P_SERIES_LIMIT {
             return ln_1p_series(self);
@@ -428,6 +438,8 @@ impl Dd {
     }
 
     /// 2ˣ (exact for integer x).
+    ///
+    /// Relative error ≤ 2⁻¹⁰⁰.
     pub fn exp2(self) -> Self {
         let x = self.hi;
         if (EXP2_FAST_MIN..=EXP2_FAST_MAX).contains(&x) {
@@ -439,21 +451,29 @@ impl Dd {
     }
 
     /// Base-2 logarithm.
+    ///
+    /// Relative error ≤ 2⁻¹⁰⁰; NaN for x < 0.
     pub fn log2(self) -> Self {
         self.ln() * LOG2_E
     }
 
     /// Base-10 logarithm.
+    ///
+    /// Relative error ≤ 2⁻¹⁰⁰; NaN for x < 0.
     pub fn log10(self) -> Self {
         self.ln() * LOG10_E
     }
 
-    /// Logarithm in an arbitrary base, ln(self)/ln(base) (relative error at most 2⁻⁹⁹).
+    /// Logarithm in an arbitrary base, ln(self)/ln(base).
+    ///
+    /// Relative error ≤ 2⁻⁹⁹; NaN for a negative argument or base.
     pub fn log(self, base: Self) -> Self {
         self.ln() / base.ln()
     }
 
     /// Integer power by binary powering.
+    ///
+    /// Relative error ≤ 16(|n| + 1)u², u = 2⁻⁵³.
     ///
     /// Intermediate powers carry their binary exponent separately when they would leave the
     /// range, so the result is accurate wherever it is (unlike `f64::powi`, which gives
@@ -467,7 +487,9 @@ impl Dd {
         powi_wide(self, n)
     }
 
-    /// `self` raised to a real power (negative bases only for integer exponents).
+    /// `self` raised to a real power.
+    ///
+    /// Relative error ≤ 2⁻⁹⁹·max(1, |y ln |x||); NaN for x < 0 with non-integer y.
     pub fn powf(self, y: Self) -> Self {
         let x = self.hi;
         if y.lo == 0.0 && y.hi.abs() <= POWF_POWI_LIMIT && y.hi == y.hi.trunc() {
@@ -486,6 +508,8 @@ impl Dd {
     }
 
     /// Cube root.
+    ///
+    /// Relative error ≤ 2⁻¹⁰⁰.
     pub fn cbrt(self) -> Self {
         if (ROOT_MIN..=ROOT_MAX).contains(&self.hi.abs()) {
             return cbrt_kernel(self, self.hi.cbrt());
@@ -494,6 +518,8 @@ impl Dd {
     }
 
     /// √(self² + other²) without intermediate overflow.
+    ///
+    /// Relative error ≤ 2⁻¹⁰⁰.
     pub fn hypot(self, other: Self) -> Self {
         let (a, b) = (self.abs(), other.abs());
         if a.hi.is_infinite() || b.hi.is_infinite() {
@@ -511,6 +537,8 @@ impl Dd {
     }
 
     /// Hyperbolic sine.
+    ///
+    /// Relative error ≤ 2⁻⁹⁹.
     pub fn sinh(self) -> Self {
         let a = self.hi.abs();
         if a < 0.5 {
@@ -526,6 +554,8 @@ impl Dd {
     }
 
     /// Hyperbolic cosine.
+    ///
+    /// Relative error ≤ 2⁻⁹⁹.
     pub fn cosh(self) -> Self {
         let a = self.abs();
         if a.hi <= HYPERBOLIC_EXP_ONLY {
@@ -536,6 +566,8 @@ impl Dd {
     }
 
     /// Hyperbolic tangent (|tanh x| <= 1 always).
+    ///
+    /// Relative error ≤ 2⁻¹⁰⁰.
     pub fn tanh(self) -> Self {
         if self.hi.abs() <= HYPERBOLIC_EXP_ONLY {
             let a = self.abs().mul_pow2(2.0);
@@ -557,6 +589,8 @@ impl Dd {
     }
 
     /// Inverse hyperbolic sine.
+    ///
+    /// Relative error ≤ 2⁻¹⁰⁰.
     pub fn asinh(self) -> Self {
         if !self.hi.is_finite() {
             return self;
@@ -571,7 +605,9 @@ impl Dd {
         if self.hi.is_sign_negative() { -r } else { r }
     }
 
-    /// Inverse hyperbolic cosine (`self >= 1`).
+    /// Inverse hyperbolic cosine.
+    ///
+    /// Relative error ≤ 2⁻¹⁰⁰; NaN for x < 1.
     pub fn acosh(self) -> Self {
         if self.hi.is_nan() || self < Self::ONE {
             return Self::NAN;
@@ -583,7 +619,9 @@ impl Dd {
         (t + (t * (self + 1.0)).sqrt()).ln_1p()
     }
 
-    /// Inverse hyperbolic tangent (`|self| <= 1`).
+    /// Inverse hyperbolic tangent.
+    ///
+    /// Relative error ≤ 2⁻¹⁰⁰; NaN for |x| > 1 (±∞ at ±1).
     pub fn atanh(self) -> Self {
         let a = self.abs();
         if a.hi.is_nan() || a >= Self::ONE {

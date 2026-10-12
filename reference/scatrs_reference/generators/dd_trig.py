@@ -94,6 +94,8 @@ FUNCTIONS = {
 
 
 def _as_arb(p: tuple[float, float]) -> arb:
+    """The exact value of a normalised double-double input."""
+    assert p[0] + p[1] == p[0], f"non-normalised input {p}"
     s = arb(p[0]) + arb(p[1])
     assert s.rad() == 0, f"inexact input {p}"
     return s
@@ -238,7 +240,7 @@ def _angle_edges(tan: bool) -> list[tuple[float, float]]:
         _both_signs([*TINY_RESULTS, 0.5, *_around(FRAC_PI_4), 1.0, 2.0, 3.0, 10.0, 100.0])
         + _both_signs([1e6, 1e10, 1e15, _below(MAX_REDUCIBLE), MAX_REDUCIBLE])
     )
-    out += [(s * MAX_REDUCIBLE, -s * 0.1) for s in (1.0, -1.0)]  # just inside 2^50
+    out += [_with_lo(s * MAX_REDUCIBLE, -s * 0.2) for s in (1.0, -1.0)]  # 2^50 - 0.05: inside
     switch_ks = [0, 1, 2, 3] if tan else [0, 1, 2, 3, 4, 7, 100, 12345, 2**20, 2**40, k_max - 1]
     for k in switch_ks:  # (k + 1/2)·π/2: the reduction rounds k either way
         for s in (1, -1):

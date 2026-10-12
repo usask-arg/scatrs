@@ -20,12 +20,15 @@
 //! | Functions | Bound |
 //! |---|---|
 //! | `sin`, `cos`, `sin_cos` | 2⁻¹⁰⁰ relative for \|x\| ≤ π/4; 2⁻¹⁰⁰ absolute for \|x\| ≤ 2⁵⁰ |
-//! | `tan` | 2⁻⁹⁹(1 + \|tan x\|)/\|cos x\| absolute |
+//! | `tan` | 2⁻⁹⁹ relative for \|x\| ≤ π/4; 2⁻⁹⁹(1 + \|tan x\|)/\|cos x\| absolute |
 //! | `atan`, `atan2`, `asin`, `acos` | 2⁻⁹⁹ relative |
 //!
-//! Next to a nonzero multiple kπ/2 only the absolute bound holds. For `f64` arguments the
-//! reduction errs only in rounding k times the third word of π/2, about |k|·2⁻¹⁶² absolute, so
-//! at the doubles closest to such multiples the relative error is 2⁻¹⁰⁰ at x = 45.553093477052
+//! Next to a nonzero multiple kπ/2 the reduction leaves an absolute error floor: at most
+//! |k|·2⁻¹⁶¹ for `f64` arguments (from rounding k times the third word of π/2, and the fourth
+//! word), and |k|·2⁻¹⁵⁸ for double-double ones (the first subtraction, x − k·P₁ − k·P₂, adds
+//! 3u²·|k·P₂|). sin and cos are therefore within 2⁻¹⁰⁰ relative wherever |x − kπ/2| ≥ |k|·2⁻⁶⁰
+//! (`f64`) or |k|·2⁻⁵⁷ (double-double), and within the floor closer in. At the doubles closest
+//! to such multiples the measured relative error is 2⁻¹⁰⁰ at x = 45.553093477052
 //! (|cos x| = 6.2·10⁻¹⁹, k = 29, the closest of all below 2⁵⁰), 2⁻⁸¹ at x = 14461176.67027838
 //! and 2⁻⁶¹ at x = 410195257422896.8.
 //!
@@ -39,8 +42,8 @@
 //! every combination of signed zeros and infinities (giving 0, ±π/4, ±π/2, ±3π/4 or ±π as
 //! double-double constants). `sin`, `cos` and `tan` are NaN for NaN, ±∞ and |x| > 2⁵⁰ (the
 //! double-double value, so 2⁵⁰ + 0.1 is outside); `asin` and `acos` are NaN for |x| > 1.
-//! `sin`, `tan`, `atan`, `asin` and `atan2` (in y) are odd and `cos` is even, bitwise up to the
-//! sign of a zero low word.
+//! `sin` and `tan` are odd and `cos` is even, bitwise up to the sign of a zero low word; so are
+//! `atan`, `asin` and `atan2` (in y) wherever the platform's `f64::atan2` is odd in y.
 //!
 //! `atan2` starts from the platform's `f64::atan2`; the result is within the bounds above
 //! whatever its last-bit behaviour, but its last bits may differ between platforms.
@@ -201,7 +204,9 @@ fn sqrt_one_minus_square(a: Dd) -> Dd {
 }
 
 impl Dd {
-    /// Sine (NaN for |x| > 2⁵⁰).
+    /// Sine.
+    ///
+    /// Relative error ≤ 2⁻¹⁰⁰ for |x| ≤ π/4, absolute ≤ 2⁻¹⁰⁰ for |x| ≤ 2⁵⁰; NaN for |x| > 2⁵⁰.
     pub fn sin(self) -> Self {
         let Some((k, r)) = reduce_pio2(self) else {
             return Self::NAN;
@@ -214,7 +219,9 @@ impl Dd {
         }
     }
 
-    /// Cosine (NaN for |x| > 2⁵⁰).
+    /// Cosine.
+    ///
+    /// Relative error ≤ 2⁻¹⁰⁰ for |x| ≤ π/4, absolute ≤ 2⁻¹⁰⁰ for |x| ≤ 2⁵⁰; NaN for |x| > 2⁵⁰.
     pub fn cos(self) -> Self {
         let Some((k, r)) = reduce_pio2(self) else {
             return Self::NAN;
@@ -227,7 +234,9 @@ impl Dd {
         }
     }
 
-    /// `(sin x, cos x)`, bitwise equal to `(x.sin(), x.cos())` (NaN for |x| > 2⁵⁰).
+    /// `(sin x, cos x)`, bitwise equal to `(x.sin(), x.cos())`.
+    ///
+    /// Relative error ≤ 2⁻¹⁰⁰ for |x| ≤ π/4, absolute ≤ 2⁻¹⁰⁰ for |x| ≤ 2⁵⁰; NaN for |x| > 2⁵⁰.
     pub fn sin_cos(self) -> (Self, Self) {
         let Some((k, r)) = reduce_pio2(self) else {
             return (Self::NAN, Self::NAN);
@@ -241,13 +250,17 @@ impl Dd {
         }
     }
 
-    /// Tangent (NaN for |x| > 2⁵⁰).
+    /// Tangent.
+    ///
+    /// Relative error ≤ 2⁻⁹⁹ (|x| ≤ π/4), absolute ≤ 2⁻⁹⁹(1 + |tan x|)/|cos x|; NaN for |x| > 2⁵⁰.
     pub fn tan(self) -> Self {
         let (s, c) = self.sin_cos();
         s / c
     }
 
     /// Four-quadrant arctangent of `self / x` (`self` is y), in [−π, π].
+    ///
+    /// Relative error ≤ 2⁻⁹⁹; signed zeros and infinities as for `f64::atan2`.
     pub fn atan2(self, x: Self) -> Self {
         let direct = |v: f64| (ATAN2_FAST_MIN..=ATAN2_FAST_MAX).contains(&v.abs());
         if direct(self.hi) && direct(x.hi) {
@@ -257,11 +270,15 @@ impl Dd {
     }
 
     /// Arctangent, in [−π/2, π/2].
+    ///
+    /// Relative error ≤ 2⁻⁹⁹.
     pub fn atan(self) -> Self {
         self.atan2(Self::ONE)
     }
 
-    /// Arcsine (`|x| <= 1`), in [−π/2, π/2].
+    /// Arcsine, in [−π/2, π/2].
+    ///
+    /// Relative error ≤ 2⁻⁹⁹; NaN for |x| > 1.
     pub fn asin(self) -> Self {
         let a = self.abs();
         if self.hi.is_nan() || a > Self::ONE {
@@ -270,7 +287,9 @@ impl Dd {
         self.atan2(sqrt_one_minus_square(a))
     }
 
-    /// Arccosine (`|x| <= 1`), in [0, π].
+    /// Arccosine, in [0, π].
+    ///
+    /// Relative error ≤ 2⁻⁹⁹; NaN for |x| > 1.
     pub fn acos(self) -> Self {
         let a = self.abs();
         if self.hi.is_nan() || a > Self::ONE {

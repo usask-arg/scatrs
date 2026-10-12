@@ -103,6 +103,56 @@ fn cos() {
 }
 
 #[test]
+fn sin_and_cos_are_relatively_accurate_next_to_multiples_of_half_pi() {
+    // The documented reduction floor: next to kπ/2 the error is at most 2^-100 |f| plus
+    // |k| 2^-161 for f64 arguments (|k| 2^-158 for double-double ones), so the error is
+    // within 2^-100 relative wherever |x - kπ/2| >= |k| 2^-60 (|k| 2^-57). Checked on every
+    // reduced argument, including the closest doubles to multiples of π/2 below 2^50.
+    let recs = load("dd_trig.jsonl");
+    for case in ["sin", "sin_edges", "cos", "cos_edges"] {
+        let r = find(&recs, case);
+        let xs = dd_input(r, "x");
+        let v = r.output("value");
+        let (mut worst_floor, mut worst_rel) = (0.0_f64, 0.0_f64);
+        for (i, &x) in xs.iter().enumerate() {
+            if x.hi().abs() <= std::f64::consts::FRAC_PI_4 {
+                continue; // not reduced: relative 2^-100 (tested above)
+            }
+            let g = if case.starts_with("sin") {
+                x.sin()
+            } else {
+                x.cos()
+            };
+            let err = v.dd_error(i, g.hi(), g.lo());
+            let f = v.hi[i].abs();
+            let k = (x.hi() * std::f64::consts::FRAC_2_PI).round();
+            let (floor, near) = if x.lo() == 0.0 {
+                (2f64.powi(-161), 2f64.powi(-60))
+            } else {
+                (2f64.powi(-158), 2f64.powi(-57))
+            };
+            let t = TOL * f + k.abs() * floor;
+            worst_floor = worst_floor.max(err / t);
+            assert!(
+                err <= t,
+                "{case} case {i}: {x:?} gives {g:?}, error {err:e} > {t:e}"
+            );
+            if (x - frac_pi_2() * k).abs().hi() >= k.abs() * near {
+                worst_rel = worst_rel.max(err / (TOL * f));
+                assert!(
+                    err <= TOL * f,
+                    "{case} case {i}: {x:?} gives {g:?}, error {err:e}"
+                );
+            }
+        }
+        eprintln!(
+            "{case}: worst error = {worst_floor:.3} x (2^-100 |f| + |k| floor); \
+             {worst_rel:.3} x 2^-100 |f| away from the multiples"
+        );
+    }
+}
+
+#[test]
 fn sin_cos_agrees_with_sin_and_cos() {
     let recs = load("dd_trig.jsonl");
     for case in ["sin", "sin_edges"] {
@@ -115,6 +165,7 @@ fn sin_cos_agrees_with_sin_and_cos() {
 
 #[test]
 fn tan() {
+    // 2^-99 relative for |x| <= π/4 (sin and cos are both relative there), and otherwise
     // 2^-99 (1 + |tan x|) / |cos x|. The planned |cos(x.hi)| differs from |cos x| where the
     // low word matters (by 10% near 2^50 with |x.lo| = 0.06, and from 6e-17 to 1.5e-33 at the
     // double-double nearest π/2), so the tighter of it and the exact |cos x| = 1/√(1 + tan² x)
@@ -124,6 +175,9 @@ fn tan() {
         |inp, i| inp.x[i].tan(),
         |inp, i, exact| {
             let t = exact.abs().hi();
+            if inp.x[i].hi().abs() <= std::f64::consts::FRAC_PI_4 {
+                return 2.0 * TOL * t;
+            }
             let inv_cos = (1.0 / inp.x[i].hi().cos().abs()).min(t.hypot(1.0));
             2.0 * TOL * (1.0 + t) * inv_cos
         },
@@ -361,14 +415,18 @@ fn zero_results_keep_their_sign_with_a_positive_zero_low_word() {
 
 #[test]
 fn reduction_limit_is_two_to_the_fifty() {
-    // NaN exactly for |x| > 2^50, as a double-double value (2^50 + 0.1 is outside).
+    // NaN exactly for |x| > 2^50, as a double-double value: (2^50, -0.05) is inside and
+    // (2^50, 0.1) outside, although both have the leading word 2^50.
+    let (below, above) = (Dd::new(MAX_REDUCIBLE, -0.05), Dd::new(MAX_REDUCIBLE, 0.1));
+    assert!(below.hi() == MAX_REDUCIBLE && below.lo() < 0.0, "{below:?}");
+    assert!(above.hi() == MAX_REDUCIBLE && above.lo() > 0.0, "{above:?}");
     let inside = [
         Dd::from_f64(MAX_REDUCIBLE),
-        Dd::new(MAX_REDUCIBLE, -0.1),
+        below,
         Dd::from_f64(next_down(MAX_REDUCIBLE)),
     ];
     let outside = [
-        Dd::new(MAX_REDUCIBLE, 0.1),
+        above,
         Dd::from_f64(next_up(MAX_REDUCIBLE)),
         Dd::from_f64(1e300),
         Dd::from_f64(f64::MAX),
@@ -666,6 +724,7 @@ proptest! {
         y in wide_dd(),
         u in unit_interval_dd(),
     ) {
+        // atan, asin and atan2 are odd only as far as the platform's f64::atan2 is odd in y.
         let a = x.atan();
         prop_assert!(a.abs() <= frac_pi_2(), "atan {:?} = {:?}", x, a);
         prop_assert!(same_value((-x).atan(), -a), "atan is not odd at {:?}", x);

@@ -1,0 +1,22 @@
+[package]
+name = "scatrs"
+description = "Fast, linearized, rigorously validated single-scattering calculations (Mie, layered spheres, T-matrix)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+readme = "../README.md"
+keywords = ["scattering", "mie", "t-matrix", "optics", "atmosphere"]
+categories = ["science", "mathematics"]
+
+[dependencies]
+num-complex.workspace = true
+num-traits.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+proptest = "1"
+serde = { version = "1", features = ["derive"] }
+# float_roundtrip makes f64 parsing correctly rounded; without it, reference values can be 1 ulp off.
+serde_json = { version = "1", features = ["float_roundtrip"] }

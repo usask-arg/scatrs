@@ -80,8 +80,10 @@ mod traits;
 /// `Dual` implements `num_traits::Float`, `FloatConst` and [`Real`], so generic kernels and
 /// `num_complex::Complex<Dual<T, N>>` carry derivatives, and `Dual<Dual<T, M>, N>` gives second
 /// derivatives. The value of every method is `T`'s method on the value, bit for bit, including
-/// special values and signed zeros (`sin`, `cos` and `sin_cos` take theirs from `T::sin_cos`,
-/// which for `f64` and `DoubleDouble` is bitwise `(T::sin, T::cos)`). Constants (`FloatConst`,
+/// special values and signed zeros. (`sin` and `cos` compute the other function for the
+/// derivative separately: LLVM would otherwise merge the two calls into one `sincos`, whose
+/// results can differ from `sin`'s and `cos`'s in the last bit, as Apple's `__sincos_stret`
+/// does. `sin_cos` takes both values from `T::sin_cos`.) Constants (`FloatConst`,
 /// `Real::from_f64`, `nan()`, `epsilon()`, …) have zero derivatives. With `x′` and `y′` the
 /// derivatives of `self` and of the second argument:
 ///
@@ -91,15 +93,15 @@ mod traits;
 /// | `fract` | `x′` |
 /// | `abs`, `copysign` | `−x′` where the sign changes (for `abs`, a set sign bit, −0 too), else `x′` |
 /// | `max`, `min`, `clamp` | those of the operand whose value is returned (see below) |
-/// | `abs_sub` | `x′ − y′` where `x > y`, else 0 |
+/// | `abs_sub` | `x′ − y′`, or 0 where `x <= y` |
 /// | `mul_add(a, b)` | `x′·a + x·a′ + b′` |
 /// | `recip` | `−(x′·r)·r` with `r = 1/x` |
 /// | `powi(n)` | `n·xⁿ⁻¹·x′` (0 for `n = 0`) |
-/// | `powf(y)` | `y·(xʸ/x)·x′ + xʸ·ln x·y′`, the second term only if some `y′` is nonzero |
+/// | `powf(y)` | `y·xʸ⁻¹·x′ + xʸ·ln x·y′`, the second term only if some `y′` is nonzero |
 /// | `sqrt`, `cbrt` | `x′/(2√x)`, `x′/(3·∛x²)` |
 /// | `exp`, `exp2`, `exp_m1` | `eˣ·x′`, `2ˣ·ln 2·x′`, `eˣ·x′` |
 /// | `ln`, `log2`, `log10`, `ln_1p` | `x′/x`, `log₂e·x′/x`, `log₁₀e·x′/x`, `x′/(1 + x)` |
-/// | `log(b)` | `/` (above) applied to `ln x` and `ln b` |
+/// | `log(b)` | `(1/ln b)·x′/x − (log_b x/ln b)·b′/b` |
 /// | `hypot(y)` | `x′·x/h + y′·y/h` |
 /// | `sin`, `cos`, `tan` | `cos x·x′`, `−sin x·x′`, `(1 + tan²x)·x′` |
 /// | `asin`, `acos`, `atan` | `±x′/√((1 − x)(1 + x))`, `x′/(1 + x²)` |
@@ -108,49 +110,77 @@ mod traits;
 /// | `asinh`, `acosh`, `atanh` | `x′/√(x² + 1)`, `x′/√((x − 1)(x + 1))`, `x′/((1 − x)(1 + x))` |
 /// | `to_degrees`, `to_radians` | `x′` times `T::one().to_degrees()` or `.to_radians()` |
 ///
-/// Each f′(x) is evaluated in `T` from a form that does not cancel or overflow needlessly:
-/// `asin`, `acos` and `atanh` use (1 − x)(1 + x); `exp_m1` uses (eˣ − 1) + 1 only where
-/// eˣ − 1 ≥ −½, and eˣ below; `tanh` uses (1 − t)(1 + t) only where |t| ≤ ½, and 1/cosh²x beyond;
-/// `sinh` uses √(1 + sinh²x); `sinh`, `asinh` and `acosh` replace √(x² ± 1) by |x| beyond 2⁵⁴;
-/// `hypot` and `atan2` rescale arguments whose squares leave the normal range; and `powf` uses
-/// y·x^(y−1) directly where xʸ is zero, subnormal or infinite. Measured over each whole domain
-/// against high-precision derivatives (`tests/dual_functions.rs`), the derivatives of
-/// `Dual<f64, N>` are within 6u (u = 2⁻⁵³) of the exact derivative at the argument with Apple's
-/// libm, and within bounds that allow 2 ulps for each libm call (up to 17u, for `log` in its
-/// base); those of `Dual<DoubleDouble, N>` are within 2⁻⁹⁶ relative, or 2⁻⁹⁶·|y ln x| for the
-/// powers, whose `DoubleDouble` values are only that accurate.
+/// Each f′(x) is evaluated in `T` from a form that neither cancels nor needlessly over- or
+/// underflows:
+///
+/// * `asin`, `acos` and `atanh` use (1 − x)(1 + x); `exp_m1` uses (eˣ − 1) + 1 only where
+///   eˣ − 1 ≥ −½, and eˣ below; `tanh` uses (1 − t)(1 + t) only where |t| ≤ ½, and 4e/(1 + e)²
+///   with e = e^(−2|x|) beyond; `sinh` uses √(1 + sinh²x); and `sinh`, `asinh` and `acosh`
+///   replace √(x² ± 1) by |x| beyond 2⁵⁴.
+/// * `hypot` and `atan2` rescale arguments whose squares leave the normal range.
+/// * `powf` uses y·(xʸ/x) while xʸ and xʸ/x are normal, and (y·xʸ)/x for |y| < 1 where xʸ/x
+///   overflows. Otherwise it uses y·p·p with p = |x|^((y−1)/2), and p·ln x·p with p = x^(y/2),
+///   so that no subnormal or infinite power enters a normal result.
+/// * `log` computes its two partials directly, not through `/`.
+///
+/// Accuracy was measured over each whole domain against high-precision derivatives
+/// (`tests/dual_functions.rs`), down to the bottom of the normal range for `powf`, `hypot` and
+/// `atan2`.
+///
+/// * The derivatives of `Dual<f64, N>` are within 5.1u (u = 2⁻⁵³) of the exact derivative at the
+///   argument with Apple's libm, the worst being `tan`.
+/// * The tests bound each one by the measured errors of the libm results it is computed from,
+///   times their amplification, plus 1u per rounding, so the bounds hold for any libm.
+/// * `Dual<DoubleDouble, N>` derivatives are within 2⁻⁹⁶ relative. For powers whose
+///   `DoubleDouble` values are only that accurate, the bound is 2⁻⁹⁶ times max(1, |y ln x|) and,
+///   for ∂/∂x, |(y − 1) ln x|.
+/// * `DoubleDouble` has full precision only from 2⁻⁹⁶⁹ (`min_positive_value()`). Derivatives
+///   computed from smaller arguments or intermediates lose precision, as such values do.
 ///
 /// Special values, for a nonzero derivative `x′`:
 ///
 /// * Outside a function's domain, where `T` returns NaN (`ln(−1)`, `asin(2)`, `acosh(½)`,
-///   `sin(∞)`, `fract(∞)`), and for a NaN argument, the derivatives are NaN; the
-///   piecewise-constant methods keep zero derivatives, and `abs`, `copysign`, `max`, `min` and
-///   `clamp` those of the operand they return.
+///   `sin(∞)`, `fract(∞)`, `log(−1, b)`), and for a NaN argument, the derivatives are NaN. Some
+///   methods are exceptions:
+///   * the piecewise-constant methods keep zero derivatives;
+///   * `abs`, `copysign`, `max`, `min` and `clamp` keep those of the operand they return;
+///   * `mul_add` and `abs_sub` follow the arithmetic rules (as `x·a + b` and `x − y`), where a
+///     NaN value makes a derivative NaN only through a product.
 /// * At a singular point of f′ on the edge of the domain the derivative is the one-sided limit:
 ///   +∞ for `sqrt`, `cbrt`, `ln`, `log2` and `log10` at either zero, for `ln_1p` at −1, for
 ///   `asin` and `atanh` at ±1 and for `acosh` at 1; −∞ for `acos` at ±1. `recip` and negative
 ///   powers at ±0 follow IEEE 754 (`recip` gives −∞).
 /// * At ±∞ the derivatives are the limits: 0 for `sqrt`, `ln`, `atan`, `tanh`, `asinh`, …, and
 ///   ±∞ for `exp`, `sinh`, `cosh`, ….
-/// * `powf`: x⁰ = 1 has derivative 0 in x everywhere (also at x = 0, ∞ or NaN); y·x^(y−1) is
-///   +∞, 1 or 0 at x = 0 for 0 < y < 1, y = 1 and y > 1, and 0 where x^(±∞) = 0. The derivative
-///   in y, xʸ·ln x, is 0 where xʸ = 0 with x ≥ 0, and NaN for x < 0, where xʸ is real only at
-///   integers y.
+/// * `powf`:
+///   * x⁰ = 1 has derivative 0 in x everywhere (also at x = 0, ∞ or NaN);
+///   * at x = 0, y·x^(y−1) is +∞, 1 or 0 for 0 < y < 1, y = 1 and y > 1;
+///   * where x^(±∞) = 0, the derivative in x is the limit 0;
+///   * the derivative in y, xʸ·ln x, is 0 where xʸ = 0 with x ≥ 0, and NaN for x < 0, where xʸ
+///     is real only at integers y.
 /// * `exp2` keeps a finite derivative where 2ˣ overflows but 2ˣ·ln 2 does not (x < 1024.53).
 /// * `hypot` at the origin, where |z| has no derivative, has zero derivatives (a subgradient,
-///   as for `sqrt(p * p + q * q)`). `atan2` jumps at the origin and has NaN derivatives there;
-///   with an infinite argument its derivatives are 0. `log` at base ±0 has a NaN derivative in
-///   the base (∞·0 in the quotient rule).
+///   as for `sqrt(p * p + q * q)`). So `Complex::ln` at z = 0 gets derivative 0 in its real
+///   part, ln|z|, silently, while `atan2`'s NaN flags the imaginary part.
+/// * `atan2` jumps at the origin and has NaN derivatives there; with an infinite argument its
+///   derivatives are 0.
+/// * `log` at base ±0 has derivative −sign(ln x)·∞ in the base (0 for x = 1, where the function
+///   is 0 for every base), and at base 1 the IEEE 754 values of 1/(x·ln b).
 /// * `max`, `min` and `clamp` take the derivatives of the operand whose value `T` returns: the
 ///   larger (or smaller), the one that is not NaN, and at a tie the one whose sign the result
 ///   has (`self` if both have it). `clamp` takes a bound's derivatives outside the interval and
 ///   `self`'s inside and at its ends; where `f64::clamp` would panic (a NaN bound, or
 ///   `min > max`) it returns NaN, as `DoubleDouble` does.
 ///
-/// The chain rule multiplies `x′` by f′(x) evaluated in `T`, so where f′(x) itself overflows or
-/// underflows, `x′·f′(x)` is ±∞ or 0 even if it would be representable, as for an intermediate
-/// of `/`: `atan` beyond |x| ≈ 1.3·10¹⁵⁴, where 1/(1 + x²) underflows, has derivative 0 even
-/// for a huge `x′`.
+/// The chain rule multiplies `x′` by f′(x) evaluated in `T`. Where f′(x) itself overflows or
+/// underflows, `x′·f′(x)` is therefore ±∞ or 0 even if it would be representable, as for an
+/// intermediate of `/`. For example `atan` beyond |x| ≈ 1.3·10¹⁵⁴, where 1/(1 + x²)
+/// underflows, has derivative 0 even for a huge `x′`.
+///
+/// In nested duals, the limits at singular points of `sqrt`, `ln`, `log2` and `log10` carry
+/// inner derivatives (their second derivatives at 0 are −∞). The other special cases return
+/// constants, and those have zero inner derivatives: the origin of `hypot` and `atan2`, the
+/// limits of `powf`, and `log` at base 0.
 ///
 /// # Special values and signed zeros
 ///
@@ -180,15 +210,21 @@ mod traits;
 /// Operations are `#[inline]`, and the derivatives are fixed-length arrays that LLVM unrolls;
 /// for `N = 4` and `N = 8` it packs them into SIMD lanes (two-lane NEON on aarch64), for
 /// `N = 2` only in some code. `*`, `/`, `* f64`, `/ f64`, the chain rule and the formulas of
-/// `recip`, `powf`, `hypot`, `atan2` and `mul_add` first check the values for the special cases
-/// above (for `/`, three floating-point comparisons) and hand those to `#[cold]` out-of-line
-/// code. These checks are branches, so unlike the same loop over `f64`, a loop over many
-/// `Dual`s is not vectorised across elements. The correctly rounded value of `/` costs a second
-/// division: `a/b` for the value and `1/b` for the derivatives. A function adds to `T`'s the
-/// cost of f′(x) and a multiplication per derivative: little for `sin` (which gets `cos` from
-/// the same `sin_cos`) and `exp`, a division for `sqrt`, and for `DoubleDouble` `sin` a second
-/// series (measured on Apple M4, `Dual<f64, 4>` costs 1.0× `f64` for `sin`, 1.2× for `exp` and
-/// 4.5× for `sqrt`, whose `f64` loop is vectorised; `Dual<DoubleDouble, 1>` costs 2.1× for `sin`).
+/// `recip`, `powf`, `hypot`, `atan2`, `log` and `mul_add` first check the values for the
+/// special cases above (for `/`, three floating-point comparisons) and hand those to `#[cold]`
+/// out-of-line code. These checks are branches, so unlike the same loop over `f64`, a loop over
+/// many `Dual`s is not vectorised across elements. The correctly rounded value of `/` costs a
+/// second division: `a/b` for the value and `1/b` for the derivatives.
+///
+/// An elementary function adds to `T`'s cost that of f′(x) and one multiplication per
+/// derivative:
+///
+/// * almost nothing for `exp`, whose derivative is its value;
+/// * a division for `sqrt`, `ln` and the inverse functions;
+/// * a second function call for `sin`, `cos`, `cosh`, `tanh` (beyond |t| = ½) and `exp_m1`
+///   (below eˣ − 1 = −½);
+/// * `ln x` for `powf` with a varying exponent;
+/// * for `DoubleDouble`, whose functions dominate, the second function is a second series.
 #[derive(Clone, Copy, Debug)]
 pub struct Dual<T, const N: usize> {
     re: T,

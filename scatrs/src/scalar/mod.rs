@@ -35,8 +35,6 @@ pub use dual::Dual;
 /// * For [`Dual`], `==` and `<` compare values only, while `is_zero`, `is_one`, `is_nan` and
 ///   `is_finite` also inspect the derivatives (see its "Comparisons and zero tests"): branch on
 ///   comparisons of values, as `x == T::zero()`, where the derivatives should not matter.
-/// * `Dual<T, N>` takes the values of `sin` and `cos` from `T::sin_cos`, so an implementation of
-///   `Real` should make `sin_cos` bitwise `(sin, cos)`, as `f64` and `DoubleDouble` do.
 pub trait Real:
     Float
     + FloatConst

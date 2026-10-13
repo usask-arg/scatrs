@@ -2,6 +2,7 @@
 //! semantics are documented on [`Dual`] ("Elementary functions").
 
 use core::array;
+use core::hint::black_box;
 use core::num::FpCategory;
 
 use num_traits::{Float, FloatConst};
@@ -16,11 +17,13 @@ const TWO_POW_54: f64 = f64::from_bits((1023 + 54) << 52);
 const TWO_POW_600: f64 = f64::from_bits((1023 + 600) << 52);
 const TWO_POW_M600: f64 = f64::from_bits((1023 - 600) << 52);
 
-/// `fix` for `chain_or` where f′ is 1/x up to a factor: +∞ at either zero (the limit from the
-/// side where f is defined; the formula gives −∞ at −0).
+/// For `chain_or`: at either zero, f′ evaluated by `d` at `x + 0`, which has the value +0, so the
+/// derivative is the limit from the side where f is defined (+∞ for `sqrt`, `ln`, `log2` and
+/// `log10`, where the formula gives −∞ at −0). For `f64` and `DoubleDouble` this is +∞; for a
+/// nested `Dual` the inner derivatives of f′ propagate too.
 #[inline]
-fn plus_infinity_at_zero<T: Real>(x: T, _f: T, df: T) -> T {
-    if x == T::zero() { T::infinity() } else { df }
+fn at_plus_zero<T: Real>(x: T, df: T, d: impl FnOnce(T) -> T) -> T {
+    if x == T::zero() { d(x + T::zero()) } else { df }
 }
 
 impl<T: Real, const N: usize> Float for Dual<T, N> {
@@ -193,12 +196,15 @@ impl<T: Real, const N: usize> Float for Dual<T, N> {
     fn powf(self, n: Self) -> Self {
         let (x, y) = (self.re, n.re);
         let f = x.powf(y);
-        // ∂/∂x = y·x^(y−1) as y·(f/x), valid for a normal f (then x is finite and nonzero).
-        let dx = y * (f / x);
+        // ∂/∂x = y·x^(y−1) as y·(f/x), while f and f/x are normal (then x is finite and
+        // nonzero, and neither has lost bits).
+        let q = f / x;
+        let dx = y * q;
         // ∂/∂y = f·ln x, needed only when the exponent varies.
         let varies = n.eps.iter().any(|e| !e.is_zero());
         let dy = if varies { f * x.ln() } else { T::zero() };
-        let fast = dx.is_finite() & dy.is_finite() & (f.abs() >= T::min_positive_value());
+        let min = T::min_positive_value();
+        let fast = dx.is_finite() & dy.is_finite() & (f.abs() >= min) & (q.abs() >= min);
         let eps = if fast {
             array::from_fn(|i| self.eps[i] * dx + n.eps[i] * dy)
         } else {
@@ -211,7 +217,12 @@ impl<T: Real, const N: usize> Float for Dual<T, N> {
     fn sqrt(self) -> Self {
         let s = self.re.sqrt();
         // sqrt(−0) = −0, but the derivative at either zero is +∞.
-        self.chain_or(s, (s + s).recip(), plus_infinity_at_zero)
+        self.chain_or(s, (s + s).recip(), |x, _, df| {
+            at_plus_zero(x, df, |z| {
+                let s = z.sqrt();
+                (s + s).recip()
+            })
+        })
     }
 
     #[inline]
@@ -235,29 +246,40 @@ impl<T: Real, const N: usize> Float for Dual<T, N> {
 
     #[inline]
     fn ln(self) -> Self {
-        self.chain_or(self.re.ln(), self.re.recip(), plus_infinity_at_zero)
+        self.chain_or(self.re.ln(), self.re.recip(), |x, _, df| {
+            at_plus_zero(x, df, |z| z.recip())
+        })
     }
 
-    /// `ln(self)/ln(base)` differentiated as a quotient; the value is `T::log`.
     #[inline]
     fn log(self, base: Self) -> Self {
-        let q = self.ln() / base.ln();
-        Self {
-            re: self.re.log(base.re),
-            eps: q.eps,
-        }
+        let (x, b) = (self.re, base.re);
+        let q = x.log(b);
+        // ∂/∂x = 1/(x ln b) and ∂/∂b = −ln x/(b ln²b) = −(q/ln b)/b, with 1/ln b normal.
+        let inv = b.ln().recip();
+        let (dx, db) = (inv / x, -(q * inv) / b);
+        let eps = if dx.is_finite() & db.is_finite() & !q.is_nan() {
+            array::from_fn(|i| self.eps[i] * dx + base.eps[i] * db)
+        } else {
+            log_special(self, base, q).eps
+        };
+        Self { re: q, eps }
     }
 
     #[inline]
     fn log2(self) -> Self {
         let x = self.re;
-        self.chain_or(x.log2(), T::LOG2_E() / x, plus_infinity_at_zero)
+        self.chain_or(x.log2(), T::LOG2_E() / x, |x, _, df| {
+            at_plus_zero(x, df, |z| T::LOG2_E() / z)
+        })
     }
 
     #[inline]
     fn log10(self) -> Self {
         let x = self.re;
-        self.chain_or(x.log10(), T::LOG10_E() / x, plus_infinity_at_zero)
+        self.chain_or(x.log10(), T::LOG10_E() / x, |x, _, df| {
+            at_plus_zero(x, df, |z| T::LOG10_E() / z)
+        })
     }
 
     #[inline]
@@ -339,16 +361,20 @@ impl<T: Real, const N: usize> Float for Dual<T, N> {
         Self { re: h, eps }
     }
 
+    /// The value is `T::sin`. LLVM merges `sin` and `cos` of one argument into one `sincos`
+    /// call, whose sine can differ from `sin` in the last bit (Apple's `__sincos_stret`), so the
+    /// derivative's `cos` takes its argument through `black_box`.
     #[inline]
     fn sin(self) -> Self {
-        let (s, c) = self.re.sin_cos();
-        self.chain(s, c)
+        let x = self.re;
+        self.chain(x.sin(), black_box(x).cos())
     }
 
+    /// The value is `T::cos`; see `sin`.
     #[inline]
     fn cos(self) -> Self {
-        let (s, c) = self.re.sin_cos();
-        self.chain(c, -s)
+        let x = self.re;
+        self.chain(x.cos(), -black_box(x).sin())
     }
 
     #[inline]
@@ -440,13 +466,13 @@ impl<T: Real, const N: usize> Float for Dual<T, N> {
     #[inline]
     fn tanh(self) -> Self {
         let t = self.re.tanh();
-        // 1 − tanh²x as (1 − t)(1 + t) for |t| <= ½, and as 1/cosh²x beyond, where 1 − |t| would
-        // cancel.
+        // 1 − tanh²x as (1 − t)(1 + t) for |t| <= ½, and beyond, where 1 − |t| would cancel, as
+        // 1/cosh²x = 4e/(1 + e)² with e = e^(−2|x|).
         let d = if t.abs() <= T::from_f64(0.5) {
             (T::one() - t) * (T::one() + t)
         } else {
-            let r = self.re.cosh().recip();
-            r * r
+            let e = (self.re.abs() * -2.0).exp();
+            e * 4.0 / ((e + 1.0) * (e + 1.0))
         };
         self.chain(t, d)
     }
@@ -524,8 +550,8 @@ fn recip_special<T: Real, const N: usize>(x: Dual<T, N>, r: T) -> Dual<T, N> {
     }
 }
 
-/// `x^y` when the fast formulas fail: `f` is zero, subnormal, infinite or NaN, or a partial
-/// derivative is not finite.
+/// `x^y` when the fast formulas fail: `f` or `f/x` is zero, subnormal, infinite or NaN, or a
+/// partial derivative is not finite.
 #[cold]
 #[inline(never)]
 fn powf_special<T: Real, const N: usize>(
@@ -538,29 +564,95 @@ fn powf_special<T: Real, const N: usize>(
     let (dx, dy) = if f.is_nan() {
         (T::nan(), T::nan())
     } else {
-        // y·x^(y−1). x⁰ = 1 for every x, so its derivative is 0 even where x^(−1) is infinite;
-        // and where x^(±∞) = 0, the limit of y·x^(y−1) is 0 (not ∞·0).
-        let m = f.abs();
-        let normal = m >= T::min_positive_value() && m <= T::max_value();
-        let dx = if b == T::zero() || (b.is_infinite() && f == T::zero()) {
-            T::zero()
-        } else if normal {
-            b * (f / a)
-        } else {
-            b * a.powf(b - T::one())
-        };
-        // f·ln x, which is 0 where f is: at x = ±0 with y > 0, at x = +∞ with y < 0, and on
-        // underflow; but not for x < 0, where xʸ has no derivative in y.
-        let dy = if !varies || (f == T::zero() && a >= T::zero()) {
-            T::zero()
-        } else {
-            f * a.ln()
-        };
-        (dx, dy)
+        let dy = if varies { powf_dy(a, b, f) } else { T::zero() };
+        (powf_dx(a, b, f), dy)
     };
     Dual {
         re: f,
         eps: array::from_fn(|i| strong_mul(x.eps[i], dx) + strong_mul(y.eps[i], dy)),
+    }
+}
+
+/// Whether `v` is finite and of at least `min_positive_value()` in magnitude.
+#[inline]
+fn is_normal<T: Real>(v: T) -> bool {
+    let m = v.abs();
+    m >= T::min_positive_value() && m <= T::max_value()
+}
+
+/// ∂/∂x of `f = x^y`, y·x^(y−1), where y·(f/x) does not apply.
+fn powf_dx<T: Real>(a: T, b: T, f: T) -> T {
+    if b.is_infinite() && f == T::zero() {
+        return T::zero(); // where x^(±∞) = 0, the limit of y·x^(y−1) is 0 (not ∞·0)
+    }
+    let finite_nonzero = a.is_finite() && a != T::zero();
+    if finite_nonzero && is_normal(f) {
+        let q = f / a;
+        if is_normal(q) {
+            return b * q; // the fast form; here because ∂/∂y is not finite
+        }
+        if b.abs() < T::one() {
+            return b * f / a; // f/x overflows (x tiny), y·f/x need not
+        }
+    }
+    if b == T::zero() {
+        return T::zero(); // x⁰ = 1 for every x, so 0 also where x^(−1) is infinite or NaN
+    }
+    if finite_nonzero {
+        // x^(y−1) is zero, subnormal or infinite: y·p·p with p = |x|^((y−1)/2), which is normal
+        // wherever y·x^(y−1) can be. For x < 0, y is an integer (f is not NaN), and an odd y − 1
+        // (a half-integer exponent of |x|) makes x^(y−1) negative.
+        let e = (b - T::one()) * 0.5;
+        let p = a.abs().powf(e);
+        let m = b * p * p;
+        return if a < T::zero() && e.fract() != T::zero() {
+            -m
+        } else {
+            m
+        };
+    }
+    b * a.powf(b - T::one()) // x = ±0 or ±∞: the IEEE 754 special values
+}
+
+/// ∂/∂y of `f = x^y`, f·ln x, where the fast form does not apply.
+fn powf_dy<T: Real>(a: T, b: T, f: T) -> T {
+    if a > T::zero() && a.is_finite() && !is_normal(f) {
+        // f is zero, subnormal or infinite: p·ln x·p with p = x^(y/2), which is normal wherever
+        // f·ln x can be.
+        let p = a.powf(b * 0.5);
+        return p * a.ln() * p;
+    }
+    if f == T::zero() && a >= T::zero() {
+        return T::zero(); // x = ±0 with y > 0, or x = +∞ with y < 0: xʸ = 0 nearby
+    }
+    f * a.ln() // NaN for x < 0, where xʸ has no derivative in y
+}
+
+/// `log(x, b)` with value `q` when a partial derivative is not finite or `q` is NaN.
+#[cold]
+#[inline(never)]
+fn log_special<T: Real, const N: usize>(x: Dual<T, N>, b: Dual<T, N>, q: T) -> Dual<T, N> {
+    let (dx, db) = if q.is_nan() {
+        (T::nan(), T::nan())
+    } else {
+        let inv = b.re.ln().recip();
+        let db = if b.re == T::zero() {
+            // At base ±0, −ln x/(b ln²b) tends to −sign(ln x)·∞ (but is 0 for x = 1, where log
+            // is 0 for every base).
+            let lx = x.re.ln();
+            if lx == T::zero() {
+                T::zero()
+            } else {
+                -(lx * T::infinity())
+            }
+        } else {
+            -(q * inv) / b.re
+        };
+        (inv / x.re, db)
+    };
+    Dual {
+        re: q,
+        eps: array::from_fn(|i| strong_mul(x.eps[i], dx) + strong_mul(b.eps[i], db)),
     }
 }
 

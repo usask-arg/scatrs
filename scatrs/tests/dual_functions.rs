@@ -259,8 +259,6 @@ fn dd_special() -> Vec<Dd> {
 type Unary<T, const N: usize> = (&'static str, fn(Dual<T, N>) -> Dual<T, N>, fn(T) -> T);
 
 /// Every unary `Float` method, with powers and logarithms at a few fixed second arguments.
-/// `sin_cos` is compared with `T::sin` and `T::cos`: the `Dual` methods take their values from
-/// `T::sin_cos`.
 fn unary_methods<T: Real, const N: usize>() -> Vec<Unary<T, N>> {
     vec![
         ("floor", Float::floor, Float::floor),
@@ -283,8 +281,8 @@ fn unary_methods<T: Real, const N: usize>() -> Vec<Unary<T, N>> {
         ("sin", Float::sin, Float::sin),
         ("cos", Float::cos, Float::cos),
         ("tan", Float::tan, Float::tan),
-        ("sin_cos.0", |x| x.sin_cos().0, Float::sin),
-        ("sin_cos.1", |x| x.sin_cos().1, Float::cos),
+        ("sin_cos.0", |x| x.sin_cos().0, |x| x.sin_cos().0),
+        ("sin_cos.1", |x| x.sin_cos().1, |x| x.sin_cos().1),
         ("asin", Float::asin, Float::asin),
         ("acos", Float::acos, Float::acos),
         ("atan", Float::atan, Float::atan),
@@ -847,27 +845,61 @@ fn power_derivatives_at_the_special_cases() {
             r.eps()[1]
         );
     }
-    // f underflows or overflows while ∂/∂x = y·x^(y−1) is finite: computed directly, not as
-    // y·f/x. ∂/∂y = f·ln x is then subnormal, 0 or infinite, as f is.
+    // f = xʸ or f/x is zero, subnormal or infinite while a partial is normal: y·p·p and p·ln x·p
+    // with p a normal power of |x|, or (y·f)/x for |y| < 1. Among them, from review: xʸ = 6.0e-310
+    // (f·ln x was 74u off), x^(y−1) subnormal at y = 2.14e10 (y·x^(y−1) was 2.1e6 u off), f/x
+    // overflowing for subnormal x (∞ instead of about 1e305); and negative x, where an odd y − 1
+    // makes x^(y−1) negative.
     for (x, y) in [
         (1e-300, 1.5),
         (1e300, 1.1),
         (1e-200, 1.6),
         (1e-100, 3.1),
         (0.5, 1100.0),
+        (1.7095658693702122e-179, 1.729741227387335),
+        (1.224901440977593e-134, 2.3159266837725396),
+        (0.99999996625, 2.14e10),
+        (50.0, -181.0),
+        (1e-310, 1e-5),
+        (3e-320, -2e-6),
+        (-1e-200, 2.0),
+        (-1e-110, 3.0),
+        (-1e-110, 4.0),
     ] {
         let [a, b] = Dual::<f64, 2>::variables([x, y]);
         let r = a.powf(b);
+        assert!(same(r.re(), x.powf(y)));
         let (xd, yd) = (Dd::from_f64(x), Dd::from_f64(y));
-        let want = yd * xd.powf(yd - 1.0);
-        assert!(
-            rel_err(r.eps()[0], want) <= 8.0 * U,
-            "∂/∂x {x}^{y}: {r:?} vs {want:?}"
-        );
-        assert!(
-            same_derivative(r.eps()[1], r.re() * x.ln()),
-            "∂/∂y {x}^{y}: {r:?}"
-        );
+        let (bx, by) = powf_bounds(x, y);
+        let want_x = if x > 0.0 {
+            let (m, k) = pow_pair(xd, yd - 1.0);
+            (yd * m, k)
+        } else {
+            split(yd * xd.powf(yd - 1.0))
+        };
+        // Partials beyond the normal range must be 0 or ±∞ (or subnormal) accordingly.
+        let check = |got: f64, want: (Dd, i32), bound: f64, what: &str| {
+            let l = log2_of(want);
+            if normal_pair(want) {
+                let err = ulps_scaled(got, want);
+                assert!(
+                    err <= bound * (1.0 + 1e-9) + 1e-9,
+                    "{what} {x:e}^{y:e}: {r:?}: {err} u > {bound} u"
+                );
+            } else if l >= 1024.0 {
+                assert!(got.is_infinite(), "{what} {x:e}^{y:e}: {r:?}");
+            } else {
+                assert!(
+                    got.abs() < f64::MIN_POSITIVE * 1.01,
+                    "{what} {x:e}^{y:e}: {r:?}"
+                );
+            }
+        };
+        check(r.eps()[0], want_x, bx, "∂/∂x");
+        if x > 0.0 {
+            let (m, k) = pow_pair(xd, yd);
+            check(r.eps()[1], (m * xd.ln(), k), by, "∂/∂y");
+        }
     }
     // A constant exponent never computes ln x: (−2)^3 has a finite derivative in x and 0 in
     // the unseeded direction.
@@ -929,15 +961,34 @@ fn hypot_and_atan2_at_the_origin_infinities_and_range_ends() {
         let h = p.hypot(q);
         let dh = scaled_hypot_partials(ad, bd);
         for (&got, &want) in h.eps().iter().zip(&dh) {
-            assert!(rel_err(got, want) <= 8.0 * U, "hypot({a:e}, {b:e}): {h:?}");
+            assert!(
+                close_or_out_of_range(got, want, 8.0),
+                "hypot({a:e}, {b:e}): {h:?}"
+            );
         }
         if atan2_too {
             let t = p.atan2(q);
             let dt = scaled_atan2_partials(ad, bd);
             for (&got, &want) in t.eps().iter().zip(&dt) {
-                assert!(rel_err(got, want) <= 8.0 * U, "atan2({a:e}, {b:e}): {t:?}");
+                assert!(
+                    close_or_out_of_range(got, want, 8.0),
+                    "atan2({a:e}, {b:e}): {t:?}"
+                );
             }
         }
+    }
+}
+
+/// Within `bound` u of m·2^e where that is normal; otherwise ±∞ beyond the range, or below
+/// 2^-1022 (zero or subnormal) under it.
+fn close_or_out_of_range(got: f64, want: (Dd, i32), bound: f64) -> bool {
+    let l = log2_of(want);
+    if normal_pair(want) {
+        ulps_scaled(got, want) <= bound
+    } else if l >= 1024.0 {
+        got.is_infinite()
+    } else {
+        got.abs() < f64::MIN_POSITIVE * 1.01
     }
 }
 
@@ -962,33 +1013,34 @@ fn ldexp(mut v: Dd, mut e: i32) -> Dd {
     v * two_pow(e)
 }
 
-/// x = m·2^e with |m| in [1, 2) (exact; m = 0 for x = 0).
+/// x = m·2^e with |m| in [1, 2) (exact; m = x and e = 0 for zero, infinite or NaN x).
 fn split(x: Dd) -> (Dd, i32) {
-    if x.hi() == 0.0 {
-        return (Dd::ZERO, 0);
+    if x.hi() == 0.0 || !x.hi().is_finite() {
+        return (x, 0);
     }
     let e = x.hi().abs().log2().floor() as i32;
     (ldexp(x, -e), e)
 }
 
-/// (x/h, y/h) for h = hypot(x, y), in double-double with the binary exponents kept apart, so no
-/// intermediate over- or underflows: x/h = (m_x/h_s)·2^(e_x − E) with h = h_s·2^E.
-fn scaled_hypot_partials(x: Dd, y: Dd) -> [Dd; 2] {
+/// (x/h, y/h) for h = hypot(x, y), in double-double as pairs m·2^e, with the binary exponents
+/// kept apart so that no intermediate over- or underflows: x/h = (m_x/h_s)·2^(e_x − E) with
+/// h = h_s·2^E.
+fn scaled_hypot_partials(x: Dd, y: Dd) -> [(Dd, i32); 2] {
     let ((mx, ex), (my, ey)) = (split(x), split(y));
     let e = ex.max(ey);
     let (xs, ys) = (ldexp(mx, ex - e), ldexp(my, ey - e));
     let h = (xs * xs + ys * ys).sqrt();
-    [ldexp(mx / h, ex - e), ldexp(my / h, ey - e)]
+    [(mx / h, ex - e), (my / h, ey - e)]
 }
 
-/// (∂/∂y, ∂/∂x) of atan2(y, x) = (x, −y)/(x² + y²) in double-double, with the binary exponents
-/// kept apart: x/(x² + y²) = (m_x/r_s)·2^(e_x − 2E) with x² + y² = r_s·2^(2E).
-fn scaled_atan2_partials(y: Dd, x: Dd) -> [Dd; 2] {
+/// (∂/∂y, ∂/∂x) of atan2(y, x) = (x, −y)/(x² + y²), as pairs: x/(x² + y²) = (m_x/r_s)·2^(e_x − 2E)
+/// with x² + y² = r_s·2^(2E).
+fn scaled_atan2_partials(y: Dd, x: Dd) -> [(Dd, i32); 2] {
     let ((my, ey), (mx, ex)) = (split(y), split(x));
     let e = ex.max(ey);
     let (xs, ys) = (ldexp(mx, ex - e), ldexp(my, ey - e));
     let r = xs * xs + ys * ys;
-    [ldexp(mx / r, ex - 2 * e), ldexp(-(my / r), ey - 2 * e)]
+    [(mx / r, ex - 2 * e), (-(my / r), ey - 2 * e)]
 }
 
 #[test]
@@ -1160,7 +1212,7 @@ impl Rng {
 }
 
 /// How one unary method is checked: an analytic derivative in double-double, the domain to
-/// sample, and where central differences are accurate.
+/// sample, where central differences are accurate, and the error bound for `Dual<f64, 1>`.
 struct Spec {
     /// The method's name in [`unary_methods`].
     name: &'static str,
@@ -1172,10 +1224,83 @@ struct Spec {
     moderate: fn(&mut Rng) -> f64,
     /// The length over which f′ changes by a factor of order one.
     scale: fn(f64) -> f64,
-    /// Bound for `Dual<f64, 1>` against the analytic derivative, in u (see `specs`).
-    bound: f64,
+    /// The bound in u for `Dual<f64, 1>` at x: the measured errors of the platform (libm) calls
+    /// the derivative is computed from, times their amplification, plus one u per correctly
+    /// rounded operation (see `specs`).
+    bound: fn(f64) -> f64,
     /// Condition factor of `T`'s function for the double-double bound (1 unless noted).
     cond: fn(f64) -> f64,
+}
+
+/// The relative error of a platform result `got` against `want`, in u (0 where they are equal,
+/// including equal infinities).
+fn ulps(got: f64, want: Dd) -> f64 {
+    if got == want.hi() && want.lo() == 0.0 {
+        return 0.0;
+    }
+    rel_err(got, want) / U
+}
+
+/// The relative error, in u, of `got` against `m·2^e`, measured at the scale of `m` (so that no
+/// intermediate is subnormal).
+fn ulps_scaled(got: f64, (m, e): (Dd, i32)) -> f64 {
+    if m.hi() == 0.0 {
+        return if got == 0.0 { 0.0 } else { f64::INFINITY };
+    }
+    ((ldexp(Dd::from_f64(got), -e) - m) / m).abs().hi() / U
+}
+
+/// The binary logarithm of |m·2^e|.
+fn log2_of((m, e): (Dd, i32)) -> f64 {
+    m.abs().hi().log2() + f64::from(e)
+}
+
+/// Whether m·2^e is in the normal range of `f64`.
+fn normal_pair(v: (Dd, i32)) -> bool {
+    (-1022.0..1024.0).contains(&log2_of(v))
+}
+
+/// x^e for x > 0 as m·2^k, computed as (p·2^j)² with p = x^(e/2) in double-double, so that it
+/// keeps full precision where x^e itself would fall below 2^-969.
+fn pow_pair(x: Dd, e: Dd) -> (Dd, i32) {
+    let (m, k) = split(x.powf(e * 0.5));
+    (m * m, 2 * k)
+}
+
+/// Bounds in u for ∂/∂x and ∂/∂y of x^y with `Dual<f64, _>`, following the implementation's
+/// choice of formula (x > 0, or x < 0 with an integer y; finite arguments):
+/// * y·(f/x), or (y·f)/x for |y| < 1, while f is normal: the power's error and two roundings;
+/// * otherwise y·p·p with p = |x|^e, e = fl((y − 1)/2): twice p's error, two roundings, and the
+///   rounding of e, which changes x^(y−1) by 2·|ln x|·|e − (y − 1)/2|;
+/// * f·ln x while f is normal, otherwise p·ln x·p with p = x^(y/2): the errors of the powers and
+///   of ln x, and one or two roundings.
+fn powf_bounds(x: f64, y: f64) -> (f64, f64) {
+    let (xd, yd) = (Dd::from_f64(x), Dd::from_f64(y));
+    let f = x.powf(y);
+    let ef = if x > 0.0 {
+        ulps_scaled(f, pow_pair(xd, yd))
+    } else {
+        ulps(f, xd.powf(yd))
+    };
+    let q = f / x;
+    let bx = if f.is_normal() && (q.is_normal() || y.abs() < 1.0) {
+        ef + 2.0
+    } else {
+        let e = (y - 1.0) * 0.5;
+        let p = x.abs().powf(e);
+        let rounding = ((yd - 1.0) * 0.5 - Dd::from_f64(e)).abs().hi();
+        2.0 * ulps(p, xd.abs().powf(Dd::from_f64(e)))
+            + 2.0
+            + 2.0 * x.abs().ln().abs() * rounding / U
+    };
+    let eln = ulps(x.ln(), xd.ln());
+    let by = if f.is_normal() {
+        ef + eln + 1.0
+    } else {
+        let p = x.powf(y * 0.5);
+        2.0 * ulps(p, xd.powf(yd * 0.5)) + eln + 2.0
+    };
+    (bx, by)
 }
 
 /// ±(1 − δ) with δ down to 2^-53, ±tiny, or uniform in (−1, 1): arguments of asin, acos, atanh.
@@ -1193,28 +1318,28 @@ fn moderate_unit(r: &mut Rng) -> f64 {
     r.range(-1.0 + two_pow(-20), 1.0 - two_pow(-20))
 }
 
-/// The bounds in u (2^-53) for `Dual<f64, 1>` assume each platform `f64` function (libm) is
-/// within 2 ulps = 4u of its exact value (glibc and Apple libm document at most 1–2 ulps for
-/// these), and each correctly rounded operation within 1u: they sum those errors through the
-/// derivative formula, with any amplification noted. The double-double bound is 2^-96: each
-/// `DoubleDouble` function is within 2^-99 (and the reference within as much again), plus a
-/// few operations of a few u² each.
+/// The bounds for `Dual<f64, 1>` are in u (2^-53) and hold whatever the accuracy of the
+/// platform's libm: at each argument, the test measures the error of each libm result the
+/// derivative is computed from (against double-double), multiplies it by its amplification
+/// through the formula, and adds 1u per correctly rounded operation (and per rounded constant).
+/// The double-double bound is 2^-96: each `DoubleDouble` function is within 2^-99 (and the
+/// reference within as much again), plus a few operations of a few u² each.
 fn specs() -> Vec<Spec> {
     let abs = |x: f64| x.abs();
     let unit = |_: f64| 1.0;
     let at_least_one = |x: f64| x.abs().max(1.0);
     vec![
-        // 1/(2s): s correctly rounded (1u), division (1u).
+        // 1/(2s): s correctly rounded, then the reciprocal.
         Spec {
             name: "sqrt",
             deriv: |x| x.sqrt() / (x * 2.0),
             sample: |r| r.pow2(-1074, 1024),
             moderate: |r| r.pow2(-100, 100),
             scale: abs,
-            bound: 2.0,
+            bound: |_| 2.0,
             cond: unit,
         },
-        // 1/(3c²): c (4u) squared (8u + 1u), times 3 (1u), reciprocal (1u).
+        // 1/(3c²): c's error doubled by the square, three roundings.
         Spec {
             name: "cbrt",
             deriv: |x| x.cbrt() / (x * 3.0),
@@ -1227,10 +1352,10 @@ fn specs() -> Vec<Spec> {
                 r.sign(x)
             },
             scale: abs,
-            bound: 11.0,
+            bound: |x| 2.0 * ulps(x.cbrt(), Dd::from_f64(x).cbrt()) + 3.0,
             cond: unit,
         },
-        // eˣ (4u).
+        // eˣ itself.
         Spec {
             name: "exp",
             deriv: |x| x.exp(),
@@ -1244,10 +1369,10 @@ fn specs() -> Vec<Spec> {
             },
             moderate: |r| r.range(-40.0, 40.0),
             scale: unit,
-            bound: 4.0,
+            bound: |x| ulps(x.exp(), Dd::from_f64(x).exp()),
             cond: unit,
         },
-        // 2ˣ (4u) times ln 2 (1u + 1u).
+        // 2ˣ, times ln 2 (rounded constant and product).
         Spec {
             name: "exp2",
             deriv: |x| x.exp2() * Dd::LN_2(),
@@ -1261,10 +1386,10 @@ fn specs() -> Vec<Spec> {
             },
             moderate: |r| r.range(-60.0, 60.0),
             scale: unit,
-            bound: 6.0,
+            bound: |x| ulps(x.exp2(), Dd::from_f64(x).exp2()) + 2.0,
             cond: unit,
         },
-        // (eˣ − 1) + 1 for eˣ − 1 >= −½: 4u·|eˣ − 1|/eˣ <= 4u, plus 1u; else eˣ (4u).
+        // (eˣ − 1) + 1 for eˣ − 1 >= −½: m's error times |m|/(1 + m) <= 1, plus the sum; else eˣ.
         Spec {
             name: "exp_m1",
             deriv: |x| x.exp(),
@@ -1278,10 +1403,17 @@ fn specs() -> Vec<Spec> {
             },
             moderate: |r| r.range(-5.0, 40.0),
             scale: unit,
-            bound: 5.0,
+            bound: |x| {
+                let m = x.exp_m1();
+                if m >= -0.5 {
+                    ulps(m, Dd::from_f64(x).exp_m1()) * m.abs() / (1.0 + m) + 1.0
+                } else {
+                    ulps(x.exp(), Dd::from_f64(x).exp())
+                }
+            },
             cond: unit,
         },
-        // 1/x (1u).
+        // 1/x.
         Spec {
             name: "ln",
             deriv: |x| Dd::ONE / x,
@@ -1295,17 +1427,17 @@ fn specs() -> Vec<Spec> {
             },
             moderate: |r| r.pow2(-100, 100),
             scale: abs,
-            bound: 1.0,
+            bound: |_| 1.0,
             cond: unit,
         },
-        // log2(e)/x: the constant (1u) and the division (1u).
+        // log2(e)/x: the rounded constant and the quotient.
         Spec {
             name: "log2",
             deriv: |x| Dd::ONE / x / Dd::LN_2(),
             sample: |r| r.pow2(-1074, 1024),
             moderate: |r| r.pow2(-100, 100),
             scale: abs,
-            bound: 2.0,
+            bound: |_| 2.0,
             cond: unit,
         },
         Spec {
@@ -1314,10 +1446,10 @@ fn specs() -> Vec<Spec> {
             sample: |r| r.pow2(-1074, 1024),
             moderate: |r| r.pow2(-100, 100),
             scale: abs,
-            bound: 2.0,
+            bound: |_| 2.0,
             cond: unit,
         },
-        // 1/(1 + x): the sum (1u, exact next to −1) and the reciprocal (1u).
+        // 1/(1 + x): the sum (exact next to −1) and the reciprocal.
         Spec {
             name: "ln_1p",
             deriv: |x| Dd::ONE / (x + 1.0),
@@ -1331,10 +1463,10 @@ fn specs() -> Vec<Spec> {
             },
             moderate: |r| -1.0 + r.pow2(-20, 6),
             scale: |x| 1.0 + x,
-            bound: 2.0,
+            bound: |_| 2.0,
             cond: unit,
         },
-        // cos x and −sin x (4u).
+        // cos x and −sin x from libm.
         Spec {
             name: "sin",
             deriv: |x| x.cos(),
@@ -1344,7 +1476,7 @@ fn specs() -> Vec<Spec> {
             },
             moderate: |r| r.range(-100.0, 100.0),
             scale: unit,
-            bound: 4.0,
+            bound: |x| ulps(x.cos(), Dd::from_f64(x).cos()),
             cond: unit,
         },
         Spec {
@@ -1356,10 +1488,10 @@ fn specs() -> Vec<Spec> {
             },
             moderate: |r| r.range(-100.0, 100.0),
             scale: unit,
-            bound: 4.0,
+            bound: |x| ulps(x.sin(), Dd::from_f64(x).sin()),
             cond: unit,
         },
-        // 1 + t²: t (4u) squared (8u + 1u), plus 1 (1u); the reference is 1/cos²x.
+        // 1 + t²: t's error doubled, times t²/(1 + t²); two roundings. The reference is 1/cos²x.
         Spec {
             name: "tan",
             deriv: |x| {
@@ -1374,18 +1506,21 @@ fn specs() -> Vec<Spec> {
                 }
             },
             scale: |x| x.cos().abs().min(1.0),
-            bound: 10.0,
+            bound: |x| {
+                let t = x.tan();
+                2.0 * ulps(t, Dd::from_f64(x).tan()) * (t * t / (1.0 + t * t)) + 2.0
+            },
             cond: unit,
         },
-        // 1/√((1 − x)(1 + x)): the product (3u), its root (1.5u + 1u), the reciprocal (1u); the
-        // reference is 1/√(1 − x²) with x² exact.
+        // 1/√((1 − x)(1 + x)): 3u in the product, halved by the root, then the root and the
+        // reciprocal. The reference is 1/√(1 − x²) with x² exact.
         Spec {
             name: "asin",
             deriv: |x| Dd::ONE / (Dd::ONE - x * x).sqrt(),
             sample: sample_unit,
             moderate: moderate_unit,
             scale: |x| (1.0 - x.abs()).min(1.0),
-            bound: 3.5,
+            bound: |_| 3.5,
             cond: unit,
         },
         Spec {
@@ -1394,10 +1529,10 @@ fn specs() -> Vec<Spec> {
             sample: sample_unit,
             moderate: moderate_unit,
             scale: |x| (1.0 - x.abs()).min(1.0),
-            bound: 3.5,
+            bound: |_| 3.5,
             cond: unit,
         },
-        // 1/(x² + 1): the square and sum (2u), the reciprocal (1u).
+        // 1/(x² + 1): the square, the sum and the reciprocal.
         Spec {
             name: "atan",
             deriv: |x| Dd::ONE / (x * x + 1.0),
@@ -1410,10 +1545,10 @@ fn specs() -> Vec<Spec> {
                 r.sign(x)
             },
             scale: at_least_one,
-            bound: 3.0,
+            bound: |_| 3.0,
             cond: unit,
         },
-        // √(1 + sinh²x): sinh (4u) squared and plus 1 (8u + 2u), halved by the root, plus 1u.
+        // √(1 + sinh²x): sinh's error times sinh²/(1 + sinh²) <= 1, and 2u; or |sinh x|.
         Spec {
             name: "sinh",
             deriv: |x| x.cosh(),
@@ -1427,10 +1562,10 @@ fn specs() -> Vec<Spec> {
             },
             moderate: |r| r.range(-30.0, 30.0),
             scale: unit,
-            bound: 6.0,
+            bound: |x| ulps(x.sinh(), Dd::from_f64(x).sinh()) + 2.0,
             cond: unit,
         },
-        // sinh x (4u).
+        // sinh x from libm.
         Spec {
             name: "cosh",
             deriv: |x| x.sinh(),
@@ -1444,17 +1579,17 @@ fn specs() -> Vec<Spec> {
             },
             moderate: |r| r.range(-30.0, 30.0),
             scale: unit,
-            bound: 4.0,
+            bound: |x| ulps(x.sinh(), Dd::from_f64(x).sinh()),
             cond: unit,
         },
-        // (1 − t)(1 + t) for |t| <= ½: 4u·2t²/(1 − t²) <= 2.7u, plus 3u; 1/cosh²x beyond: cosh
-        // (4u) and its reciprocal (1u), squared (10u + 1u). The reference is 4e/(1 + e)²,
-        // e = e^(−2|x|).
+        // (1 − t)(1 + t) for |t| <= ½: t's error times 2t²/(1 − t²) <= ⅔, plus 3u; beyond,
+        // 4e/(1 + e)² with e = e^(−2|x|): e's error (times (1 − e)/(1 + e) <= 1) plus 4u. The
+        // reference is 1/cosh²x.
         Spec {
             name: "tanh",
             deriv: |x| {
-                let e = (x.abs() * -2.0).exp();
-                e * 4.0 / ((e + 1.0) * (e + 1.0))
+                let c = x.cosh();
+                Dd::ONE / (c * c)
             },
             sample: |r| {
                 if r.chance(0.3) {
@@ -1466,10 +1601,18 @@ fn specs() -> Vec<Spec> {
             },
             moderate: |r| r.range(-4.0, 4.0),
             scale: unit,
-            bound: 11.0,
+            bound: |x| {
+                let t = x.tanh();
+                if t.abs() <= 0.5 {
+                    ulps(t, Dd::from_f64(x).tanh()) * 2.0 * t * t / (1.0 - t * t) + 3.0
+                } else {
+                    let a = -2.0 * x.abs();
+                    ulps(a.exp(), Dd::from_f64(a).exp()) + 4.0
+                }
+            },
             cond: unit,
         },
-        // 1/√(x² + 1) (as atan, then the root: 1u + 1u + 1u), or 1/|x| beyond 2^54.
+        // 1/√(x² + 1) (as atan, then the root), or 1/|x| beyond 2^54.
         Spec {
             name: "asinh",
             deriv: |x| {
@@ -1488,7 +1631,7 @@ fn specs() -> Vec<Spec> {
                 r.sign(x)
             },
             scale: at_least_one,
-            bound: 3.0,
+            bound: |_| 3.0,
             cond: unit,
         },
         // 1/√((x − 1)(x + 1)) (as asin), or 1/x beyond 2^54; the reference uses x² − 1.
@@ -1510,21 +1653,21 @@ fn specs() -> Vec<Spec> {
             },
             moderate: |r| 1.0 + r.pow2(-20, 40),
             scale: |x| x - 1.0,
-            bound: 3.5,
+            bound: |_| 3.5,
             cond: unit,
         },
-        // 1/((1 − x)(1 + x)): 3u and the reciprocal (1u).
+        // 1/((1 − x)(1 + x)): 3u and the reciprocal.
         Spec {
             name: "atanh",
             deriv: |x| Dd::ONE / (Dd::ONE - x * x),
             sample: sample_unit,
             moderate: moderate_unit,
             scale: |x| (1.0 - x.abs()).min(1.0),
-            bound: 4.0,
+            bound: |_| 4.0,
             cond: unit,
         },
-        // −(x′·r)·r: r (1u), two products (2u). The reference divides twice, as x² can fall
-        // below the double-double range of full precision.
+        // −(x′·r)·r: r's error doubled, and two products. The reference divides twice, as x² can
+        // fall below the double-double range of full precision.
         Spec {
             name: "recip",
             deriv: |x| -(Dd::ONE / x / x),
@@ -1537,10 +1680,10 @@ fn specs() -> Vec<Spec> {
                 r.sign(x)
             },
             scale: abs,
-            bound: 3.0,
+            bound: |_| 3.0,
             cond: unit,
         },
-        // n·x^(n−1): x^(n−1) by repeated squaring and the product with n.
+        // n·x^(n−1): x^(n−1) by repeated squaring (not libm) and the product with n.
         Spec {
             name: "powi(2)",
             deriv: |x| x * 2.0,
@@ -1553,7 +1696,7 @@ fn specs() -> Vec<Spec> {
                 r.sign(x)
             },
             scale: abs,
-            bound: 0.0,
+            bound: |_| 0.0,
             cond: unit,
         },
         Spec {
@@ -1568,7 +1711,7 @@ fn specs() -> Vec<Spec> {
                 r.sign(x)
             },
             scale: abs,
-            bound: 2.0,
+            bound: |_| 2.0,
             cond: unit,
         },
         Spec {
@@ -1583,7 +1726,7 @@ fn specs() -> Vec<Spec> {
                 r.sign(x)
             },
             scale: abs,
-            bound: 3.0,
+            bound: |_| 3.0,
             cond: unit,
         },
         Spec {
@@ -1598,18 +1741,17 @@ fn specs() -> Vec<Spec> {
                 r.sign(x)
             },
             scale: abs,
-            bound: 5.0,
+            bound: |_| 5.0,
             cond: unit,
         },
-        // y·(xʸ/x): the power (4u), the quotient and product (2u). DoubleDouble's powf errs by
-        // up to 2^-99·|y ln x|.
+        // See `powf_bounds`. DoubleDouble's powf errs by up to 2^-99·|y ln x|.
         Spec {
             name: "powf(0.5)",
             deriv: |x| x.sqrt() / (x * 2.0),
             sample: |r| r.pow2(-1074, 1024),
             moderate: |r| r.pow2(-100, 100),
             scale: abs,
-            bound: 6.0,
+            bound: |x| powf_bounds(x, 0.5).0,
             cond: |x| (0.5 * x.ln()).abs().max(1.0),
         },
         Spec {
@@ -1621,7 +1763,7 @@ fn specs() -> Vec<Spec> {
             sample: |r| r.pow2(-1074, 1024),
             moderate: |r| r.pow2(-100, 100),
             scale: abs,
-            bound: 6.0,
+            bound: |x| powf_bounds(x, 1.0 / 3.0).0,
             cond: |x| (x.ln() / 3.0).abs().max(1.0),
         },
         Spec {
@@ -1630,17 +1772,16 @@ fn specs() -> Vec<Spec> {
             sample: |r| r.pow2(-280, 280),
             moderate: |r| r.pow2(-20, 20),
             scale: abs,
-            bound: 6.0,
+            bound: |x| powf_bounds(x, -2.5).0,
             cond: |x| (2.5 * x.ln()).abs().max(1.0),
         },
-        // bˣ·ln b: the power (4u), ln b (4u), the product (1u).
         Spec {
             name: "2^x",
             deriv: |x| x.exp2() * Dd::LN_2(),
             sample: |r| r.range(-1074.0, 1023.99),
             moderate: |r| r.range(-60.0, 60.0),
             scale: unit,
-            bound: 9.0,
+            bound: |x| powf_bounds(2.0, x).1,
             cond: |x| (x * std::f64::consts::LN_2).abs().max(1.0),
         },
         Spec {
@@ -1649,21 +1790,20 @@ fn specs() -> Vec<Spec> {
             sample: |r| r.range(-1023.99, 1074.0),
             moderate: |r| r.range(-60.0, 60.0),
             scale: unit,
-            bound: 9.0,
+            bound: |x| powf_bounds(0.5, x).1,
             cond: |x| (x * std::f64::consts::LN_2).abs().max(1.0),
         },
-        // The quotient rule for ln x/ln 3 with constant ln 3: 1/x (1u), 1/ln 3 (4u + 1u), the
-        // product (1u).
+        // (1/ln 3)/x: ln 3's error, the reciprocal and the quotient.
         Spec {
             name: "log(x, 3)",
             deriv: |x| Dd::ONE / x / Dd::from_f64(3.0).ln(),
             sample: |r| r.pow2(-1074, 1024),
             moderate: |r| r.pow2(-100, 100),
             scale: abs,
-            bound: 7.0,
+            bound: |_| ulps(3f64.ln(), Dd::from_f64(3.0).ln()) + 2.0,
             cond: unit,
         },
-        // 180/π and π/180: the rounded constant (1u) and its quotient (1u).
+        // 180/π and π/180: the rounded constant and its quotient.
         Spec {
             name: "to_degrees",
             deriv: |_| Dd::from_f64(180.0) / Dd::PI(),
@@ -1673,7 +1813,7 @@ fn specs() -> Vec<Spec> {
             },
             moderate: |r| r.range(-10.0, 10.0),
             scale: unit,
-            bound: 2.0,
+            bound: |_| 2.0,
             cond: unit,
         },
         Spec {
@@ -1685,7 +1825,7 @@ fn specs() -> Vec<Spec> {
             },
             moderate: |r| r.range(-10.0, 10.0),
             scale: unit,
-            bound: 2.0,
+            bound: |_| 2.0,
             cond: unit,
         },
         // Exactly 1 and ±1.
@@ -1698,7 +1838,7 @@ fn specs() -> Vec<Spec> {
             },
             moderate: |r| r.range(-50.0, 50.0).floor() + r.range(0.1, 0.9),
             scale: |_| 0.05,
-            bound: 0.0,
+            bound: |_| 0.0,
             cond: unit,
         },
         Spec {
@@ -1713,7 +1853,7 @@ fn specs() -> Vec<Spec> {
                 r.sign(x)
             },
             scale: abs,
-            bound: 0.0,
+            bound: |_| 0.0,
             cond: unit,
         },
     ]
@@ -1758,29 +1898,39 @@ fn derivative_accuracy_over_each_domain() {
     let find64 = |name: &str| f64_methods.iter().find(|m| m.0 == name).unwrap().1;
     let find_dd = |name: &str| dd_methods.iter().find(|m| m.0 == name).unwrap();
     eprintln!(
-        "worst derivative error: f64 vs analytic (u) | DD vs analytic (u²) | f64 vs central (u) | DD vs central (relative, where |f| <= 63·scale·|f′|)"
+        "worst derivative error: f64 vs analytic (u; bounds from the measured libm errors) | DD vs analytic (u²) | f64 vs central (u) | DD vs central (relative, where |f| <= 63·scale·|f′|)"
     );
     for spec in specs() {
         let (d64, (_, ddd, value)) = (find64(spec.name), find_dd(spec.name));
         let mut r = Rng::new(spec.name);
         let (mut w64, mut wdd, mut c64, mut cdd) = (0.0_f64, 0.0_f64, 0.0_f64, 0.0_f64);
+        let (mut largest_bound, mut worst_ratio) = (0.0_f64, 0.0_f64);
         let mut compared = 0;
         // Against the analytic derivative, over the whole domain.
         for i in 0..20_000 {
             let x = (spec.sample)(&mut r);
             let want = (spec.deriv)(Dd::from_f64(x));
-            if !normal(want) {
+            // Below 2^-969 a double-double's trailing word is subnormal, which leaves a reference
+            // only about 2^-1021/|f′| u accurate (0.9u at 2^-1021): compared from 2^-1000, where
+            // that is below 2^-21 u. (The powf, hypot and atan2 sweeps keep their references'
+            // binary exponents apart and cover the whole normal range.)
+            if !(two_pow(-1000)..=f64::MAX).contains(&want.abs().hi()) {
                 continue;
             }
             compared += 1;
             let got = d64(F1::new(x, [1.0])).eps()[0];
-            let err = (Dd::from_f64(got) - want).abs().hi() / (want.abs().hi() * U);
+            let err = rel_err(got, want) / U;
+            let bound = (spec.bound)(x);
             assert!(
-                err <= spec.bound + 1e-6,
-                "{}'({x:e}) = {got:e}, expected {want:?}: {err:.2} u",
+                err <= bound * (1.0 + 1e-9) + 1e-9,
+                "{}'({x:e}) = {got:e}, expected {want:?}: {err:.2} u > {bound:.2} u",
                 spec.name
             );
             w64 = w64.max(err);
+            largest_bound = largest_bound.max(bound);
+            if bound > 0.0 {
+                worst_ratio = worst_ratio.max(err / bound);
+            }
             if i % 4 == 0 && want.abs().hi() >= two_pow(-960) && want.abs().hi() <= two_pow(1000) {
                 let got = ddd(Dual::new(Dd::from_f64(x), [Dd::ONE])).eps()[0];
                 let err = ((got - want) / want).abs().hi();
@@ -1811,7 +1961,7 @@ fn derivative_accuracy_over_each_domain() {
             let got = d64(F1::new(x, [1.0])).eps()[0];
             let e64 = (Dd::from_f64(got) - cd).abs().hi() / cd.abs().hi();
             assert!(
-                e64 <= spec.bound * U + two_pow(-70) * kappa,
+                e64 <= (spec.bound)(x) * U * (1.0 + 1e-9) + two_pow(-70) * kappa,
                 "{}'({x:e}) = {got:e}, central {cd:?}",
                 spec.name
             );
@@ -1829,17 +1979,22 @@ fn derivative_accuracy_over_each_domain() {
             }
         }
         eprintln!(
-            "  {:<11} {w64:5.2} u (bound {:4.1}) | {wdd:7.2} u² | {c64:5.2} u | {cdd:.1e}",
-            spec.name, spec.bound
+            "  {:<11} {w64:5.2} u (bounds up to {largest_bound:5.2} u, worst error/bound {worst_ratio:.2}) | {wdd:7.2} u² | {c64:5.2} u | {cdd:.1e}",
+            spec.name
         );
     }
 }
 
-/// Exponents and bases for `powf` in six regimes: general; x next to 0 with y in (0, 1),
-/// (1, 3) or (−1, 0); y next to 0; x next to 1 with |y| up to 1000; x < 0 with integer y; and
-/// |y| up to 2^40 with x within 2^-10 of 1.
+/// Exponents and bases for `powf` in seven regimes: general; x next to 0 with y in (0, 1),
+/// (1, 3) or (−1, 0); y next to 0; x next to 1 with |y| up to 1000; x < 0 with integer y;
+/// |y| up to 2^40 with x within 2^-10 of 1; and subnormal x with |y| < 1/32.
 fn sample_powf(r: &mut Rng) -> (f64, f64) {
-    match (r.f() * 6.0) as u32 {
+    match (r.f() * 7.0) as u32 {
+        6 => {
+            // Subnormal x with |y| < 1/32, where f/x overflows but y·f/x need not.
+            let y = r.pow2(-60, -5);
+            (r.pow2(-1074, -1022), r.sign(y))
+        }
         0 => (r.pow2(-30, 30), r.range(-20.0, 20.0)),
         1 => {
             let x = r.pow2(-1074, -30);
@@ -1878,38 +2033,104 @@ fn sample_pair(r: &mut Rng) -> (f64, f64) {
     (x, r.sign(y))
 }
 
+/// hypot(x, y) in double-double as a pair m·2^e.
+fn dd_hypot(x: Dd, y: Dd) -> (Dd, i32) {
+    let ((mx, ex), (my, ey)) = (split(x), split(y));
+    let e = ex.max(ey);
+    let (xs, ys) = (ldexp(mx, ex - e), ldexp(my, ey - e));
+    ((xs * xs + ys * ys).sqrt(), e)
+}
+
+/// The bound in u for the partials of hypot with `Dual<f64, _>`, following the implementation:
+/// h's error and two roundings (1/h, x·(1/h)) while h and 1/h are normal; otherwise the error of
+/// hypot at arguments rescaled by 2^±600 and one rounding.
+fn hypot_bound(x: f64, y: f64) -> f64 {
+    let h = x.hypot(y);
+    if h >= f64::MIN_POSITIVE && 1.0 / h >= f64::MIN_POSITIVE {
+        return ulps_scaled(h, dd_hypot(Dd::from_f64(x), Dd::from_f64(y))) + 2.0;
+    }
+    let s = if h < 1.0 { two_pow(600) } else { two_pow(-600) };
+    let (xs, ys) = (x * s, y * s);
+    ulps_scaled(xs.hypot(ys), dd_hypot(Dd::from_f64(xs), Dd::from_f64(ys))) + 1.0
+}
+
+/// Tracks the worst error and the worst ratio of error to bound.
+#[derive(Default)]
+struct Worst {
+    err: f64,
+    ratio: f64,
+}
+
+impl Worst {
+    /// Records `err` (in u) and asserts it is within `bound`; the bounds are first order, and
+    /// the slack of 10^-9 relative covers the second-order terms (of order u).
+    fn check(&mut self, err: f64, bound: f64, what: impl Fn() -> String) {
+        assert!(
+            err <= bound * (1.0 + 1e-9) + 1e-9,
+            "{}: {err:.2} u > {bound:.2} u",
+            what()
+        );
+        self.err = self.err.max(err);
+        if bound > 0.0 {
+            self.ratio = self.ratio.max(err / bound);
+        }
+    }
+}
+
+impl std::fmt::Display for Worst {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:.2} u (worst error/bound {:.2})", self.err, self.ratio)
+    }
+}
+
 #[test]
 fn binary_derivative_accuracy_over_each_domain() {
     type X = Dual<Dd, 2>;
     let dd = Dd::from_f64;
     let mut r = Rng::new("binary");
-    // Bounds in u, as for `specs`: x^y (4u) over x and times y (2u); x^y times ln x (4u + 4u +
-    // 1u); hypot (4u) and the scaled quotient (2u); x² + y² (2u), its reciprocal and the
-    // product (2u), or the rescaled form (7u); the quotient rule for ln x/ln b (7u and 17u).
-    let (mut wx, mut wy, mut dx_dd, mut dy_dd) = (0.0_f64, 0.0_f64, 0.0_f64, 0.0_f64);
-    for _ in 0..30_000 {
+    // Bounds for `Dual<f64, 2>` from the measured libm errors (see `powf_bounds`,
+    // `hypot_bound`, and the log bounds below); atan2's partials use no libm call: x² + y² (2u),
+    // its reciprocal and the product (2u), or the rescaled form (7u).
+    let (mut wx, mut wy) = (Worst::default(), Worst::default());
+    let (mut dx_dd, mut dy_dd) = (0.0_f64, 0.0_f64);
+    for _ in 0..40_000 {
         let (x, y) = sample_powf(&mut r);
         let [a, b] = Dual::<f64, 2>::variables([x, y]);
         let p = a.powf(b);
         let (xd, yd) = (dd(x), dd(y));
-        let want_x = yd * xd.powf(yd - 1.0);
+        let (bx, by) = powf_bounds(x, y);
+        let q = X::variables([xd, yd]);
+        let pq = q[0].powf(q[1]);
+        // y·x^(y−1) and x^y·ln x as pairs m·2^k (see `pow_pair`), at the exact exponents, so
+        // that they keep full precision down to the bottom of the normal range.
+        let want_x = if x > 0.0 {
+            let (m, k) = pow_pair(xd, yd - 1.0);
+            (yd * m, k)
+        } else {
+            split(yd * xd.powf(yd - 1.0))
+        };
+        // DoubleDouble's powf errs by up to 2^-99·|e·ln x| for an exponent e: y for the
+        // implementation and ∂/∂y's reference, and y or y − 1 for ∂/∂x.
         let cond = (y * x.abs().ln()).abs().max(1.0);
-        if normal(want_x) {
-            let err = rel_err(p.eps()[0], want_x) / U;
-            assert!(
-                err <= 6.0,
-                "∂/∂x {x:e}^{y:e} = {p:?}, expected {want_x:?}: {err} u"
-            );
-            wx = wx.max(err);
-            if want_x.abs().hi() >= two_pow(-960) && want_x.abs().hi() <= two_pow(1000) {
-                let q = X::variables([xd, yd]);
-                let got = q[0].powf(q[1]).eps()[0];
-                let err = ((got - want_x) / want_x).abs().hi();
+        let cond_x = cond.max(((y - 1.0) * x.abs().ln()).abs());
+        // DoubleDouble has full precision only from 2^-969 (`min_positive_value()`): arguments
+        // and results below that, like the subnormal x of the last regime, are compared in f64
+        // only.
+        let dd_err = |got: Dd, (m, k): (Dd, i32)| {
+            let full = x.abs() >= two_pow(-969) && (-960.0..1000.0).contains(&log2_of((m, k)));
+            full.then(|| ((ldexp(got, -k) - m) / m).abs().hi())
+        };
+        if normal_pair(want_x) {
+            let err = ulps_scaled(p.eps()[0], want_x);
+            wx.check(err, bx, || {
+                format!("∂/∂x {x:e}^{y:e} = {p:?}, expected {want_x:?}")
+            });
+            if let Some(err) = dd_err(pq.eps()[0], want_x) {
                 assert!(
-                    err <= two_pow(-96) * cond,
-                    "DD ∂/∂x {x:e}^{y:e}: {got:?} vs {want_x:?}"
+                    err <= two_pow(-96) * cond_x,
+                    "DD ∂/∂x {x:e}^{y:e}: {pq:?} vs {want_x:?}"
                 );
-                dx_dd = dx_dd.max(err / U2 / cond);
+                dx_dd = dx_dd.max(err / U2 / cond_x);
             }
         }
         if x < 0.0 {
@@ -1919,31 +2140,30 @@ fn binary_derivative_accuracy_over_each_domain() {
             );
             continue;
         }
-        let want_y = xd.powf(yd) * xd.ln();
-        if normal(want_y) {
-            let err = rel_err(p.eps()[1], want_y) / U;
-            assert!(
-                err <= 9.0,
-                "∂/∂y {x:e}^{y:e} = {p:?}, expected {want_y:?}: {err} u"
-            );
-            wy = wy.max(err);
-            if want_y.abs().hi() >= two_pow(-960) && want_y.abs().hi() <= two_pow(1000) {
-                let q = X::variables([xd, yd]);
-                let got = q[0].powf(q[1]).eps()[1];
-                let err = ((got - want_y) / want_y).abs().hi();
+        let want_y = {
+            let (m, k) = pow_pair(xd, yd);
+            (m * xd.ln(), k)
+        };
+        if normal_pair(want_y) {
+            let err = ulps_scaled(p.eps()[1], want_y);
+            wy.check(err, by, || {
+                format!("∂/∂y {x:e}^{y:e} = {p:?}, expected {want_y:?}")
+            });
+            if let Some(err) = dd_err(pq.eps()[1], want_y) {
                 assert!(
                     err <= two_pow(-96) * cond,
-                    "DD ∂/∂y {x:e}^{y:e}: {got:?} vs {want_y:?}"
+                    "DD ∂/∂y {x:e}^{y:e}: {pq:?} vs {want_y:?}"
                 );
                 dy_dd = dy_dd.max(err / U2 / cond);
             }
         }
     }
     eprintln!(
-        "powf: ∂/∂x worst {wx:.2} u (bound 6), ∂/∂y {wy:.2} u (bound 9); DD {dx_dd:.1} and {dy_dd:.1} u² per unit of max(1, |y ln x|)"
+        "powf: ∂/∂x {wx}, ∂/∂y {wy}; DD {dx_dd:.1} and {dy_dd:.1} u² per unit of the condition factor"
     );
 
-    let (mut wh, mut wa, mut hdd, mut add) = (0.0_f64, 0.0_f64, 0.0_f64, 0.0_f64);
+    let (mut wh, mut wa) = (Worst::default(), Worst::default());
+    let (mut hdd, mut add) = (0.0_f64, 0.0_f64);
     for _ in 0..30_000 {
         let (x, y) = sample_pair(&mut r);
         let [a, b] = Dual::<f64, 2>::variables([x, y]);
@@ -1953,16 +2173,16 @@ fn binary_derivative_accuracy_over_each_domain() {
         let moderate = |v: f64| v.abs() >= two_pow(-900) && v.abs() <= two_pow(900);
         let q = X::variables([xd, yd]);
         let (hq, tq) = (q[0].hypot(q[1]), q[0].atan2(q[1]));
+        let bh = hypot_bound(x, y);
         for i in 0..2 {
-            if normal(want_h[i]) {
-                let err = rel_err(h.eps()[i], want_h[i]) / U;
-                assert!(
-                    err <= 6.0,
-                    "hypot({x:e}, {y:e}) = {h:?}, expected {want_h:?}: {err} u"
-                );
-                wh = wh.max(err);
-                if moderate(x) && moderate(y) && want_h[i].abs().hi() >= two_pow(-960) {
-                    let err = ((hq.eps()[i] - want_h[i]) / want_h[i]).abs().hi();
+            if normal_pair(want_h[i]) {
+                let err = ulps_scaled(h.eps()[i], want_h[i]);
+                wh.check(err, bh, || {
+                    format!("hypot({x:e}, {y:e}) = {h:?}, expected {want_h:?}")
+                });
+                let (m, e) = want_h[i];
+                if moderate(x) && moderate(y) && log2_of(want_h[i]) >= -960.0 {
+                    let err = ((ldexp(hq.eps()[i], -e) - m) / m).abs().hi();
                     assert!(
                         err <= two_pow(-96),
                         "DD hypot({x:e}, {y:e}): {hq:?} vs {want_h:?}"
@@ -1970,17 +2190,14 @@ fn binary_derivative_accuracy_over_each_domain() {
                     hdd = hdd.max(err / U2);
                 }
             }
-            if normal(want_t[i]) {
-                let err = rel_err(t.eps()[i], want_t[i]) / U;
-                assert!(
-                    err <= 7.0,
-                    "atan2({x:e}, {y:e}) = {t:?}, expected {want_t:?}: {err} u"
-                );
-                wa = wa.max(err);
-                let tiny =
-                    want_t[i].abs().hi() < two_pow(-960) || want_t[i].abs().hi() > two_pow(1000);
-                if moderate(x) && moderate(y) && !tiny {
-                    let err = ((tq.eps()[i] - want_t[i]) / want_t[i]).abs().hi();
+            if normal_pair(want_t[i]) {
+                let err = ulps_scaled(t.eps()[i], want_t[i]);
+                wa.check(err, 7.0, || {
+                    format!("atan2({x:e}, {y:e}) = {t:?}, expected {want_t:?}")
+                });
+                let (m, e) = want_t[i];
+                if moderate(x) && moderate(y) && (-960.0..1000.0).contains(&log2_of(want_t[i])) {
+                    let err = ((ldexp(tq.eps()[i], -e) - m) / m).abs().hi();
                     assert!(
                         err <= two_pow(-96),
                         "DD atan2({x:e}, {y:e}): {tq:?} vs {want_t:?}"
@@ -1990,40 +2207,55 @@ fn binary_derivative_accuracy_over_each_domain() {
             }
         }
     }
-    eprintln!(
-        "hypot: worst {wh:.2} u (bound 6), DD {hdd:.1} u²; atan2: worst {wa:.2} u (bound 7), DD {add:.1} u²"
-    );
+    eprintln!("hypot: {wh}, DD {hdd:.1} u²; atan2: {wa}, DD {add:.1} u²");
 
-    let (mut lx, mut lb) = (0.0_f64, 0.0_f64);
-    for _ in 0..20_000 {
-        let x = r.pow2(-100, 100);
-        let b = loop {
-            let b = r.pow2(-10, 10);
-            if (b - 1.0).abs() > two_pow(-10) {
-                break b;
+    // log(x, b): ∂/∂x = (1/ln b)/x and ∂/∂b = −(q·(1/ln b))/b with q = ln x/ln b, so the bounds
+    // are ln b's error plus 2u, and ln x's error, twice ln b's, plus 4u. Bases include
+    // subnormal ones, and x = 1.
+    let (mut lx, mut lb) = (Worst::default(), Worst::default());
+    let (mut lx_dd, mut lb_dd) = (0.0_f64, 0.0_f64);
+    for i in 0..20_000 {
+        let x = if i % 16 == 0 { 1.0 } else { r.pow2(-100, 100) };
+        let b = if i % 8 == 1 {
+            r.pow2(-1074, -1000)
+        } else {
+            loop {
+                let b = r.pow2(-10, 10);
+                if (b - 1.0).abs() > two_pow(-10) {
+                    break b;
+                }
             }
         };
         let [p, q] = Dual::<f64, 2>::variables([x, b]);
         let l = p.log(q);
         let (xd, bd) = (dd(x), dd(b));
         let (lnx, lnb) = (xd.ln(), bd.ln());
-        let want = [Dd::ONE / xd / lnb, -(lnx / lnb / (bd * lnb))];
-        let ex = rel_err(l.eps()[0], want[0]) / U;
-        assert!(
-            ex <= 7.0,
-            "∂/∂x log({x:e}, {b:e}) = {l:?}, expected {want:?}: {ex} u"
-        );
-        lx = lx.max(ex);
-        if normal(want[1]) {
-            let eb = rel_err(l.eps()[1], want[1]) / U;
-            assert!(
-                eb <= 17.0,
-                "∂/∂b log({x:e}, {b:e}) = {l:?}, expected {want:?}: {eb} u"
+        let want = [Dd::ONE / lnb / xd, -(lnx / lnb / lnb / bd)];
+        let (elx, elb) = (ulps(x.ln(), lnx), ulps(b.ln(), lnb));
+        lx.check(rel_err(l.eps()[0], want[0]) / U, elb + 2.0, || {
+            format!("∂/∂x log({x:e}, {b:e}) = {l:?}, expected {want:?}")
+        });
+        if x == 1.0 {
+            assert_eq!(l.eps()[1], 0.0, "∂/∂b log(1, {b:e}) = {l:?}");
+        } else if normal(want[1]) {
+            lb.check(
+                rel_err(l.eps()[1], want[1]) / U,
+                elx + 2.0 * elb + 4.0,
+                || format!("∂/∂b log({x:e}, {b:e}) = {l:?}, expected {want:?}"),
             );
-            lb = lb.max(eb);
+        }
+        let ld = Dual::<Dd, 2>::variables([xd, bd]);
+        let g = ld[0].log(ld[1]);
+        lx_dd = lx_dd.max(((g.eps()[0] - want[0]) / want[0]).abs().hi() / U2);
+        if x != 1.0 && want[1].abs().hi() <= two_pow(1000) {
+            lb_dd = lb_dd.max(((g.eps()[1] - want[1]) / want[1]).abs().hi() / U2);
         }
     }
-    eprintln!("log(x, b): ∂/∂x worst {lx:.2} u (bound 7), ∂/∂b {lb:.2} u (bound 17)");
+    assert!(
+        lx_dd <= 1024.0 && lb_dd <= 1024.0,
+        "DD log: {lx_dd} u², {lb_dd} u²"
+    );
+    eprintln!("log(x, b): ∂/∂x {lx}, ∂/∂b {lb}; DD {lx_dd:.1} and {lb_dd:.1} u²");
 }
 
 // ---- Complex<Dual> ------------------------------------------------------------------------------
@@ -2197,8 +2429,12 @@ fn complex_of_dual_norm_and_quotient() {
             worst = worst.max(err);
         }
     }
-    // At the origin |z| has no derivative: hypot's zero derivatives.
+    // At the origin |z| has no derivative: hypot's zero derivatives. So the real part of ln z,
+    // ln|z|, gets zero derivatives there silently, while atan2's NaN flags the imaginary part.
     assert_eq!(seeded(0.0, 0.0).norm().eps(), &[0.0, 0.0]);
+    let l = seeded(0.0, 0.0).ln();
+    assert_eq!((l.re.re(), l.re.eps()), (f64::NEG_INFINITY, &[0.0, 0.0]));
+    assert!(l.im.eps()[0].is_nan() && l.im.eps()[1].is_nan(), "{l:?}");
     // z/w with all four parts seeded: ∂/∂z = 1/w and ∂/∂w = −z/w².
     for ((a, b), (c, d)) in [
         ((1.0, 2.0), (3.0, -1.0)),
@@ -2616,11 +2852,9 @@ proptest! {
 
     #[test]
     fn unary_derivatives_are_nan_only_with_nan_values(x in any_f64()) {
-        // Inside the closed domain every derivative is finite or a signed infinity. Exceptions
-        // by design: (−2)^y is real only at integers y and has no derivative in y; and a base of
-        // ±0 is no base: log(3, ±0) = −0 by IEEE rules, and the quotient rule for
-        // ln 3/ln b meets ∞·0 there.
-        let excepted = |name: &str| name == "(-2)^x" || (name == "log(3, x)" && x == 0.0);
+        // Inside the closed domain every derivative is finite or a signed infinity. The
+        // exception, by design: (−2)^y is real only at integers y and has no derivative in y.
+        let excepted = |name: &str| name == "(-2)^x";
         for (name, d, _) in unary_methods::<f64, 1>().into_iter().filter(|m| !excepted(m.0)) {
             let r = d(F1::new(x, [1.0]));
             prop_assert!(r.re().is_nan() || !r.eps()[0].is_nan(), "{name}({x:?}) = {r:?}");
@@ -2635,26 +2869,140 @@ proptest! {
     fn binary_derivatives_of_finite_arguments_are_never_nan_without_reason(
         x in finite_f64(), y in finite_f64(), dx in -1.0..1.0f64, dy in -1.0..1.0f64,
     ) {
-        let (a, b) = (F3::new(x, [dx, 0.0, 0.0]), F3::new(y, [0.0, dy, 0.0]));
-        let not_nan = |r: F3, i: usize| r.re().is_nan() || !r.eps()[i].is_nan();
-        let p = a.powf(b);
-        // (negative x)^y has no derivative in y.
-        prop_assert!(not_nan(p, 0) && (x < 0.0 || not_nan(p, 1)), "{x:?}^{y:?} = {p:?}");
-        let h = a.hypot(b);
-        prop_assert!(!h.eps()[0].is_nan() && !h.eps()[1].is_nan(), "hypot({x:?}, {y:?}) = {h:?}");
-        // atan2 jumps at the origin.
-        let t = a.atan2(b);
-        prop_assert!((x == 0.0 && y == 0.0) || (not_nan(t, 0) && not_nan(t, 1)), "atan2({x:?}, {y:?}) = {t:?}");
-        let m = a.mul_add(b, a);
-        prop_assert!(not_nan(m, 0) && not_nan(m, 1), "mul_add({x:?}, {y:?}) = {m:?}");
-        if x > 0.0 && y > 0.0 && y != 1.0 {
-            let l = a.log(b);
-            prop_assert!(not_nan(l, 0) && not_nan(l, 1), "log({x:?}, {y:?}) = {l:?}");
-        }
-        for r in [p, h, t, m] {
-            prop_assert_eq!(r.eps()[2], 0.0);
+        binary_derivatives_not_nan(x, y, dx, dy)?;
+    }
+}
+
+/// For finite arguments, the binary methods' derivatives are NaN only with a NaN value or where
+/// documented: ∂/∂y of (negative x)^y, and atan2 at the origin.
+fn binary_derivatives_not_nan(x: f64, y: f64, dx: f64, dy: f64) -> Result<(), TestCaseError> {
+    let (a, b) = (F3::new(x, [dx, 0.0, 0.0]), F3::new(y, [0.0, dy, 0.0]));
+    let not_nan = |r: F3, i: usize| r.re().is_nan() || !r.eps()[i].is_nan();
+    let p = a.powf(b);
+    prop_assert!(
+        not_nan(p, 0) && (x < 0.0 || not_nan(p, 1)),
+        "{x:?}^{y:?} = {p:?}"
+    );
+    let h = a.hypot(b);
+    prop_assert!(
+        !h.eps()[0].is_nan() && !h.eps()[1].is_nan(),
+        "hypot({x:?}, {y:?}) = {h:?}"
+    );
+    let t = a.atan2(b);
+    prop_assert!(
+        (x == 0.0 && y == 0.0) || (not_nan(t, 0) && not_nan(t, 1)),
+        "atan2({x:?}, {y:?}) = {t:?}"
+    );
+    let m = a.mul_add(b, a);
+    prop_assert!(
+        not_nan(m, 0) && not_nan(m, 1),
+        "mul_add({x:?}, {y:?}) = {m:?}"
+    );
+    // Bases of ±0 included: there ∂/∂b is ∓∞ (or 0 for x = 1).
+    let l = a.log(b);
+    if x > 0.0 && y >= 0.0 && y != 1.0 {
+        prop_assert!(not_nan(l, 0) && not_nan(l, 1), "log({x:?}, {y:?}) = {l:?}");
+    }
+    for r in [p, h, t, m, l] {
+        prop_assert_eq!(r.eps()[2], 0.0);
+    }
+    Ok(())
+}
+
+#[test]
+fn binary_derivatives_not_nan_regressions() {
+    // From review: log(1, 1e-310) with b′ ≠ 0 gave a NaN base derivative (ln b′ = b′/b = ∞ times
+    // q = −0 in the quotient rule); the property test hit it in about 30% of runs.
+    for (x, y, dx, dy) in [
+        (1.0, 1e-310, 0.5, -0.25),
+        (1.0, 5e-324, 1.0, 1.0),
+        (2.0, 1e-310, 1.0, 1.0),
+        (3.0, 0.0, 1.0, 1.0),
+        (1.0, -0.0, 1.0, 1.0),
+        (1e-310, 1e-5, 1.0, 1.0),
+        (1.7095658693702122e-179, 1.729741227387335, 1.0, 1.0),
+    ] {
+        binary_derivatives_not_nan(x, y, dx, dy).unwrap();
+    }
+}
+
+#[test]
+fn log_derivatives_at_the_edges_of_the_base() {
+    let inf = f64::INFINITY;
+    // log(1, b) is 0 for every base: ∂/∂b = 0, also for subnormal and zero bases.
+    for b in [1e-310, 5e-324, 0.0, -0.0, 0.5, 3.0, f64::INFINITY] {
+        let [x, q] = Dual::<f64, 2>::variables([1.0, b]);
+        let l = x.log(q);
+        assert!(same(l.re(), 1f64.log(b)), "log(1, {b:e}) = {l:?}");
+        assert_eq!(l.eps()[1], 0.0, "log(1, {b:e}) = {l:?}");
+    }
+    // Subnormal bases: ∂/∂b = −ln x/(b ln²b), up to about 1e307 (the quotient rule overflowed to
+    // ±∞), and +∞ where that overflows.
+    let l = Dual::<f64, 2>::new(0.3, [1.0, 0.0]).log(Dual::new(5e-324, [0.0, 1.0]));
+    assert_eq!(l.eps()[1], inf, "{l:?}");
+    for (x, b) in [
+        (2.0, 1e-310),
+        (0.3, 2e-310),
+        (1.5, 1e-312),
+        (1e-300, 1e-310),
+    ] {
+        let [p, q] = Dual::<f64, 2>::variables([x, b]);
+        let l = p.log(q);
+        let (xd, bd) = (Dd::from_f64(x), Dd::from_f64(b));
+        let (lnx, lnb) = (xd.ln(), bd.ln());
+        let want = [Dd::ONE / lnb / xd, -(lnx / lnb / lnb / bd)];
+        let bounds = [
+            ulps(b.ln(), lnb) + 2.0,
+            ulps(x.ln(), lnx) + 2.0 * ulps(b.ln(), lnb) + 4.0,
+        ];
+        for k in 0..2 {
+            assert!(
+                rel_err(l.eps()[k], want[k]) / U <= bounds[k],
+                "log({x:e}, {b:e}) = {l:?}"
+            );
         }
     }
+    // Base ±0: the limits of −ln x/(b ln²b) as b → 0+, and ∂/∂x = 1/(x ln b) → 0.
+    for (x, want) in [(3.0, -inf), (0.5, inf), (1.0, 0.0)] {
+        for b in [0.0, -0.0] {
+            let [p, q] = Dual::<f64, 2>::variables([x, b]);
+            let l = p.log(q);
+            assert!(same(l.re(), x.log(b)));
+            assert_eq!(l.eps(), &[0.0, want], "log({x}, {b:?}) = {l:?}");
+        }
+    }
+    // Base 1 (ln b = 0) and x at the ends of its domain: the IEEE 754 limits.
+    for (x, b, want) in [
+        (2.0, 1.0, [inf, -inf]),
+        (0.5, 1.0, [inf, inf]), // ln 1 = +0
+        (0.0, 3.0, [inf, inf]),
+        (inf, 3.0, [0.0, -inf]),
+        (inf, 0.5, [0.0, -inf]),
+        (3.0, inf, [0.0, 0.0]),
+    ] {
+        let [p, q] = Dual::<f64, 2>::variables([x, b]);
+        let l = p.log(q);
+        assert!(same(l.re(), x.log(b)));
+        assert_eq!(l.eps(), &want, "log({x}, {b}) = {l:?}");
+    }
+    // Outside the domain, NaN.
+    for (x, b) in [(-1.0, 3.0), (3.0, -2.0), (1.0, 1.0), (0.0, 0.0)] {
+        let [p, q] = Dual::<f64, 2>::variables([x, b]);
+        let l = p.log(q);
+        assert!(
+            l.re().is_nan() && l.eps()[0].is_nan() && l.eps()[1].is_nan(),
+            "log({x}, {b}) = {l:?}"
+        );
+    }
+    // In double-double, without the quotient rule's 1/x: full precision for x near 2^960.
+    let (x, b) = (Dd::from_f64(1.5 * two_pow(960)), Dd::from_f64(7.0));
+    let [p, q] = Dual::<Dd, 2>::variables([x, b]);
+    let l = p.log(q);
+    let want = Dd::ONE / b.ln() / x;
+    assert!(
+        ((l.eps()[0] - want) / want).abs().hi() <= 32.0 * U2,
+        "{l:?} vs {want:?}"
+    );
 }
 
 #[test]
@@ -2686,7 +3034,78 @@ fn nested_duals_give_second_derivatives() {
             "{name}″({x}) = {got}, expected {want}"
         );
     }
+    // At either zero, the first derivatives of ln, sqrt, log2 and log10 are +∞ and carry the
+    // inner derivatives of the limit from the right, so the second derivatives are −∞ (a
+    // constant +∞ would make them 0).
+    let inf = f64::INFINITY;
+    type Named = (&'static str, fn(Out) -> Out);
+    let at_zero: [Named; 4] = [
+        ("ln", |v| v.ln()),
+        ("sqrt", |v| v.sqrt()),
+        ("log2", |v| v.log2()),
+        ("log10", |v| v.log10()),
+    ];
+    for z in [0.0, -0.0] {
+        for (name, f) in at_zero {
+            let r = f(Out::new(In::new(z, [1.0]), [In::new(1.0, [0.0])]));
+            assert_eq!(
+                (r.eps()[0].re(), second(r)),
+                (inf, -inf),
+                "{name}″({z:?}): {r:?}"
+            );
+        }
+    }
+    // For f64 and DoubleDouble these derivatives are exactly +∞ (both words for DoubleDouble).
+    for z in [0.0, -0.0] {
+        for name in ["ln", "sqrt", "log2", "log10"] {
+            let d = unary_methods::<Dd, 1>()
+                .into_iter()
+                .find(|m| m.0 == name)
+                .unwrap()
+                .1;
+            let r = d(Dual::new(Dd::from_f64(z), [Dd::ONE]));
+            assert!(same_dd(r.eps()[0], Dd::INFINITY), "{name}′({z:?}) = {r:?}");
+            let d = unary_methods::<f64, 1>()
+                .into_iter()
+                .find(|m| m.0 == name)
+                .unwrap()
+                .1;
+            assert!(same(d(F1::new(z, [1.0])).eps()[0], inf), "{name}′({z:?})");
+        }
+    }
     // Strong zeros nest: an unseeded outer direction stays zero at a singular point.
     let r = Out::new(In::new(0.0, [1.0]), [In::new(0.0, [0.0])]).sqrt();
     assert_eq!((r.eps()[0].re(), r.eps()[0].eps()[0]), (0.0, 0.0));
+}
+
+#[test]
+fn mul_add_and_abs_sub_follow_the_arithmetic_rules_with_nan() {
+    // mul_add differentiates as x·a + b and abs_sub (where x > y fails, or a value is NaN) as
+    // x − y: a NaN value makes a derivative NaN only through a product, as for `*` and `+`.
+    let nan = f64::NAN;
+    let cases = [
+        ([2.0, 3.0, nan], "NaN addend"),
+        ([nan, 3.0, 1.0], "NaN factor"),
+        ([2.0, f64::INFINITY, 1.0], "infinite factor"),
+    ];
+    for (v, what) in cases {
+        let [x, a, b] = F3::variables(v);
+        let (fused, plain) = (x.mul_add(a, b), x * a + b);
+        for k in 0..3 {
+            assert!(
+                same_derivative(fused.eps()[k], plain.eps()[k]),
+                "{what}: {fused:?} vs {plain:?}"
+            );
+        }
+    }
+    let [x, a, b] = F3::variables([2.0, 3.0, nan]);
+    assert_eq!(x.mul_add(a, b).eps(), &[3.0, 2.0, 1.0]);
+    for (p, q) in [(nan, 1.0), (1.0, nan), (3.0, 1.0)] {
+        let [x, y, _] = F3::variables([p, q, 0.0]);
+        let r = x.abs_sub(y);
+        assert!(same(r.re(), Float::abs_sub(p, q)));
+        assert_eq!(r.eps(), (x - y).eps(), "abs_sub({p}, {q})");
+    }
+    let [x, y, _] = F3::variables([1.0, 3.0, 0.0]);
+    assert_eq!(x.abs_sub(y).eps(), &[0.0; 3]);
 }

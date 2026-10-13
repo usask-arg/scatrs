@@ -32,4 +32,4 @@ def test_public_names():
 
 def test_limits_are_exposed():
     assert special.MAX_GAUSS_LEGENDRE_POINTS == _scatrs.MAX_GAUSS_LEGENDRE_POINTS == 2**17
-    assert special.MAX_WIGNER_D_VALUES == _scatrs.MAX_WIGNER_D_VALUES == 2**31
+    assert special.MAX_WIGNER_D_VALUES == _scatrs.MAX_WIGNER_D_VALUES == 2**28

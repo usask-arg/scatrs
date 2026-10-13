@@ -21,10 +21,11 @@ MAX_GAUSS_LEGENDRE_POINTS: Final[int] = _scatrs.MAX_GAUSS_LEGENDRE_POINTS
 """The largest ``n`` that :func:`gauss_legendre` accepts: ``2**17 = 131072``."""
 
 MAX_WIGNER_D_VALUES: Final[int] = _scatrs.MAX_WIGNER_D_VALUES
-"""The most values one :func:`wigner_d` call returns: ``2**31``, 16 GiB of float64.
+"""The most values one :func:`wigner_d` call returns: ``2**28``, 2 GiB of float64.
 
 The bound applies to ``max(x.size, 1) * (l_max + 1)``, so ``l_max`` is bounded even for an
-empty ``x``.
+empty ``x``. It keeps a request from being accepted by an overcommitting allocator and then
+killed for lack of memory; it may be raised in a later release.
 """
 
 _INT32_MIN: Final = -(2**31)
@@ -116,7 +117,7 @@ def wigner_d(
     ------
     InvalidInputError
         If ``l_max < 0``, if an element of ``x`` is NaN or outside [-1, 1], or if
-        ``max(x.size, 1) * (l_max + 1) > MAX_WIGNER_D_VALUES`` (``2**31``).
+        ``max(x.size, 1) * (l_max + 1) > MAX_WIGNER_D_VALUES`` (``2**28``).
     TypeError
         If ``m``, ``n`` or ``l_max`` is not an integer (``float`` and ``bool`` values are
         rejected), or if ``x`` is not real: complex, boolean, string, object, datetime or

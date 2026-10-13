@@ -39,7 +39,8 @@ pub fn to_pyerr(py: Python<'_>, err: scatrs::Error) -> PyErr {
     })
 }
 
-/// Raises the exception that the core error `variant` maps to (testing hook for `to_pyerr`).
+/// For tests only: raises the exception that the core error `variant` maps to, to test
+/// `to_pyerr`. Not part of the scatrs API.
 ///
 /// `variant` is `"InvalidInput"`, `"NotConverged"` or `"OutsideValidatedDomain"`; `message` is
 /// the payload of the string variants, and `achieved`/`requested` that of `NotConverged`.

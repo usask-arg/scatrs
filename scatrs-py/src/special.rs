@@ -7,13 +7,15 @@ use pyo3::prelude::*;
 
 use crate::errors::to_pyerr;
 
-/// The most values one `wigner_d` call returns: 2³¹, 16 GiB of `f64`.
+/// The most values one `wigner_d` call returns: 2²⁸, 2 GiB of `f64`.
 ///
 /// The bound is on max(len(x), 1)·(l_max + 1), so `l_max` is bounded even for an empty `x`.
 /// Larger requests raise `InvalidInputError` rather than attempt the allocation, since on
 /// systems that overcommit memory an allocation can succeed and the process then be killed
 /// when the values are written.
-pub const MAX_WIGNER_D_VALUES: usize = 1 << 31;
+///
+/// Raising the bound later is not a breaking change; large projections belong in Rust.
+pub const MAX_WIGNER_D_VALUES: usize = 1 << 28;
 
 /// Nodes and weights of a Gauss–Legendre rule.
 type Rule<'py> = (Bound<'py, PyArray1<f64>>, Bound<'py, PyArray1<f64>>);

@@ -93,6 +93,7 @@ def test_unknown_core_error_variant_is_rejected():
 # --- Robustness: integer arguments -------------------------------------------------------------
 
 CAP = special.MAX_GAUSS_LEGENDRE_POINTS
+VALUES = special.MAX_WIGNER_D_VALUES  # 2²⁸
 
 
 @pytest.mark.parametrize("n", [0, -1, -(2**70), CAP + 1, 2**63, 2**64, 2**200])
@@ -130,11 +131,12 @@ def test_wigner_d_orders_beyond_32_bits_are_overflow_errors(name, bad):
     [
         (-1, 0.5),
         (-(2**70), 0.5),
-        (2**31, 0.5),  # one row of 2³¹ + 1 values
+        (VALUES, 0.5),  # one row of 2²⁸ + 1 values
+        (2**31, 0.5),
         (2**70, 0.5),
-        (2**31, []),  # bounded even when x is empty
-        (2**30, [0.1, 0.2]),  # 2·(2³⁰ + 1) values
-        (2**20, np.zeros(2**11)),  # 2¹¹·(2²⁰ + 1) values
+        (VALUES, []),  # bounded even when x is empty
+        (VALUES // 2, [0.1, 0.2]),  # 2·(2²⁷ + 1) values
+        (VALUES // 2**11, np.zeros(2**11)),  # 2¹¹·(2¹⁷ + 1) values
     ],
 )
 def test_wigner_d_l_max_and_output_size_are_bounded(l_max, x):
@@ -143,11 +145,11 @@ def test_wigner_d_l_max_and_output_size_are_bounded(l_max, x):
 
 
 def test_wigner_d_size_bound_is_inclusive():
-    # max(len(x), 1)·(l_max + 1) == 2³¹ is accepted; with x empty this costs nothing.
-    assert special.wigner_d(0, 0, 2**31 - 1, []).shape == (0, 2**31)
-    assert _scatrs.wigner_d(0, 0, 2**31 - 1, np.zeros(0)).shape == (0, 2**31)
-    with pytest.raises(scatrs.InvalidInputError, match="<= 2147483648"):
-        special.wigner_d(0, 0, 2**31, [])
+    # max(len(x), 1)·(l_max + 1) == 2²⁸ is accepted; with x empty this costs nothing.
+    assert special.wigner_d(0, 0, VALUES - 1, []).shape == (0, VALUES)
+    assert _scatrs.wigner_d(0, 0, VALUES - 1, np.zeros(0)).shape == (0, VALUES)
+    with pytest.raises(scatrs.InvalidInputError, match=f"<= {VALUES}, got x.size = 0"):
+        special.wigner_d(0, 0, VALUES, [])
 
 
 # --- Robustness: x ------------------------------------------------------------------------------
@@ -206,10 +208,10 @@ def test_extension_checks_limits_itself():
         _scatrs.gauss_legendre(CAP + 1)
     with pytest.raises(scatrs.InvalidInputError):
         _scatrs.gauss_legendre(0)
-    with pytest.raises(scatrs.InvalidInputError, match="2147483648"):
-        _scatrs.wigner_d(0, 0, 2**31, np.zeros(0))
-    with pytest.raises(scatrs.InvalidInputError, match="2147483648"):
-        _scatrs.wigner_d(0, 0, 2**30, np.zeros(3))
+    with pytest.raises(scatrs.InvalidInputError, match=f"<= {VALUES}, got x.size = 0"):
+        _scatrs.wigner_d(0, 0, VALUES, np.zeros(0))
+    with pytest.raises(scatrs.InvalidInputError, match=f"<= {VALUES}, got x.size = 3"):
+        _scatrs.wigner_d(0, 0, VALUES // 2, np.zeros(3))
     with pytest.raises(scatrs.InvalidInputError):
         _scatrs.wigner_d(0, 0, 2**64 - 1, np.zeros(1))
 

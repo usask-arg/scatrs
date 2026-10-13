@@ -1,7 +1,7 @@
 # Phase 1 design — homogeneous-sphere Mie
 
 - **Date:** 2026-10-13
-- **Status:** draft for review
+- **Status:** approved; revised during planning (section 12)
 - **Parent spec:** `docs/specs/2026-10-12-scatrs-design.md` (cited as "main spec"). This document refines main spec §5.1, §5.4, §6, §8, §9.1 and §13 row 1 for phase 1, and lists the amendments it makes (section 11).
 - **Inputs:** `docs/plans/phase-0-followups.md`, especially "Phase 1 plan must include".
 
@@ -11,7 +11,7 @@ Phase 1 is about as large as phase 0, so it is delivered as two plans, each with
 
 ### 1.1 Phase 1a — Mie kernel and validation
 
-- scatrs-owned complex division and reciprocal (section 2.8).
+- A scatrs-owned complex reciprocal (section 2.8).
 - Log-derivative and Riccati–Bessel machinery (sections 2.3–2.4).
 - Mie coefficients aₙ, bₙ with closed-form derivatives ∂/∂x and ∂/∂m.
 - Efficiencies Q_ext, Q_sca, Q_abs, Q_back and asymmetry parameter g, with Jacobians.
@@ -35,7 +35,7 @@ Outlined in section 9. It gets a short design update before its plan is written.
 
 | Item | Reason / where it goes |
 |---|---|
-| Kahan `csqrt`, `ln` near 1 | Mie never needs them. Added when layered spheres or the T-matrix do. |
+| Kahan `csqrt`, `ln` near 1, complex division | Mie needs only a reciprocal. The others are added when layered spheres or the T-matrix need them. |
 | Derivative strategy trait (main spec §4.3) | Its first consumer is the ensemble layer: phase 2. Phase 1 has analytic Jacobian entry points, plus generic kernels that also run on `Dual`. |
 | `DoubleDouble`/`Dual` in Python | No user need yet. They are used inside Rust: DD for accuracy maps, `Dual` as the derivative oracle. |
 | x86_64 no-FMA decision | Before the first public release. The f64 Mie path does not use DD. The only DD-heavy step left, the Gauss–Legendre rule, moves to an O(n) f64 method in 1b. |
@@ -57,16 +57,18 @@ Bohren & Huffman conventions throughout:
 
 ### 2.2 Truncation
 
-- **Default:** N = ⌈x + 4.05 x^⅓ + 2⌉. `n_max` overrides it.
+- **Default:** N = ⌈x + 6x^⅓ + 3⌉ in `f64`, ⌈x + 12x^⅓ + 6⌉ in `DoubleDouble`. `n_max` overrides it. Wiscombe's ⌈x + 4.05x^⅓ + 2⌉ left truncation errors up to 10⁻¹⁰ in Q_ext and 10⁻⁶ in Q_back against Arb; the new constants were chosen from the same measurements.
 - **Contract.** The accuracy contract holds only for `n_max ≥ N`. A smaller `n_max` is outside the validated domain, so it raises `OutsideValidatedDomain` unless the caller sets `allow_unvalidated`.
 - **Upper cap.** `n_max ≤ MAX_MIE_ORDER` = 2²⁰, bounding workspace memory to about 200 MB. Larger values raise `InvalidInput`.
+- **Accepted inputs.** x ∈ [10⁻³⁰, 10⁶] and |m| ∈ [10⁻⁶, 10³], Re m ≥ 0, Im m ≥ 0. Outside, `InvalidInput`; inside, every output is finite (a property test checks this).
 - **Known limitation, documented on the limitations page with a worked case.** Spheres with Re m > 1 and small Im m have whispering-gallery resonances at orders x < n < Re(m)·x. Resonances above N are exponentially narrow, so the truncation misses them only for x within a tiny window. The rule is therefore validated by the accuracy maps, not proven. `n_max` lets a user include such resonances.
 
 ### 2.3 Log-derivatives
 
-- **Dₙ(mx).** Downward recurrence Dₙ₋₁ = n/z − 1/(Dₙ + n/z), seeded at n = N by Lentz's continued fraction.
-  - The continued fraction has an iteration cap; if it is reached the result is `NotConverged`.
+- **Dₙ(mx).** Downward recurrence of uₖ = ψₖ/ψₖ₋₁ = 1/((2k + 1)/z − uₖ₊₁), with Dₙ = (n + 1)/z − uₙ₊₁, started from uₖ₊₁ = 0 at k = max(N + 1, ⌈1.5|z|⌉) plus a margin of half the type's bits. Above 1.5|z| each step contracts errors at least 6.25-fold (section 2.3 of the theory chapter), so the start is forgotten to rounding level.
+  - No continued fraction is evaluated, so there is no convergence test and no `NotConverged`.
   - Downward recurrence is always used. Wiscombe's upward option only saves the seed cost and needs its own stability criterion. The 1b benchmarks may reinstate it as an optimisation, but correctness never depends on it.
+  - For real m the real recurrence is used: twice as fast, and for m = 1 it reproduces uₖ(x) bit for bit.
 - **Dₙ(x)** for real x, by the same method in real arithmetic. It is needed only for n > x, where it has no poles (section 2.4).
 
 ### 2.4 ψₙ and ξₙ: a hybrid scheme
@@ -81,8 +83,9 @@ The baseline's upward ψ recurrence starts with ψ₁ = sin x/x − cos x. That 
   - ψₙ₋₁/ψₙ = Dₙ(x) + n/x, which is positive and finite because ψₙ(x) has no zeros for n > x.
   - Tₙ = ψₙ/ξₙ = Tₙ₋₁ Rₙ / (Dₙ(x) + n/x).
   - 1/ξₙ = Rₙ/ξₙ₋₁.
-  - aₙ = Tₙ (Dₙ(z)/m − Dₙ(x)) / (Dₙ(z)/m + n/x − Rₙ).
-  - bₙ = Tₙ (mDₙ(z) − Dₙ(x)) / (mDₙ(z) + n/x − Rₙ).
+  - aₙ = Tₙ Nₐ / (Dₙ(z)/m + n/x − Rₙ), with Nₐ = (n + 1)(1/m² − 1)/x + uₙ₊₁(x) − uₙ₊₁(z)/m.
+  - bₙ = Tₙ N_b / (mDₙ(z) + n/x − Rₙ), with N_b = uₙ₊₁(x) − m uₙ₊₁(z).
+  - Nₐ and N_b equal Dₙ(z)/m − Dₙ(x) and mDₙ(z) − Dₙ(x) with the cancelling n/x terms removed exactly; without this, bₙ lost all its digits at x = 10⁻⁶.
   - Tₙ and 1/ξₙ underflow gracefully to zero, so no `n_max` can overflow or produce NaN.
 - **Switch point.** nₛ = ⌊x⌋ is the starting value; the accuracy maps tune it.
 - **Small-particle expansion.** Dropped: the ratio form is exact at every x. Main spec §5.1 kept each baseline element only if the maps confirm it, so this change must be confirmed by them too.
@@ -101,7 +104,7 @@ So Q_abs = (2/x²) Σ (2n+1) [−Im(Dₙ/m)/|Δₐ|² − Im(mDₙ)/|Δ_b|²].
 
 - Each term is computed directly and is exactly zero when Im m = 0.
 - In the ratio region, |Δ|² = |ξₙ|² · |…|², computed through 1/ξₙ.
-- Q_ext and Q_sca keep their usual sums. Q_ext = Q_sca + Q_abs becomes an invariant test.
+- Q_sca keeps its usual sum, and **Q_ext = Q_sca + Q_abs**. The usual Q_ext sum of Re(aₙ + bₙ) is inaccurate for small non-absorbing spheres, where Re aₙ = |aₙ|² ≪ |aₙ| (relative error 1 at x = 10⁻⁶). The optical theorem becomes the invariant test.
 - The identity was checked against Arb at four (n, x, m) points during design; the agreement was 10⁻⁵⁶ or better.
 
 ### 2.6 Other outputs
@@ -127,7 +130,7 @@ Let D = Dₙ(z) and D′ = n(n+1)/z² − 1 − D². Then:
 - **Cost.** Each derivative costs about one complex multiply on top of quantities already computed, so the full Jacobian should cost well under the 2× target.
 - **Holomorphy.** aₙ and bₙ are holomorphic in m, so ∂/∂(Re m) = d/dm and ∂/∂(Im m) = i·d/dm. Complex outputs (coefficients, S₁, S₂) store d/dx and d/dm. Real outputs (efficiencies, g) store ∂/∂x, ∂/∂Re m and ∂/∂Im m.
 - **Real outputs.** Their Jacobians follow by the chain rule. Q_abs is differentiated through its direct formula, using dDₙ/dz = D′ and dΔ/dp built from the same quantities.
-- **Known weak spot.** D′ has a cancellation in −1 − D² when Im z ≫ 1, because then D → −i. The maps decide whether D′ needs a differentiated recurrence instead.
+- **Small z.** D + zD′ = O(z) while D ≈ (n + 1)/z, so the closed form cancels catastrophically. It is evaluated as (2n + 1)uₙ₊₁ − z(1 + uₙ₊₁²), with D′ = (n + 1)(2uₙ₊₁/z − 1/z²) − (1 + uₙ₊₁²) and D − zD′ = 2D − (D + zD′).
 - **Radius.** The low-level API differentiates with respect to x; users apply ∂x/∂r = 2π/λ.
 
 ### 2.8 Scalars and complex arithmetic
@@ -136,14 +139,13 @@ Let D = Dₙ(z) and D′ = n(n+1)/z² − 1 − D². Then:
   - `f64` is the production type;
   - `DoubleDouble` drives the dense accuracy maps;
   - `Dual<T, N>` is the derivative oracle.
-- **Complex division and reciprocal.** scatrs-owned Baudin–Smith versions replace num-complex's in the recurrences and the Lentz iteration. They are componentwise robust and do not overflow or underflow for |w| near the range limits; this also fixes the DD hazard (b) in the follow-ups. They are validated against Arb.
+- **Complex reciprocal.** A scatrs-owned Smith reciprocal replaces num-complex's in the recurrences. It does not overflow or underflow for |w| near the range limits, which also fixes the DD hazard (b) in the follow-ups, and is validated against Arb.
 
 ### 2.9 Input rules
 
 | Error | When |
 |---|---|
-| `InvalidInput` | x not finite or ≤ 0; m not finite; Im m < 0; m = 0; `n_max` = 0 or > `MAX_MIE_ORDER`; μ NaN or outside [−1, 1] |
-| `NotConverged` | the Lentz continued fraction exceeds its iteration cap |
+| `InvalidInput` | x outside [10⁻³⁰, 10⁶]; m not finite; Re m < 0 or Im m < 0; \|m\| outside [10⁻⁶, 10³]; `n_max` = 0 or > `MAX_MIE_ORDER`; μ NaN or outside [−1, 1]; buffer lengths that differ from the cosines |
 | `OutsideValidatedDomain` | valid inputs outside the declared domain, or `n_max` < N, unless `allow_unvalidated` is set |
 
 ## 3. Rust API (`scatrs::mie`)
@@ -352,3 +354,45 @@ These are certified only where the generator sums to N_ref ≥ n₀(x, m) and a 
 - **§8.1:** coefficients are certified directly; series outputs need the tail bound, with N_ref ≥ n₀(x, m).
 - **§9.3:** add `InvalidInputError`, and replace `PyReadonlyArray` parameters with `Bound<PyArray…>` + `try_readonly()`.
 - **§13:** phase 1 is split into 1a and 1b, with the exit criteria of section 1.
+
+## 12. Decisions made while planning (2026-10-13)
+
+The plan's code was prototyped and measured before the plan was written. These results changed
+the design above, or settle what it left open:
+
+- **Truncation** constants (section 2.2): measured against Arb.
+- **No continued fraction** (section 2.3): the downward recurrence from a contracting start is
+  simpler, as cheap, and cannot fail.
+- **Cancellation-free numerators and D + zD′** (sections 2.4 and 2.7), and
+  **Q_ext = Q_sca + Q_abs** (section 2.5): found by the reference comparisons.
+- **Accuracy model** (section 5). A tolerance C·κ·2⁻⁵² fails for weakly absorbing and lossless
+  spheres, whose resonances are arbitrarily sharp: on a dense grid the needed C reached 360 for
+  the coefficients and 7600 for the efficiency Jacobian, and grew as the grid was refined. A
+  tolerance from the output's own condition number fails for metallic backscattering, whose
+  alternating series cancels (C ≈ 6600). The declared tolerance is C·(κ′ + cond)·2⁻⁵², with
+  cond the relative condition number of the output in its error measure; every output then
+  stays within a small C (≤ 10 for values, ≤ 60 for derivatives). Declared constants: 16
+  (coefficients, efficiencies, g), 64 (S₁, S₂), 32 (their derivatives), 128 (efficiency
+  Jacobian), 256 (coefficient derivatives).
+- **The accuracy map is a CI test** (`scatrs/tests/mie_accuracy_map.rs`, about 20 s with all
+  cores), not only a scheduled sweep: f64 against DoubleDouble on 104 × 24 points, with
+  decimal-valued size parameters so the grid is the same on every platform.
+- **Reference generator** (section 6). Arb's Bessel functions are unusable at large orders (5 of
+  320 bits at order 2000), so the generator uses only the recurrences, seeded by the
+  unit-disk enclosure, with disk arithmetic for complex recurrences (Arb's rectangular balls
+  grew 1.5× per step). π_n, τ_n come from Arb's Legendre polynomials. The tail bound needs
+  n_ref ≥ |m|x and n_ref ≥ 1.5x; it certifies 297 of 306 series records (the rest would need
+  more than 60 000 terms). Series of derivatives are high-precision. Nine angles; the data
+  take 5.0 MB. Cases run in parallel processes (about 30 s on 10 cores).
+- **Q_abs Jacobian measure**: ∂Q_abs/∂x and ∂Q_abs/∂(Re m) of weakly absorbing spheres are
+  accurate relative to Q_ext, not Q_abs (relative error up to 4·10⁻⁹ at k = 10⁻⁸ near a
+  resonance; `Dual` gives the same values, so it is the conditioning of the computed f64
+  path). ∂Q_abs/∂(Im m) stays accurate relative to itself.
+- **Measured cost** (Apple M4 Pro): 0.54 µs at x = 0.1, 36 µs at x = 1000, 345 µs at
+  x = 10⁴; the full Jacobian costs 1.3–1.8× the values (target ≤ 2×).
+- **Python amplitude shape** is S + mu.shape (any shape of mu), and `derivatives` accepts
+  `True`, `False` or a sequence of names.
+- **Rust API names** follow the plan: output buffers are `AmplitudeBuffers { s1, s2 }` for the
+  values and for each derivative; the input limits are `MIN_SIZE_PARAMETER`,
+  `MAX_SIZE_PARAMETER`, `MIN_REFRACTIVE_INDEX`, `MAX_REFRACTIVE_INDEX` and `MAX_MIE_ORDER`;
+  `ValidatedDomain::tolerance(output, x, m, condition)` takes the condition number.

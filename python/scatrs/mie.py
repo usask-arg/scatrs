@@ -11,11 +11,14 @@ Each function runs entirely in Rust, with the GIL released, over all elements in
 names; the result's ``d`` method (for example :meth:`MieEfficiencies.d`) then returns the
 derivative with respect to one of them, in the same structure. Derivatives cost little: all
 three together take 1.3 to 1.8 times as long as the values alone.
+
+Results are frozen dataclasses of read-only arrays (copy an array to modify it); they compare
+by identity.
 """
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
 from typing import Final, SupportsIndex
 
@@ -41,19 +44,21 @@ MAX_MIE_ORDER: Final[int] = _scatrs.MAX_MIE_ORDER
 """The largest number of terms accepted: ``2**20``."""
 
 MAX_MIE_VALUES: Final[int] = _scatrs.MAX_MIE_VALUES
-"""The most complex values one call returns, counting derivatives: ``2**27`` (2 GiB)."""
+"""The most complex values one call returns, counting derivatives: ``2**27`` (2 GiB); twice as
+many real values for :func:`efficiencies`."""
 
 PARAMETERS: Final = ("x", "m_real", "m_imag")
 """The parameters ``derivatives`` may name."""
 
 
 def _parameters(derivatives: bool | Sequence[str]) -> tuple[str, ...]:
-    if derivatives is True:
-        return PARAMETERS
-    if derivatives is False:
-        return ()
-    if isinstance(derivatives, str):
-        raise TypeError("derivatives must be a bool or a sequence of parameter names")
+    if isinstance(derivatives, (bool, np.bool_)):
+        return PARAMETERS if derivatives else ()
+    if isinstance(derivatives, str) or not isinstance(derivatives, Iterable):
+        raise TypeError(
+            "derivatives must be a bool or a sequence of parameter names, "
+            f"not {type(derivatives).__name__}"
+        )
     names = tuple(derivatives)
     for name in names:
         if name not in PARAMETERS:
@@ -67,12 +72,21 @@ def _inputs(
     """``x`` and ``m`` broadcast to one shape, as fresh views for Rust (see ``scatrs._args``)."""
     xs = _args.real_array(x, "x")
     ms = _args.complex_array(m, "m")
+    # broadcast_arrays returns an input of the broadcast shape as it is: take views.
     xb, mb = np.broadcast_arrays(xs, ms)
-    return xb, mb, xb.shape
+    return xb.view(), mb.view(), xb.shape
 
 
 def _n_max(n_max: SupportsIndex | None) -> int | None:
     return None if n_max is None else _args.size(n_max, "n_max")
+
+
+def _freeze(*arrays: object) -> None:
+    """Makes the arrays read-only (numpy scalars, which ``d`` gives for scalar inputs, already
+    are)."""
+    for a in arrays:
+        if isinstance(a, np.ndarray):
+            a.flags.writeable = False
 
 
 def _check(params: tuple[str, ...], param: str) -> None:
@@ -92,12 +106,20 @@ def default_n_max(x: ArrayLike) -> NDArray[np.int64]:
     -------
     numpy.ndarray
         int64, the shape of ``x``.
+
+    Raises
+    ------
+    InvalidInputError
+        For ``x`` outside ``[1e-30, 1e6]`` (or NaN); the message names the first failing
+        element (in C order).
+    TypeError
+        For non-real ``x``.
     """
     xs = _args.real_array(x, "x")
     return _scatrs.mie_default_n_max(xs.reshape(xs.shape)).astype(np.int64).reshape(xs.shape)
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, eq=False)
 class MieEfficiencies:
     """Efficiencies and asymmetry parameter of spheres, each an array of shape ``S``.
 
@@ -121,6 +143,9 @@ class MieEfficiencies:
     params: tuple[str, ...] = ()
     _jacobian: NDArray[np.float64] | None = field(default=None, repr=False)
 
+    def __post_init__(self) -> None:
+        _freeze(self.q_ext, self.q_sca, self.q_abs, self.q_back, self.g, self._jacobian)
+
     def d(self, param: str) -> MieEfficiencies:
         """The derivatives with respect to ``param`` (``"x"``, ``"m_real"`` or ``"m_imag"``).
 
@@ -137,7 +162,7 @@ class MieEfficiencies:
         return MieEfficiencies(*rows)
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, eq=False)
 class MieCoefficients:
     """Mie coefficients aₙ, bₙ of spheres, arrays of shape ``S + (N,)``, with ``N`` the largest
     number of terms of any sphere; ``a[..., n - 1]`` is aₙ, zero beyond each sphere's
@@ -159,6 +184,9 @@ class MieCoefficients:
     params: tuple[str, ...] = ()
     _derivatives: NDArray[np.complex128] | None = field(default=None, repr=False)
 
+    def __post_init__(self) -> None:
+        _freeze(self.a, self.b, self.n_terms, self._derivatives)
+
     def d(self, param: str) -> MieCoefficients:
         """The derivatives with respect to ``param``: ``"x"``, ``"m_real"``, ``"m_imag"``, or
         ``"m"`` for the complex derivative d/dm (which equals ∂/∂(Re m); ∂/∂(Im m) is i d/dm).
@@ -178,7 +206,7 @@ class MieCoefficients:
         return MieCoefficients(da_dm, db_dm, self.n_terms)
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, eq=False)
 class MieAmplitudes:
     """Amplitude scattering functions S₁(μ), S₂(μ), arrays of shape ``S + mu.shape``.
 
@@ -194,6 +222,9 @@ class MieAmplitudes:
     s2: NDArray[np.complex128]
     params: tuple[str, ...] = ()
     _derivatives: NDArray[np.complex128] | None = field(default=None, repr=False)
+
+    def __post_init__(self) -> None:
+        _freeze(self.s1, self.s2, self._derivatives)
 
     def d(self, param: str) -> MieAmplitudes:
         """The derivatives with respect to ``param``: ``"x"``, ``"m_real"``, ``"m_imag"``, or
@@ -221,6 +252,9 @@ _SHARED_DOC = """
         Size parameters, 2 pi r / wavelength (real).
     m : array_like
         Refractive indices relative to the medium (real or complex), broadcast against ``x``.
+        Aligned, C-contiguous, native-endian float64 ``x`` and complex128 ``m`` are read in
+        place; anything else is converted first. Do not modify or resize them from another
+        thread during the call.
     {extra}n_max : int, optional
         The number of terms; by default ``ceil(x + 6 x**(1/3) + 3)``. Fewer terms than the
         default are outside the validated domain.
@@ -242,13 +276,22 @@ _SHARED_DOC = """
     OutsideValidatedDomainError
         For valid inputs outside the validated domain, unless ``allow_unvalidated``.
     TypeError
-        For non-numeric ``x`` or ``m`` (complex ``x``), or a ``derivatives`` string.
+        For non-numeric ``x`` or ``m`` (complex ``x``), a non-integer ``n_max`` (``float``
+        and ``bool`` values are rejected), or ``derivatives`` that is neither a bool nor a
+        sequence of names.
     ValueError
         For an unknown parameter name, or (from numpy) shapes that do not broadcast.
     BufferError
         If another rust-numpy extension holds a writeable borrow of an input.
     MemoryError
         If the outputs cannot be allocated.
+
+    Notes
+    -----
+    The cost per sphere grows like ``x + |m| x`` (see :doc:`/theory/mie`): the largest
+    accepted ``|m| x`` take seconds per sphere. The call releases the GIL, so other Python
+    threads keep running, but it cannot be interrupted: Ctrl+C takes effect only once it
+    returns.
 """
 
 

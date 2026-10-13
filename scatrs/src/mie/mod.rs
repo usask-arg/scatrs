@@ -107,6 +107,17 @@ pub fn default_n_max(x: f64) -> usize {
     terms(x, 6.0, 3.0)
 }
 
+/// The number of terms [`Mie::compute`] would use for `f64` at (x, m) with `opts`
+/// ([`default_n_max`] unless `opts.n_max` is set), after the same checks, without solving:
+/// for sizing outputs before computing them.
+///
+/// # Errors
+///
+/// As [`Mie::compute`].
+pub fn n_terms(x: f64, m: Complex<f64>, opts: &MieOptions) -> Result<usize> {
+    check_inputs::<f64>(x, m.re, m.im, opts)
+}
+
 /// ⌈x + c·x^(1/3) + d⌉ (`usize::MAX` if not finite, which every limit rejects).
 fn terms(x: f64, c: f64, d: f64) -> usize {
     let n = (x + c * x.cbrt() + d).ceil();

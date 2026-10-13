@@ -10,7 +10,7 @@ use proptest::prelude::*;
 use scatrs::Error;
 use scatrs::mie::{
     AmplitudeBuffers, MAX_MIE_ORDER, Mie, MieOptions, VALIDATED_DOMAIN, ValidatedDomain,
-    default_n_max,
+    default_n_max, n_terms,
 };
 use scatrs::scalar::Dual;
 
@@ -115,6 +115,27 @@ fn the_validated_domain_is_enforced_unless_allowed() {
         (1.0, c(1.0, 0.0)),
     ] {
         assert!(mie.compute(x, m, &strict).is_ok(), "x = {x}, m = {m}");
+    }
+}
+
+#[test]
+fn n_terms_checks_and_counts_as_compute_does() {
+    let mut mie = Mie::<f64>::new();
+    let strict = MieOptions::new();
+    for (x, m, opts) in [
+        (1.0, c(1.5, 0.0), strict),
+        (1e3, c(1.33, 1e-8), strict),
+        (10.0, c(1.5, 0.0), strict.with_n_max(40)),
+        (-1.0, c(1.5, 0.0), strict),
+        (1.0, c(1.5, -1e-9), strict),
+        (1.0, c(f64::NAN, 0.0), strict),
+        (3e4, c(1.5, 0.0), strict),
+        (10.0, c(1.5, 0.0), strict.with_n_max(5)),
+        (1.0, c(1.5, 0.0), strict.with_n_max(MAX_MIE_ORDER + 1)),
+        (3e4, c(1.5, 0.0), strict.with_allow_unvalidated(true)),
+    ] {
+        let solved = mie.compute(x, m, &opts).map(|s| s.n_terms());
+        assert_eq!(n_terms(x, m, &opts), solved, "x = {x}, m = {m}");
     }
 }
 

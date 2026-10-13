@@ -7,7 +7,7 @@ from pathlib import Path
 from packaging.version import Version
 
 import scatrs
-from scatrs import _scatrs, special
+from scatrs import _scatrs, mie, special
 
 ROOT = Path(__file__).parents[1]
 
@@ -57,13 +57,16 @@ def test_public_names():
         "__version__",
     ):
         assert hasattr(scatrs, name)
-    for name in special.__all__:
-        assert hasattr(special, name)
+    for module in (special, mie):
+        for name in module.__all__:
+            assert hasattr(module, name)
 
 
 def test_limits_are_exposed():
     assert special.MAX_GAUSS_LEGENDRE_POINTS == _scatrs.MAX_GAUSS_LEGENDRE_POINTS == 2**17
     assert special.MAX_WIGNER_D_VALUES == _scatrs.MAX_WIGNER_D_VALUES == 2**28
+    assert mie.MAX_MIE_ORDER == _scatrs.MAX_MIE_ORDER == 2**20
+    assert mie.MAX_MIE_VALUES == _scatrs.MAX_MIE_VALUES == 2**27
 
 
 def test_test_hooks_live_outside_the_extension_namespace():

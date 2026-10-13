@@ -22,7 +22,7 @@ from scatrs import mie
 x = np.geomspace(0.01, 1000, 9)
 q = mie.efficiencies(x, 1.33 + 1e-8j)
 for xi, qe, w, g in zip(x, q.q_ext, q.q_sca / q.q_ext, q.g, strict=True):
-    print(f"x = {xi:8.2f}   Q_ext = {qe:.6f}   single-scattering albedo = {w:.10f}   g = {g:+.4f}")
+    print(f"x = {xi:8.2f}   Q_ext = {qe:.4e}   single-scattering albedo = {w:.10f}   g = {g:+.4f}")
 ```
 
 ## Extinction paradox and the optical theorem
@@ -41,20 +41,26 @@ assert abs(4 / 1e4**2 * s.s1.real / q.q_ext - 1) < 1e-11
 
 ## Weak absorption without cancellation
 
-For weakly absorbing particles, $Q_\text{abs} = Q_\text{ext} - Q_\text{sca}$ cancels:
-here about 8 digits. scatrs computes $Q_\text{abs}$ from an exact per-term identity instead
-({doc}`/theory/mie`), so the co-albedo $1 - \omega = Q_\text{abs}/Q_\text{ext}$ keeps full
-precision. Absorption is linear in $k$ for small $k$, which the direct value shows to all its
-digits, and the difference does not.
+For weakly absorbing particles, $Q_\text{abs} = Q_\text{ext} - Q_\text{sca}$ cancels: here
+4, 6 and 8 digits for $k = 10^{-6}$, $10^{-8}$ and $10^{-10}$. scatrs computes
+$Q_\text{abs}$ from an exact per-term identity instead ({doc}`/theory/mie`), so the co-albedo
+$1 - \omega = Q_\text{abs}/Q_\text{ext}$ keeps full precision. For small $k$,
+$Q_\text{abs}/k$ is linear in $k$: the direct value at $k = 10^{-10}$ matches the linear
+extrapolation from $k = 10^{-6}$ and $10^{-8}$ to about 10 digits, and the difference misses it
+in the 8th.
 
 ```{code-cell} python
+direct, by_difference = {}, {}
 for k in (1e-6, 1e-8, 1e-10):
     q = mie.efficiencies(20.0, 1.33 + 1j * k)
-    print(f"k = {k:.0e}: Q_abs/k direct {q.q_abs / k:.15f}, "
-          f"by difference {(q.q_ext - q.q_sca) / k:.15f}")
-q6 = mie.efficiencies(20.0, 1.33 + 1e-6j)
-q10 = mie.efficiencies(20.0, 1.33 + 1e-10j)
-assert abs((q10.q_abs / 1e-10) / (q6.q_abs / 1e-6) - 1) < 1e-4  # linear in k
+    direct[k], by_difference[k] = q.q_abs / k, (q.q_ext - q.q_sca) / k
+    print(f"k = {k:.0e}: Q_abs/k direct {direct[k]:.15f}, by difference {by_difference[k]:.15f}")
+slope = (direct[1e-6] - direct[1e-8]) / (1e-6 - 1e-8)
+linear = direct[1e-8] - slope * (1e-8 - 1e-10)
+print(f"relative distance from the extrapolation at k = 1e-10: "
+      f"direct {abs(direct[1e-10] / linear - 1):.1e}, "
+      f"by difference {abs(by_difference[1e-10] / linear - 1):.1e}")
+assert abs(direct[1e-10] / linear - 1) < 1e-9
 ```
 
 ## The phase function

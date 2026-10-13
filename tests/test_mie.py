@@ -1,3 +1,4 @@
+import dataclasses
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -5,8 +6,15 @@ from concurrent.futures import ThreadPoolExecutor
 import numpy as np
 import pytest
 
-from scatrs import InvalidInputError, OutsideValidatedDomainError, _scatrs, mie
+from scatrs import InvalidInputError, OutsideValidatedDomainError, _args, _scatrs, mie
 from scatrs._scatrs import _testing
+
+# Each Mie function with x and m only; amplitudes at one angle.
+CALLS = {
+    "efficiencies": lambda x, m, **kw: mie.efficiencies(x, m, **kw),
+    "coefficients": lambda x, m, **kw: mie.coefficients(x, m, **kw),
+    "amplitudes": lambda x, m, **kw: mie.amplitudes(x, m, 0.5, **kw),
+}
 
 
 def test_wiscombe_published_values():
@@ -54,6 +62,9 @@ def test_coefficients_are_zero_padded():
 
 def test_default_n_max():
     np.testing.assert_array_equal(mie.default_n_max([1e-6, 0.1, 1.0, 1000.0]), [4, 6, 10, 1063])
+    for bad in (np.nan, np.inf, -1.0, 0.0, 2e6):
+        with pytest.raises(InvalidInputError, match="element 1: the size parameter"):
+            mie.default_n_max([1.0, bad])
 
 
 def test_n_max_and_its_domain():
@@ -95,10 +106,19 @@ def test_derivatives_match_finite_differences(x, m):
             fd = _fd(lambda e, at=at, name=name: getattr(mie.efficiencies(*at(e)), name), h)
             got = getattr(q.d(p), name)
             assert abs(got - fd) <= 1e-6 * max(abs(fd), abs(getattr(q, name))), (p, name)
-        fd_a = _fd(lambda e, at=at: mie.coefficients(*at(e), n_max=n).a, h)
-        np.testing.assert_allclose(c.d(p).a, fd_a, rtol=0, atol=1e-6 * np.abs(fd_a).max())
-        fd_s = _fd(lambda e, at=at: mie.amplitudes(*at(e), [0.9, 0.0, -0.5]).s1, h)
-        np.testing.assert_allclose(s.d(p).s1, fd_s, rtol=0, atol=1e-6 * np.abs(fd_s).max())
+        for name in ("a", "b"):
+            fd_c = _fd(
+                lambda e, at=at, name=name: getattr(mie.coefficients(*at(e), n_max=n), name), h
+            )
+            got = getattr(c.d(p), name)
+            np.testing.assert_allclose(got, fd_c, rtol=0, atol=1e-6 * np.abs(fd_c).max())
+        for name in ("s1", "s2"):
+            fd_s = _fd(
+                lambda e, at=at, name=name: getattr(mie.amplitudes(*at(e), [0.9, 0.0, -0.5]), name),
+                h,
+            )
+            got = getattr(s.d(p), name)
+            np.testing.assert_allclose(got, fd_s, rtol=0, atol=1e-6 * np.abs(fd_s).max())
     # The complex derivative: d/dm = ∂/∂(Re m), and ∂/∂(Im m) = i d/dm.
     np.testing.assert_array_equal(c.d("m").a, c.d("m_real").a)
     np.testing.assert_array_equal(c.d("m_imag").a, 1j * c.d("m").a)
@@ -119,21 +139,38 @@ def test_derivative_subsets():
         mie.efficiencies(5.0, 1.5).d("x")
     c = mie.coefficients(5.0, 1.5 + 0.1j, derivatives=["m_real"])
     c.d("m")  # the complex derivative is available with either m parameter
+    with pytest.raises(ValueError, match="efficiencies are real"):
+        mie.efficiencies(5.0, 1.5, derivatives=True).d("m")
+    assert mie.efficiencies(5.0, 1.5, derivatives=np.True_).params == mie.PARAMETERS
+    assert mie.efficiencies(5.0, 1.5, derivatives=np.False_).params == ()
+    for bad in (None, 1, 1.0):
+        with pytest.raises(TypeError, match="derivatives must be a bool or a sequence"):
+            mie.efficiencies(5.0, 1.5, derivatives=bad)
 
 
+@pytest.mark.parametrize("call", CALLS.values(), ids=CALLS.keys())
 @pytest.mark.parametrize(
     ("x", "m"),
-    [(-1.0, 1.5), (0.0, 1.5), (np.nan, 1.5), (1e-31, 1.5), (1.0, 1.5 - 1e-9j), (1.0, -1.5),
-     (1.0, np.nan), (1.0, 0.0), (1.0, 2e3)],
+    [(-1.0, 1.5), (0.0, 1.5), (np.nan, 1.5), (1e-31, 1.5), (1e7, 1.5), (1.0, 1.5 - 1e-9j),
+     (1.0, -1.5), (1.0, np.nan), (1.0, 0.0), (1.0, 2e3)],
 )  # fmt: skip
-def test_invalid_inputs(x, m):
+def test_invalid_inputs(call, x, m):
     with pytest.raises(InvalidInputError):
-        mie.efficiencies(x, m, allow_unvalidated=True)
+        call(x, m, allow_unvalidated=True)
 
 
-def test_error_names_the_element():
-    with pytest.raises(InvalidInputError, match="element 2"):
-        mie.efficiencies([1.0, 2.0, -3.0], 1.5)
+@pytest.mark.parametrize("call", CALLS.values(), ids=CALLS.keys())
+def test_errors_name_the_element(call):
+    with pytest.raises(InvalidInputError, match="element 2: the size parameter"):
+        call([1.0, 2.0, -3.0], 1.5)
+    with pytest.raises(InvalidInputError, match="element 1: the size parameter"):
+        call([1.0, np.inf], 1.5)
+    with pytest.raises(InvalidInputError, match="element 3: the refractive index"):
+        call(np.ones((2, 2)), [[1.5, 1.5], [1.5, -1.5]])
+    with pytest.raises(OutsideValidatedDomainError, match="element 1"):
+        call([1.0, 3e4], 1.5)
+    with pytest.raises(InvalidInputError, match=r"number of terms must be in \[1, 1048576\]"):
+        call(1.0, 1.5, n_max=2**40)
 
 
 @pytest.mark.parametrize(("x", "m"), [(3e4, 1.5), (1.0, 11.0), (1.0, 1.5 + 11j), (1.0, 2j)])
@@ -161,11 +198,29 @@ def test_empty_inputs():
     assert c.a.shape == (0, 0)
     s = mie.amplitudes([1.0, 2.0], 1.5, np.zeros(0))
     assert s.s1.shape == (2, 0)
+    # Empty inputs do not hide invalid ones.
+    for n_max in (0, 2**21):
+        with pytest.raises(InvalidInputError, match="number of terms"):
+            mie.coefficients([], 1.5, n_max=n_max)
+    with pytest.raises(InvalidInputError, match="element 1 of mu"):
+        mie.amplitudes([], 1.5, [0.5, np.nan])
+    with pytest.raises(InvalidInputError, match="element 1: the size parameter"):
+        mie.amplitudes([1.0, -1.0], 1.5, np.zeros(0))
 
 
-def test_output_size_limit():
+def test_output_size_limits():
     with pytest.raises(InvalidInputError, match="MAX_MIE_VALUES"):
         mie.amplitudes(np.full(2**14, 1.0), 1.5, np.zeros(2**13), allow_unvalidated=True)
+    # Broadcasting makes outputs far larger than the inputs: these ask for 2**30 spheres from
+    # 512 KiB of inputs, and must fail before allocating anything.
+    x, m = np.ones((2**15, 1)), np.full((1, 2**15), 1.5)
+    with pytest.raises(InvalidInputError, match=r"2 \* MAX_MIE_VALUES"):
+        mie.efficiencies(x, m)
+    with pytest.raises(InvalidInputError, match="MAX_MIE_VALUES"):
+        mie.coefficients(x, m)
+    # Within the bound on the number of spheres, but not with their numbers of terms.
+    with pytest.raises(InvalidInputError, match="MAX_MIE_VALUES"):
+        mie.coefficients(np.full(2**14, 1e4), 1.5)
 
 
 def test_outputs_are_rust_vectors_handed_over_without_copying():
@@ -173,7 +228,55 @@ def test_outputs_are_rust_vectors_handed_over_without_copying():
     values, _ = _scatrs.mie_efficiencies(x, m, None, False, False)
     assert not isinstance(values.base, np.ndarray)
     q = mie.efficiencies(np.array([1.0, 2.0]), 1.5)
-    assert q.q_ext.flags.c_contiguous and q.q_ext.base is not None
+    assert q.q_ext.flags.c_contiguous
+    root = q.q_ext
+    while isinstance(root, np.ndarray) and root.base is not None:
+        root = root.base
+    assert not isinstance(root, np.ndarray)  # a view of the Rust vector, not a copy
+
+
+def test_results_are_frozen_and_read_only():
+    q = mie.efficiencies([1.0, 2.0], 1.5 + 0.1j, derivatives=True)
+    c = mie.coefficients(1.0, 1.5, derivatives=True)
+    s = mie.amplitudes(1.0, 1.5, [0.5], derivatives=True)
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        q.q_ext = q.q_sca
+    for a in (q.q_ext, q.d("x").g, c.a, c.n_terms, c.d("m").a, c.d("m_imag").b, s.s2, s.d("x").s1):
+        with pytest.raises(ValueError, match="read-only"):
+            a[...] = 0
+    # Identity comparison and hashing, not elementwise array comparison.
+    assert q == q and q != mie.efficiencies([1.0, 2.0], 1.5 + 0.1j, derivatives=True)
+    assert len({q, c, s}) == 3
+
+
+def test_other_layouts_and_dtypes_give_the_same_results():
+    x = np.array([[0.5, 2.0], [7.0, 30.0]])
+    m = np.array([[1.33 + 0.01j, 1.5], [2.0 + 1j, 1.25]])
+    expected = mie.efficiencies(x, m).q_ext
+    misaligned = np.frombuffer(b"\0" + x.tobytes(), dtype=np.float64, count=4, offset=1)
+    for xi, mi in [
+        (np.asfortranarray(x), np.asfortranarray(m)),
+        (x.astype(x.dtype.newbyteorder()), m.astype(m.dtype.newbyteorder())),
+        (misaligned.reshape(2, 2), m),
+        (x[::-1][::-1], m[:, ::-1][:, ::-1]),
+        (x.tolist(), m.tolist()),
+        (x.astype(np.float32), m),  # exact in float32
+    ]:
+        np.testing.assert_array_equal(mie.efficiencies(xi, mi).q_ext, expected)
+
+
+def test_complex_array_returns_qualifying_arrays_as_they_are():
+    m = (np.linspace(1, 2, 12) + 0.1j).reshape(3, 4)
+    assert _args.complex_array(m, "m") is m
+    for other in (m.T, m.astype(np.complex64), m.astype(m.dtype.newbyteorder()), m.tolist(),
+                  m.real, m.real.astype(np.float32), m.real.astype(np.int64)):  # fmt: skip
+        converted = _args.complex_array(other, "m")
+        assert converted.dtype == np.complex128 and converted.dtype.isnative
+        assert converted.flags.c_contiguous and converted.flags.aligned
+        np.testing.assert_array_equal(converted, np.asarray(other, dtype=np.complex128))
+    for bad in (np.array([True]), np.array(["1.5"]), np.array([1], dtype=object)):
+        with pytest.raises(TypeError):
+            _args.complex_array(bad, "m")
 
 
 class _Spy:
@@ -199,6 +302,14 @@ def test_inputs_are_broadcast_without_copying(monkeypatch):
     assert np.shares_memory(xb, x) and np.shares_memory(mb, m)
     assert xb is not x and mb is not m
     assert 0 in xb.strides and 0 in mb.strides  # broadcast, not materialised
+    # Inputs that already have the broadcast shape are passed as fresh views too, never as
+    # the caller's arrays (see scatrs._args.real_array).
+    x_full, m_full = np.linspace(1, 2, 3), np.array([1.5 + 0j, 1.6 + 0j, 1.7 + 0j])
+    for xi, mi in [(x_full, 1.5), (x_full, m_full)]:
+        mie.efficiencies(xi, mi)
+        xb, mb = spy.seen[-1]
+        assert xb is not x_full and mb is not m_full
+        assert np.shares_memory(xb, x_full)
 
 
 def test_buffer_error_when_an_input_is_borrowed_for_writing():

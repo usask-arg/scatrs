@@ -277,12 +277,41 @@ jobs:
       - name: Run the tests
         run: python -m pytest -q
 
+  # Users without a matching wheel build from the sdist: check that it builds and works.
+  test-sdist:
+    name: Test the sdist (built from source)
+    needs: [sdist]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      # A test build: faster to compile than the release profile (fat LTO, one codegen unit).
+      CARGO_PROFILE_RELEASE_LTO: "false"
+      CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "16"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.11"
+      - name: Install Rust
+        run: rustup toolchain install stable --profile minimal --no-self-update
+      - name: Download the sdist
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: wheels-sdist
+          path: dist
+      - name: Build and install it
+        run: python -m pip install "$(ls dist/*.tar.gz)[test]"
+      - name: Run the tests
+        run: python -m pytest -q
+
   publish:
     name: Publish to PyPI
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    needs: [preflight, linux, musllinux, windows, macos, sdist, test-wheels]
+    needs: [preflight, linux, musllinux, windows, macos, sdist, test-wheels, test-sdist]
     environment:
       name: pypi
     permissions:

@@ -49,7 +49,7 @@ def _structured_significand(rng: random.Random) -> float:
 
 def _hi(rng: random.Random, exponent: int, structured: bool) -> float:
     m = _structured_significand(rng) if structured else rng.uniform(1.0, 2.0)
-    return _sign(rng) * min(m, 2.0 - 2.0**-52) * 2.0**exponent
+    return _sign(rng) * min(m, 2.0 - 2.0**-52) * math.ldexp(1.0, exponent)
 
 
 def _lo(rng: random.Random, hi: float, kind: str) -> float:

@@ -38,7 +38,7 @@ def _constants() -> dict[str, arb]:
     for k in range(31):
         c[f"INV_FACT_{k}"] = 1 / arb(fmpz(math.factorial(k)))
     for i in range(9):
-        c[f"POW10_2POW{i}"] = arb(fmpz(10)) ** (2**i)
+        c[f"POW10_2POW{i}"] = arb(fmpz(10)) ** (1 << i)
     for name, base in (("FRAC_PI_2_TAIL", pi / 2), ("LN_2_TAIL", two.log())):
         hi, lo, _, _ = split(base)
         c[name] = base - arb(hi) - arb(lo)

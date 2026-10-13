@@ -72,8 +72,10 @@ only to releases at least a week old.
 - `.github/workflows/release.yml`, on pushes to `main`, tags `v*`, and pull requests that touch
   the packaging (the build configuration, `scatrs-py/`, `python/` or the workflow itself):
   wheels for every platform and the sdist; the wheels are installed and tested on every
-  platform with a GitHub runner. A tag also runs the preflight checks and publishes (see
-  below).
+  platform with a GitHub runner, and the sdist is built from source and tested on Linux. A tag
+  also runs the preflight checks and publishes (see below). On pull requests this workflow is
+  advisory, not a required check (it does not run on every pull request), so a pull request
+  that breaks a wheel build or test can merge; the run on `main` then catches it.
 - `.github/workflows/docs.yml`: publishes the documentation from `main` to GitHub Pages.
 - `.github/workflows/scheduled.yml`, every Monday: the `#[ignore]` tests on Linux, macOS and
   Windows, the Rust tests on Intel macOS, and a regeneration of every reference file on Linux

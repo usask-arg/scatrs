@@ -101,7 +101,7 @@ def _literal(rng: random.Random) -> tuple[str, Fraction]:
         mantissa = digits[:point] + "." + digits[point:] if rng.random() < 0.7 else digits
         frac_digits = len(digits) - point if "." in mantissa else 0
         exponent = rng.randint(-280, 280)
-        value = Fraction(int(digits), 10**frac_digits) * Fraction(10) ** exponent
+        value = Fraction(int(digits)) * Fraction(10) ** (exponent - frac_digits)
         if Fraction(1, 10**289) < value < Fraction(10**289):
             sign = rng.choice(("", "-", "+"))
             text = f"{sign}{mantissa}e{exponent}"

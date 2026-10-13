@@ -62,8 +62,9 @@ jobs:
           persist-credentials: false
       - name: Install Rust
         run: rustup toolchain install stable --profile minimal --no-self-update
+      # --nocapture logs the measured worst errors, the libm sin/cos one among them.
       - name: Run the tests
-        run: cargo test --workspace --locked
+        run: cargo test --workspace --locked -- --nocapture
 
   ignored-tests:
     name: Slow Rust tests (${{ matrix.os }})

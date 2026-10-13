@@ -81,6 +81,9 @@ jobs:
         os: [ubuntu-latest, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash # on Windows too, so that the `--` reaches cargo unchanged
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -91,8 +94,9 @@ jobs:
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       # scatrs-py has no Rust tests (test = false); it is tested from Python below.
+      # --nocapture logs each platform's measured worst errors (libm sin/cos among them).
       - name: Run the tests
-        run: cargo test --workspace --locked
+        run: cargo test --workspace --locked -- --nocapture
 
   msrv:
     name: Rust 1.85.0 (MSRV)

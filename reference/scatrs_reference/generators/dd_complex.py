@@ -15,7 +15,7 @@ import random
 
 from flint import acb, arb, ctx
 
-from scatrs_reference.records import record
+from scatrs_reference.records import nearest_cos, nearest_pow10, nearest_sin, record
 
 PRECISION_BITS = 600
 N = 200
@@ -33,9 +33,9 @@ def _dd(rng: random.Random, f: float) -> Pair:
 
 
 def _polar(rng: random.Random, log10_min: float, log10_max: float) -> Z:
-    r = 10.0 ** rng.uniform(log10_min, log10_max)
+    r = nearest_pow10(rng.uniform(log10_min, log10_max))
     t = rng.uniform(-math.pi, math.pi)
-    return _dd(rng, r * math.cos(t)), _dd(rng, r * math.sin(t))
+    return _dd(rng, r * nearest_cos(t)), _dd(rng, r * nearest_sin(t))
 
 
 def _exp_arg(rng: random.Random) -> Z:

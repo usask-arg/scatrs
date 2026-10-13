@@ -132,12 +132,3 @@ Arb, before the Mie kernels.
 
 - **Recorded precision.** The manifest records the starting precision of the `wigner_d`
   generator, 800 bits, although it doubles that as needed, to at most 51 200 bits.
-- **Drift check.** For every change, CI regenerates only `constants.jsonl` byte for byte, and
-  checks the other files against their manifest hashes. Every file is regenerated and compared
-  byte for byte only weekly, by a scheduled job.
-- **Platform-dependent inputs.** The generators of `dd_complex`, `dd_elementary` and `dd_trig`
-  draw some random inputs through the platform's `sin`, `cos` and `pow`. On the Mac (arm64)
-  that generated the data, 71 of about 7400 such results are not correctly rounded (measured
-  against Arb), so another maths library, such as glibc on Linux, can draw different inputs.
-  The data would then differ, though every Arb value stays correct for its own inputs. The
-  weekly job therefore runs on macOS.

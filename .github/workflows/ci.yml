@@ -133,3 +133,15 @@ jobs:
       - uses: astral-sh/setup-uv@v10.3.0
       - name: Run the generator's tests
         run: uv run --locked --directory reference python -m pytest -q
+      # About 80 s. The scheduled workflow repeats this weekly on Linux and macOS.
+      - name: Regenerate every reference file
+        run: uv run --locked --directory reference python -m scatrs_reference generate
+      - name: Fail on any difference from the committed data
+        run: |
+          changes=$(git status --porcelain --untracked-files=all -- reference/data)
+          if [ -n "$changes" ]; then
+            echo "::error::The regenerated reference data differ from the committed files."
+            echo "$changes"
+            git diff --stat -- reference/data
+            exit 1
+          fi

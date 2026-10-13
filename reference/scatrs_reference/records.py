@@ -23,7 +23,7 @@ from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
 
 import flint
-from flint import arb
+from flint import arb, ctx
 
 FORMAT_VERSION = 2  # 2: added lo2
 DECIMAL_DIGITS = 25
@@ -46,6 +46,34 @@ def nearest_double(v: arb) -> float:
         if abs(mid - arb(cand)) < abs(mid - arb(f)):
             f = cand
     return f
+
+
+#: Working precision of the portable drop-ins below. Their results are the correctly rounded
+#: doubles unless the exact value lies within about 2^-300 (relative) of a rounding boundary.
+PORTABLE_BITS = 320
+
+
+def nearest_pow10(u: float) -> float:
+    """10**u rounded to the nearest double: a portable ``10.0 ** u``.
+
+    Generators must not draw their inputs through the platform's maths library (``10.0 ** u``,
+    ``math.cos``, ...): it is not correctly rounded everywhere, so the inputs drawn, and with
+    them the data, would depend on the platform. Arb gives the same double everywhere.
+    """
+    with ctx.workprec(PORTABLE_BITS):
+        return nearest_double(arb(10) ** arb(u))
+
+
+def nearest_cos(t: float) -> float:
+    """cos t rounded to the nearest double: a portable ``math.cos(t)``; see `nearest_pow10`."""
+    with ctx.workprec(PORTABLE_BITS):
+        return nearest_double(arb(t).cos())
+
+
+def nearest_sin(t: float) -> float:
+    """sin t rounded to the nearest double: a portable ``math.sin(t)``; see `nearest_pow10`."""
+    with ctx.workprec(PORTABLE_BITS):
+        return nearest_double(arb(t).sin())
 
 
 def upper_double(x: arb) -> float:

@@ -30,6 +30,7 @@ uv run ruff format --check .
 uv run pytest
 uv run python -m mypy.stubtest scatrs._scatrs
 uv run --directory reference python -m pytest
+uv run --directory reference python -m scatrs_reference generate   # then: git status reference/data
 uv run --extra docs sphinx-build -E -W --keep-going -b html docs docs/_build/html
 uvx --from actionlint-py actionlint   # after changing .github/workflows
 ```
@@ -37,11 +38,10 @@ uvx --from actionlint-py actionlint   # after changing .github/workflows
 The documentation build runs the examples and downloads the Python and numpy inventories; see
 `docs/installation.md` for building it offline.
 
-These run weekly in CI rather than on every change, because they take minutes:
+The slow `#[ignore]` tests take minutes, so CI runs them weekly rather than on every change:
 
 ```bash
-cargo test -p scatrs --release -- --ignored   # the slow #[ignore] tests
-uv run --directory reference python -m scatrs_reference generate   # then: git status reference/data
+cargo test -p scatrs --release -- --ignored
 ```
 
 ## Continuous integration
@@ -49,14 +49,14 @@ uv run --directory reference python -m scatrs_reference generate   # then: git s
 - `.github/workflows/ci.yml`, on every pull request and push to `main`: the lint checks
   (rustfmt, clippy, ruff, actionlint), the examples and the crate package, the Rust tests on
   Linux, macOS and Windows, the MSRV (Rust 1.85.0), the Python tests with Python 3.11 and 3.14
-  on the same three systems, the type stubs, the strict documentation build and the reference
-  generator's tests.
+  on the same three systems, the type stubs, the strict documentation build, and the reference
+  generator's tests and a regeneration of every reference file.
 - `.github/workflows/release.yml`: wheels for every platform and the sdist, on every pull
   request and push to `main`; a tag `v*` also publishes them (see below).
 - `.github/workflows/docs.yml`: publishes the documentation from `main` to GitHub Pages.
 - `.github/workflows/scheduled.yml`, every Monday: the `#[ignore]` tests on Linux, macOS and
-  Windows, and a regeneration of every reference file, on macOS, that fails on any difference
-  from the committed data.
+  Windows, and a regeneration of every reference file on Linux and macOS that fails on any
+  difference from the committed data.
 
 ## Reference data
 
@@ -66,9 +66,11 @@ pinned). Regenerate them with
 and commit the data together with the manifest. Never edit the data by hand. Tolerances in
 tests are never loosened without a written justification in the test.
 
-Regenerate on macOS (arm64), as the committed data were. Some generators draw random inputs
-through the platform's `sin`, `cos` and `pow`, so another platform can draw different inputs
-and write different (equally valid) data; see "Reference suite" in `docs/limitations.md`.
+Regeneration gives the same bytes on every platform, because generators draw their inputs
+without the platform's maths library, whose results differ between platforms. Use
+`nearest_pow10`, `nearest_cos` and `nearest_sin` from `reference/scatrs_reference/records.py`
+instead of `10.0 ** u`, `math.cos` and `math.sin`; `reference/tests/test_portable_inputs.py`
+enforces this.
 
 ## Releasing
 

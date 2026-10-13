@@ -129,12 +129,12 @@ uv run --directory reference python -m scatrs_reference generate --only wigner_d
 uv run --directory reference python -m pytest
 ```
 
-python-flint is pinned exactly (0.9.0), so that regeneration can be checked byte for byte
-against the SHA-256 in the manifest. The generator's own tests check this for
-`constants.jsonl`, and they check every committed file against its manifest hash. A weekly
-scheduled CI job regenerates every file and fails on any difference. It runs on macOS, where
-the data were generated, because some generators draw random inputs through the platform's
-maths library (see {doc}`../limitations`).
+python-flint is pinned exactly (0.9.0), and the generators round every input they draw with
+Arb, never with the platform's maths library, so regeneration gives the same bytes on every
+platform. The generator's own tests regenerate `constants.jsonl`, check every committed file
+against its SHA-256 in the manifest, and reject generator code that would call the maths
+library. CI regenerates every file on Linux for every change, and on Linux and macOS weekly,
+and fails on any difference.
 
 The manifest's precision for `wigner_d.jsonl`, 800 bits, is only the starting precision. The
 generator doubles it as needed, to at most 51 200 bits, until each ball is narrow enough: a

@@ -14,11 +14,12 @@ concurrency:
 
 jobs:
   reference-drift:
-    name: Regenerate the Arb reference data and check for drift
-    # macOS, where the data were generated. Some generators draw random inputs through the
-    # platform's sin, cos and pow; 71 of those results are not correctly rounded on macOS, so
-    # another libm (glibc) can draw different inputs. The Arb computations are portable.
-    runs-on: macos-latest
+    name: Regenerate the Arb reference data and check for drift (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v7
@@ -40,7 +41,7 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@v7
         with:
-          name: regenerated-reference-data
+          name: regenerated-reference-data-${{ matrix.os }}
           path: reference/data
 
   ignored-tests:

@@ -22,7 +22,7 @@
       "precision_bits": 600,
       "python_flint": "0.9.0",
       "records": 4,
-      "sha256": "ea2cb9462f13112a8d826049f4e9b57ed79f4fdc016608d0677afc2d9925f8bc"
+      "sha256": "39755d6e00cfeca25ee7ee20baab1c69774841575949b33ad15617653ce27097"
     },
     "dd_elementary.jsonl": {
       "flint": "3.6.0",
@@ -30,7 +30,7 @@
       "precision_bits": 600,
       "python_flint": "0.9.0",
       "records": 38,
-      "sha256": "b1712f081d888ceb526d52609099554c330475d22fa11e812af82d1471faaf1a"
+      "sha256": "d5258e3b7180cc877e840ddcb2e1c489b070d16accf6e5303c341a2c0a79e00c"
     },
     "dd_parse.jsonl": {
       "flint": "3.6.0",

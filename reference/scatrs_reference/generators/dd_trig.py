@@ -26,7 +26,7 @@ from collections.abc import Iterable
 
 from flint import arb, ctx
 
-from scatrs_reference.records import nearest_double, record, split
+from scatrs_reference.records import nearest_double, nearest_pow10, record, split
 
 PRECISION_BITS = 600
 N = 200
@@ -56,7 +56,7 @@ def _dd(rng: random.Random, f: float) -> tuple[float, float]:
 
 
 def _logu(rng: random.Random, a: float, b: float) -> float:
-    return 10.0 ** rng.uniform(a, b)
+    return nearest_pow10(rng.uniform(a, b))
 
 
 def _signed(rng: random.Random, v: float) -> float:

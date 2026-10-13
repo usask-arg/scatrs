@@ -18,7 +18,7 @@ from collections.abc import Callable, Iterable
 
 from flint import arb, ctx
 
-from scatrs_reference.records import record, split
+from scatrs_reference.records import nearest_pow10, record, split
 
 PRECISION_BITS = 600
 N = 200
@@ -42,7 +42,7 @@ def _dd(rng: random.Random, f: float) -> tuple[float, float]:
 
 
 def _logu(rng: random.Random, lo_exp: float, hi_exp: float) -> float:
-    return 10.0 ** rng.uniform(lo_exp, hi_exp)
+    return nearest_pow10(rng.uniform(lo_exp, hi_exp))
 
 
 def _signed(rng: random.Random, v: float) -> float:
@@ -361,7 +361,7 @@ def _log(a: arb, b: arb) -> arb:
 def _log_base(r: random.Random) -> float:
     """A positive base away from 1 (|log10 base| >= 0.05)."""
     e = r.uniform(0.05, 2.0) if r.random() < 0.5 else r.uniform(2.0, 300.0)
-    return 10.0 ** _signed(r, e)
+    return nearest_pow10(_signed(r, e))
 
 
 def _edge_pairs(

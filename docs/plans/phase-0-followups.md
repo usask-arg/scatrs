@@ -101,7 +101,7 @@ These items came out of the Phase 0 reviews and were deliberately deferred. Each
 - **Method change from the plan** (controller-approved in Task 10). The planned MTL B.22 three-term recurrence has error ∝ l² near the poles (16–266·(l+1)·eps measured). So for x ≥ 0.9, or m = ±n on the |d| → 1 side, Reinsch difference forms are used instead. Everywhere else the results are bitwise equal to the plan.
 - **Reciprocal speed-up** in the three-term step: 1.42× for f64 (3.75 → 2.63 ns per l), but as a generic change it slows DD by 13–26% and changes the bits. Defer it, perhaps behind a per-type hint.
 - **Batched API for the Greek projection.** Evaluate many nodes at once, sharing the per-l coefficients, so the latency-bound recurrence becomes throughput-bound. This is likely a bigger gain than per-(m, n, L) coefficient tables.
-- **Python bindings should bound `l_max`.** On systems that overcommit memory, a huge `l_max` can get the process killed instead of returning an error.
+- **Python bindings bound `l_max`** via `MAX_WIGNER_D_VALUES` = 2²⁸ (resolved in Task 11).
 - **The manifest `precision_bits` understates generator precision** for `wigner_d`: 800 is the starting value, and it adapts up to 2¹⁶. Consider recording per-record precision.
 
 ## Python binding patterns (from the Task 11 review; apply in Phase 1)
@@ -109,7 +109,7 @@ These items came out of the Phase 0 reviews and were deliberately deferred. Each
 - **Python converts types and shapes; Rust validates values.** Shared helpers live in `python/scatrs/_args.py`.
 - **Broadcasting in multi-input kernels.** Don't copy the `np.require(C)` + `as_slice` pattern, because it materialises broadcast copies. Use `np.broadcast_shapes` plus `PyReadonlyArrayDyn::as_array()`, which handles strides including zero strides. rust-numpy's safe `as_array()` doesn't check alignment (only `as_slice` does), so the extension must check `is_aligned()` itself.
 - **Thread safety.** With the GIL released, another thread can mutate the input arrays. Document this rather than copying: copying doesn't close the hole, and the spec requires zero-copy. Pass a fresh view to the extension, because `resize(refcheck=False)` on the borrowed object can abort through rust-numpy's borrow tracking.
-- **Per-call overhead,** M4 Pro, from the Task 11 review: the extension costs about 170 ns per call and the wrapper about 1.2 µs, dominated by `np.require`, the integer checks and the reshapes.
+- **Per-call overhead,** M4 Pro, from the Task 11 review: the extension costs about 180 ns per call and the wrapper about 0.84 µs after the Task 11 fixes.
 
 ## Platform notes
 - On aarch64, `f64::max`/`f64::min` return NaN for a signaling NaN, contrary to Rust's documentation. `DoubleDouble` follows the documented rule. No DD operation produces a signaling NaN.

@@ -33,7 +33,7 @@ These items came out of the Phase 0 reviews and were deliberately deferred. Each
   - **If ever needed:** Payne–Hanek reduction, with a table of about 1200 bits of 2/π.
 - **DD trig accuracy near nonzero multiples of π/2.** The contract only promises absolute accuracy there, but the actual bounds are better. These were derived in the Task 5 follow-up, checked on 30k Arb inputs, and are now documented in `trig.rs`:
   - The absolute error floor is |k|·2⁻¹⁶¹ for f64 arguments and |k|·2⁻¹⁵⁸ for DD arguments.
-  - Relative error stays ≤ 2⁻¹⁰⁰ whenever |x − kπ/2| ≥ |k|·2⁻⁶⁰ (f64) or |k|·2⁻⁵⁷ (DD).
+  - Relative error stays ≤ 1.5·2⁻¹⁰⁰ whenever |x − kπ/2| ≥ |k|·2⁻⁶⁰ (f64) or |k|·2⁻⁵⁷ (DD).
   - Only arguments closer than that to a multiple need callers to reduce them first.
 - **Platform dependence of the DD `atan2` seed.** atan2, atan, asin and acos start from the platform `f64::atan2`.
   - A seed that differs by one ulp changes the final DD bits in about 26% of cases, by up to 2⁻¹⁰³·⁷ relative.
@@ -102,7 +102,7 @@ These items came out of the Phase 0 reviews and were deliberately deferred. Each
 - **Reciprocal speed-up** in the three-term step: 1.42× for f64 (3.75 → 2.63 ns per l), but as a generic change it slows DD by 13–26% and changes the bits. Defer it, perhaps behind a per-type hint.
 - **Batched API for the Greek projection.** Evaluate many nodes at once, sharing the per-l coefficients, so the latency-bound recurrence becomes throughput-bound. This is likely a bigger gain than per-(m, n, L) coefficient tables.
 - **Python bindings bound `l_max`** via `MAX_WIGNER_D_VALUES` = 2²⁸ (resolved in Task 11).
-- **The manifest `precision_bits` understates generator precision** for `wigner_d`: 800 is the starting value, and it adapts up to 2¹⁶. Consider recording per-record precision.
+- **The manifest `precision_bits` understates generator precision** for `wigner_d`: 800 is the starting value, and it doubles up to at most 51 200 bits. Consider recording per-record precision.
 
 ## Python binding patterns (from the Task 11 review; apply in Phase 1)
 - **Never use `PyReadonlyArray`/`PyReadwriteArray` as `#[pyfunction]` parameter types.** Their extractor unwraps the borrow check and panics, raising `PanicException`, a `BaseException`. Take `Bound<PyArray…>` and call `try_readonly()`/`try_readwrite()`, mapping failure to `BufferError`. This becomes essential once kernels take `out=` arguments, because `f(x, out=x)` would otherwise panic.

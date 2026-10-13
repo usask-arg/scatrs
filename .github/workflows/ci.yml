@@ -19,19 +19,26 @@ concurrency:
   # A new push to a pull request supersedes its running checks; runs on main always finish.
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
+# Actions are pinned to commit SHAs; Dependabot updates them. Rust caches are saved only from
+# main, so a pull request cannot write a cache that main then restores.
 jobs:
   lint:
     name: Lint
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: dtolnay/rust-toolchain@stable
+      - name: Install Rust, and the 32-bit and big-endian targets of the release wheels
+        run: |
+          rustup toolchain install stable --profile minimal --no-self-update \
+            --component clippy,rustfmt \
+            --target i686-unknown-linux-gnu,armv7-unknown-linux-gnueabihf,s390x-unknown-linux-gnu
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
-          components: clippy, rustfmt
-      - uses: astral-sh/setup-uv@v10.3.0
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
       - name: Check Rust formatting
         run: cargo fmt --all -- --check
       # The whole workspace, scatrs-py included: .cargo/config.toml builds it as an extension
@@ -40,6 +47,12 @@ jobs:
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - name: Build the libraries and the examples (scatrs/examples holds documented code)
         run: cargo build --workspace --lib --examples --locked
+      - name: Check the 32-bit and big-endian wheel targets
+        run: |
+          for target in i686-unknown-linux-gnu armv7-unknown-linux-gnueabihf \
+            s390x-unknown-linux-gnu; do
+            cargo check --workspace --locked --target "$target"
+          done
       # As `cargo publish` does at release time: package the crate, then build it from the
       # packaged files alone (the reference-backed tests are not published).
       - name: Package the scatrs crate
@@ -58,7 +71,7 @@ jobs:
           uv run --locked --only-group dev ruff check .
           uv run --locked --only-group dev ruff format --check .
       - name: Lint the workflows
-        run: uvx --from actionlint-py actionlint
+        run: uvx --from actionlint-py==1.7.12.25 actionlint
 
   rust-test:
     name: Rust tests (${{ matrix.os }})
@@ -69,10 +82,14 @@ jobs:
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: dtolnay/rust-toolchain@stable
+      - name: Install Rust
+        run: rustup toolchain install stable --profile minimal --no-self-update
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       # scatrs-py has no Rust tests (test = false); it is tested from Python below.
       - name: Run the tests
         run: cargo test --workspace --locked
@@ -81,70 +98,107 @@ jobs:
     name: Rust 1.85.0 (MSRV)
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    env:
+      RUSTUP_TOOLCHAIN: "1.85.0" # overrides rust-toolchain.toml, for every rustc call
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: dtolnay/rust-toolchain@1.85.0
-      # rust-toolchain.toml selects stable; `+1.85.0` overrides it.
-      - name: Check the workspace
-        run: cargo +1.85.0 check --workspace --all-targets --locked
-      - name: Run the tests
-        run: cargo +1.85.0 test --workspace --locked
+      - name: Install Rust 1.85.0
+        run: rustup toolchain install 1.85.0 --profile minimal --no-self-update
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      # The MSRV is that of the library crates; dev-dependencies (proptest, ...) may need newer.
+      - name: Check the libraries
+        run: cargo +1.85.0 check --workspace --lib --locked
 
   python:
-    name: Python ${{ matrix.python-version }} (${{ matrix.os }})
+    name: Python (${{ matrix.os }}${{ matrix.numpy && format(', numpy {0}', matrix.numpy) || '' }})
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
-        python-version: ["3.11", "3.14"]
+        numpy: [""] # the latest
+        include:
+          # The oldest numpy that pyproject.toml accepts, with Python 3.11 only: it has no
+          # wheels for 3.14. (Replacing the "" makes this an extra job.)
+          - os: ubuntu-latest
+            numpy: "1.26.*"
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
+    env:
+      # A test build: faster to compile than the release profile (fat LTO, one codegen unit).
+      CARGO_PROFILE_RELEASE_LTO: "false"
+      CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "16"
+      NUMPY: ${{ matrix.numpy }}
+    defaults:
+      run:
+        shell: bash
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-python@v7
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
-          python-version: ${{ matrix.python-version }}
-      - uses: dtolnay/rust-toolchain@stable
-      - name: Build and install scatrs with its test dependencies
-        run: python -m pip install ".[test]"
-      - name: Run the tests
-        run: python -m pytest -q
-      - name: Check the extension's type stubs
-        if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.14'
+          python-version: "3.11"
+      - name: Install Rust
+        run: rustup toolchain install stable --profile minimal --no-self-update
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Build the abi3 wheel once
+        run: python -m pip wheel --no-deps --wheel-dir dist .
+      - name: Test it with Python 3.11
         run: |
-          python -m pip install mypy
-          python -m mypy.stubtest scatrs._scatrs
+          python -m pip install --only-binary :all: "$(ls dist/*.whl)[test]" \
+            ${NUMPY:+"numpy==$NUMPY"}
+          python -m pytest -q
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        if: ${{ !matrix.numpy }}
+        with:
+          python-version: "3.14"
+      - name: Test it with Python 3.14
+        if: ${{ !matrix.numpy }}
+        run: |
+          python -m pip install --only-binary :all: "$(ls dist/*.whl)[test]"
+          python -m pytest -q
 
   docs:
-    name: Documentation
+    name: Documentation and type stubs
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    env:
+      CARGO_PROFILE_RELEASE_LTO: "false"
+      CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "16"
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: astral-sh/setup-uv@v10.3.0
+      - name: Install Rust
+        run: rustup toolchain install stable --profile minimal --no-self-update
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
         with:
           python-version: "3.12"
       # The locked Sphinx 9; -E rereads every source, -W makes every warning an error, and the
       # examples are executed.
       - name: Build the documentation
         run: uv run --locked --extra docs sphinx-build -E -W --keep-going -b html docs docs/_build/html
+      - name: Check the extension's type stubs (the locked mypy)
+        run: uv run --locked --extra docs python -m mypy.stubtest scatrs._scatrs
 
   reference:
     name: Reference generator
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: astral-sh/setup-uv@v10.3.0
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
       - name: Run the generator's tests
         run: uv run --locked --directory reference python -m pytest -q
       # About 80 s. The scheduled workflow repeats this weekly on Linux and macOS.
@@ -159,3 +213,18 @@ jobs:
             git diff --stat -- reference/data
             exit 1
           fi
+
+  # The one status check to require in branch protection: it fails unless every job above
+  # succeeded.
+  all-checks:
+    name: All checks passed
+    if: always()
+    needs: [lint, rust-test, msrv, python, docs, reference]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Fail unless every job succeeded
+        if: >-
+          contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') ||
+          contains(needs.*.result, 'skipped')
+        run: exit 1

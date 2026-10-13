@@ -17,6 +17,7 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: false
 
+# Actions are pinned to commit SHAs; Dependabot updates them.
 jobs:
   reference-drift:
     name: Regenerate the Arb reference data and check for drift (${{ matrix.os }})
@@ -27,10 +28,10 @@ jobs:
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: astral-sh/setup-uv@v10.3.0
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
       - name: Regenerate every reference file
         run: uv run --locked --directory reference python -m scatrs_reference generate
       - name: Fail on any difference from the committed data
@@ -44,7 +45,7 @@ jobs:
           fi
       - name: Keep the regenerated data for inspection
         if: failure()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: regenerated-reference-data-${{ matrix.os }}
           path: reference/data
@@ -56,10 +57,11 @@ jobs:
     runs-on: macos-15-intel
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: dtolnay/rust-toolchain@stable
+      - name: Install Rust
+        run: rustup toolchain install stable --profile minimal --no-self-update
       - name: Run the tests
         run: cargo test --workspace --locked
 
@@ -75,11 +77,13 @@ jobs:
       run:
         shell: bash # on Windows too, so that the `--` reaches cargo unchanged
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: dtolnay/rust-toolchain@stable
-      # The #[ignore] tests: Gauss–Legendre at n = 20000 against Arb, and every rule up to 3000
-      # points. --nocapture shows the worst errors they measure.
+      - name: Install Rust
+        run: rustup toolchain install stable --profile minimal --no-self-update
+      # The #[ignore] tests, all in tests/gauss_legendre.rs: Gauss–Legendre at n = 20000
+      # against Arb, and every rule up to 3000 points. Building only that test binary saves
+      # fat-LTO builds of the others. --nocapture shows the worst errors they measure.
       - name: Run the ignored tests
-        run: cargo test -p scatrs --release --locked -- --ignored --nocapture
+        run: cargo test -p scatrs --release --locked --test gauss_legendre -- --ignored --nocapture

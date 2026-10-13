@@ -57,6 +57,10 @@ def sub_from(c: acb, d: Disk) -> Disk:
     return _recentre(c - d.centre, d.radius)
 
 
+class DiskContainsZero(ArithmeticError):
+    """Raised by `inv` for a disk that may contain zero."""
+
+
 def inv(d: Disk) -> Disk:
     """A disk containing ``1/w`` for every ``w`` in ``d``.
 
@@ -64,13 +68,13 @@ def inv(d: Disk) -> Disk:
 
     Raises
     ------
-    ArithmeticError
+    DiskContainsZero
         If ``d`` may contain zero.
     """
     m = abs(d.centre)
     lower = m - d.radius
     if not lower > 0:
-        raise ArithmeticError("the disk may contain zero")
+        raise DiskContainsZero("the disk may contain zero")
     return _recentre(1 / d.centre, d.radius / (m * lower))
 
 

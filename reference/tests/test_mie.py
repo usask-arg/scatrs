@@ -1,10 +1,11 @@
 """Checks of the Mie generator against independent computations in Arb."""
 
 import json
+from fractions import Fraction
 from pathlib import Path
 
 import pytest
-from flint import acb, arb, ctx
+from flint import acb, arb, ctx, fmpq
 
 from scatrs_reference import disk
 from scatrs_reference.generators import mie
@@ -69,7 +70,18 @@ def test_wiscombe_published_values():
 
 
 def test_tail_bound_dominates_the_next_terms():
-    for x, m_re, m_im in [(1.0, 1.5, 0.01), (50.0, 1.33, 0.0), (20.0, 4.0, 0.01), (5.0, 0.2, 3.0)]:
+    # The first four take the high-precision length; the last three sit at the thresholds of
+    # the bound (N = ⌈|m|x⌉ + 1 twice, N = ⌈1.5x⌉ + 1 once), where U_z or q is largest.
+    cases = [
+        (1.0, 1.5, 0.01),
+        (50.0, 1.33, 0.0),
+        (20.0, 4.0, 0.01),
+        (5.0, 0.2, 3.0),
+        (50.0, 10.0, 0.0),
+        (20.0, 10.0, 10.0),
+        (500.0, 1.33, 0.0),
+    ]
+    for x, m_re, m_im in cases:
         terms, certify = mie.n_ref(x, m_re, m_im)
         assert certify
         with ctx.workprec(320):
@@ -82,17 +94,61 @@ def test_tail_bound_dominates_the_next_terms():
                 assert size <= tail.amplitude * tail.ratio ** (n - terms)
 
 
+def test_tail_bound_refuses_outside_its_hypotheses():
+    with ctx.workprec(320):
+        # N = 400 < |m|x = 500: the enclosure of u_k(mx) does not hold yet.
+        assert mie.tail_bounds(mie.solve(50.0, 10.0, 0.0, 400)) is None
+
+
 def test_certified_series_contain_a_longer_sum():
-    x, m_re, m_im = 10.0, 1.5, 0.1
-    terms, _ = mie.n_ref(x, m_re, m_im)
+    # At N = 20 the tail is visible (about 1e-11 in Q_ext), so a missing or wrong tail fails.
+    x, m_re, m_im, terms = 10.0, 1.5, 0.1, 20
+    mus = [1.0, 0.0, -1.0]
     with ctx.workprec(320):
         s = mie.solve(x, m_re, m_im, terms)
-        out = mie.series_outputs(s, mie.sum_series(s, [1.0, 0.0]), mie.tail_bounds(s))
-        longer = mie.solve(x, m_re, m_im, terms + 50)
-        ref = mie.series_outputs(longer, mie.sum_series(longer, [1.0, 0.0]), None)
+        tail = mie.tail_bounds(s)
+        assert tail is not None
+        out = mie.series_outputs(s, mie.sum_series(s, mus), tail)
+        longer = mie.solve(x, m_re, m_im, terms + 100)
+        ref = mie.series_outputs(longer, mie.sum_series(longer, mus), None)
+        bare = mie.series_outputs(s, mie.sum_series(s, mus), None)
+        assert out is not None and ref is not None and bare is not None
         for name in out:
             for v, w in zip(out[name], ref[name], strict=True):
-                assert v.overlaps(w), name
+                assert v.contains(w), name
+        # Without its tail the short sum misses the long one.
+        assert not bare["q_ext"][0].overlaps(ref["q_ext"][0])
+
+
+def test_amplitude_symmetries_and_backscatter():
+    # S₁(0) = S₂(0), S₁(π) = −S₂(π) and Q_back = 4|S₁(π)|²/x², which ties the sign convention
+    # of the backscattering sum to S₁.
+    with ctx.workprec(320):
+        for x, m_re, m_im in [(0.3, 1.33, 0.0), (7.0, 1.5, 0.1), (30.0, 0.2, 3.0)]:
+            s = mie.solve(x, m_re, m_im, mie.n_ref(x, m_re, m_im)[0])
+            sums = mie.sum_series(s, [1.0, -1.0])
+            eps = arb(2) ** -250
+            assert (sums.s1[0] - sums.s2[0]).abs_upper() <= eps * abs(sums.s1[0])
+            assert (sums.s1[1] + sums.s2[1]).abs_upper() <= eps * abs(sums.s1[1])
+            q_back = abs(sums.s_back) ** 2 / (s.x * s.x)
+            from_s1 = 4 * abs(sums.s1[1]) ** 2 / (s.x * s.x)
+            assert (q_back - from_s1).abs_upper() <= eps * q_back
+
+
+def test_pi_tau_match_exact_rational_recurrences():
+    # Bohren & Huffman (1983), Eq. 4.47, in exact rationals at the exact double cosines.
+    with ctx.workprec(320):
+        for mu in (0.375, -0.8125, 0.0, 1.0, -1.0, 0.1):
+            q = fmpq(*Fraction(mu).as_integer_ratio())
+            pis, taus = mie._pi_tau(mu, 60)
+            pi_prev, pi = fmpq(0), fmpq(1)
+            for n in range(1, 61):
+                tau = n * q * pi - (n + 1) * pi_prev
+                for got, exact in ((pis[n - 1], pi), (taus[n - 1], tau)):
+                    want = arb(exact)
+                    assert got.overlaps(want), (mu, n)
+                    assert got.rad() <= arb(2) ** -250 * (abs(want) + 1), (mu, n)
+                pi_prev, pi = pi, ((2 * n + 1) * q * pi - (n + 1) * pi_prev) / n
 
 
 def test_optical_theorem():
@@ -132,8 +188,7 @@ def test_records_follow_the_label_rules():
             x, m_re, m_im = (rec["inputs"][k] for k in ("x", "m_re", "m_im"))
             terms, certify = mie.n_ref(x, m_re, m_im)
             assert rec["inputs"]["n_ref"] == terms
-            if rec["label"] == "certified":
-                assert certify
+            assert (rec["label"] == "certified") == certify, rec["case"]
     for line in (DATA / "mie_derivatives.jsonl").read_text(encoding="utf-8").splitlines():
         rec = json.loads(line)
         expected = "certified" if rec["case"].endswith(",coefficients") else "high-precision"

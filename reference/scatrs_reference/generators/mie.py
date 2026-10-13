@@ -133,7 +133,7 @@ def ratios_real(x: arb, n_top: int) -> list[arb]:
 def ratios_complex(z: acb, n_top: int) -> list[acb]:
     """u_k(z) = ψ_k(z)/ψ_{k−1}(z) for k = 1, …, n_top + 1, at index k, in disk arithmetic.
 
-    A disk that may contain a pole of u_k raises ``ArithmeticError`` (from `disk.inv`).
+    A disk that may contain a pole of u_k raises `disk.DiskContainsZero`.
     """
     start = max(n_top + 1, 2 * _ceil_abs(z)) + ctx.prec // 2
     out: list[acb] = [acb(0)] * (n_top + 2)
@@ -497,11 +497,12 @@ def _coefficient_outputs(s: Solution, ns: Sequence[int], derivatives: bool) -> d
     for name, vs in arrays.items():
         out[f"{name}_re"] = [vs[n - 1].real for n in ns]
         out[f"{name}_im"] = [vs[n - 1].imag for n in ns]
-    # Real and imaginary parts share one scale: the largest modulus in the array.
     return out
 
 
 def _array_scales(out: dict[str, list]) -> dict[str, arb]:
+    """One scale per complex array, shared by its real and imaginary parts: the largest
+    |re| + |im| over the array (an upper bound on its largest modulus)."""
     scales: dict[str, arb] = {}
     for name in out:
         if name.endswith("_re"):
@@ -538,7 +539,7 @@ def _case_records(case: Case, derivatives: bool) -> list[dict]:
         with ctx.workprec(prec):
             try:
                 s = solve(x, m_re, m_im, terms)
-            except ArithmeticError:  # a disk met a pole of u_k: retry at a higher precision
+            except disk.DiskContainsZero:  # a disk met a pole of u_k: retry at higher precision
                 prec *= 2
                 continue
             coefficients = _coefficient_outputs(s, ns, derivatives)

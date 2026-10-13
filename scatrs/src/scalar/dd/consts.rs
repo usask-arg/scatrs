@@ -87,11 +87,14 @@ pub(crate) const POW10_2I: [Dd; 9] = [
 mod tests {
     use super::*;
 
-    fn reference() -> Vec<serde_json::Value> {
-        include_str!("../../../../reference/data/constants.jsonl")
-            .lines()
-            .map(|l| serde_json::from_str(l).expect("valid record"))
-            .collect()
+    /// The records of `reference/data/constants.jsonl`, or `None` without the reference data.
+    fn reference() -> Option<Vec<serde_json::Value>> {
+        let text = crate::test_data::reference_file("constants.jsonl")?;
+        Some(
+            text.lines()
+                .map(|l| serde_json::from_str(l).expect("valid record"))
+                .collect(),
+        )
     }
 
     fn hi_lo(records: &[serde_json::Value], case: &str) -> (f64, f64) {
@@ -105,7 +108,7 @@ mod tests {
 
     #[test]
     fn constants_match_reference() {
-        let recs = reference();
+        let Some(recs) = reference() else { return };
         let table = [
             ("PI", PI),
             ("TAU", TAU),

@@ -205,16 +205,15 @@ mod tests {
     /// A reference value: [hi, lo, lo2, err], with |v − (hi + lo + lo2)| ≤ err.
     type RefValue = [f64; 4];
 
+    /// A rule size, node indices, and those nodes and weights.
+    type RefRule = (usize, Vec<usize>, Vec<RefValue>, Vec<RefValue>);
+
     /// The Arb record `case` of `reference/data/gauss_legendre.jsonl` (written by
     /// `reference/scatrs_reference/generators/gauss_legendre.py`): the rule size, the ascending
-    /// indices of the nodes it holds, and those nodes and weights.
-    fn reference(case: &str) -> (usize, Vec<usize>, Vec<RefValue>, Vec<RefValue>) {
-        let path = concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../reference/data/gauss_legendre.jsonl"
-        );
-        let text = std::fs::read_to_string(path)
-            .unwrap_or_else(|e| panic!("cannot read reference file {path}: {e}"));
+    /// indices of the nodes it holds, and those nodes and weights. `None` without the reference
+    /// data, as in the published crate.
+    fn reference(case: &str) -> Option<RefRule> {
+        let text = crate::test_data::reference_file("gauss_legendre.jsonl")?;
         let rec = text
             .lines()
             .map(|l| serde_json::from_str::<serde_json::Value>(l).unwrap())
@@ -236,12 +235,12 @@ mod tests {
                 .collect()
         };
         let indices = rec["inputs"]["indices"].as_array().expect("array");
-        (
+        Some((
             size(&rec["inputs"]["n"]),
             indices.iter().map(size).collect(),
             values("nodes"),
             values("weights"),
-        )
+        ))
     }
 
     /// A bound on |got − v|: the reference agrees with `got` to about 100 bits, so the
@@ -254,8 +253,11 @@ mod tests {
     /// but each root costs O(n), so this checks the accuracy contract at the cap.
     #[test]
     fn roots_at_the_cap_match_arb() {
-        let (n, indices, nodes, weights) =
-            reference(&format!("n={MAX_GAUSS_LEGENDRE_POINTS},roots"));
+        let Some((n, indices, nodes, weights)) =
+            reference(&format!("n={MAX_GAUSS_LEGENDRE_POINTS},roots"))
+        else {
+            return;
+        };
         assert_eq!(n, MAX_GAUSS_LEGENDRE_POINTS);
         let rec = Recurrence::new(n);
         let u2 = 2f64.powi(-106);

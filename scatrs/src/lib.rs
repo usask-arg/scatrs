@@ -7,6 +7,8 @@
 pub mod error;
 pub mod scalar;
 pub mod special;
+#[cfg(test)]
+mod test_data;
 
 pub use error::{Error, Result};
 pub use scalar::Real;

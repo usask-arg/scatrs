@@ -9,6 +9,11 @@ on:
 permissions:
   contents: read
 
+env:
+  # Unit tests that read reference/data skip without it (as in the published crate);
+  # here a missing file is an error.
+  SCATRS_REQUIRE_REFERENCE_DATA: "1"
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   # A new push to a pull request supersedes its running checks; runs on main always finish.
@@ -39,6 +44,15 @@ jobs:
       # packaged files alone (the reference-backed tests are not published).
       - name: Package the scatrs crate
         run: cargo package -p scatrs --locked
+      # As `cargo test` on the crates.io sources would: without the reference data, whose
+      # checks then skip.
+      - name: Test the packaged crate on its own
+        env:
+          SCATRS_REQUIRE_REFERENCE_DATA: "0"
+        run: |
+          tar -xzf target/package/scatrs-*.crate -C "$RUNNER_TEMP"
+          cd "$RUNNER_TEMP"/scatrs-*/
+          cargo test --locked
       - name: Ruff (the locked version, without building scatrs)
         run: |
           uv run --locked --only-group dev ruff check .

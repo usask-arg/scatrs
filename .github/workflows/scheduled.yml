@@ -8,6 +8,11 @@ on:
 permissions:
   contents: read
 
+env:
+  # Unit tests that read reference/data skip without it (as in the published crate);
+  # here a missing file is an error.
+  SCATRS_REQUIRE_REFERENCE_DATA: "1"
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: false

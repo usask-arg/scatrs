@@ -57,7 +57,8 @@
 //!
 //! # Accuracy
 //!
-//! [`VALIDATED_DOMAIN`] is the domain where the accuracy is validated.
+//! See [`VALIDATED_DOMAIN`] for the domain and the declared tolerances, which are relative to
+//! the conditioning of the problem.
 //!
 //! # Generic scalars
 //!
@@ -77,7 +78,7 @@ use crate::scalar::Real;
 use crate::{Error, Result};
 
 pub use amplitudes::AmplitudeBuffers;
-pub use domain::{VALIDATED_DOMAIN, ValidatedDomain};
+pub use domain::{MieOutput, VALIDATED_DOMAIN, ValidatedDomain};
 pub use efficiencies::{Efficiencies, EfficiencyJacobian};
 
 /// The largest number of terms [`Mie::compute`] accepts, 2²⁰.

@@ -47,6 +47,8 @@ LIMITATIONS = "docs/limitations.md"
 WIGNER_EXAMPLE = "docs/examples/wigner-d.md"
 HG_EXAMPLE = "docs/examples/henyey-greenstein.md"
 REFERENCE_SUITE = "docs/validation/reference-suite.md"
+DOMAIN_RS = "scatrs/src/mie/domain.rs"
+MIE_THEORY = "docs/theory/mie.md"
 INSTALLATION = "docs/installation.md"
 CONTRIBUTING = "CONTRIBUTING.md"
 
@@ -92,6 +94,44 @@ def test_version_floors_match_the_build_files() -> None:
     pyproject = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
     assert 'requires-python = ">=3.11"' in pyproject
     assert '"numpy>=1.26"' in pyproject
+
+
+def _declared_mie_constants() -> dict[str, float]:
+    """The constants of `ValidatedDomain::constant`, by the `MieOutput` variants of each arm."""
+    source = (ROOT / DOMAIN_RS).read_text(encoding="utf-8")
+    body = source[source.index("pub fn constant(") :]
+    body = body[: body.index("\n    }\n")]
+    constants = {}
+    for arm in re.finditer(r"((?:\s*\|?\s*MieOutput::\w+)+)\s*=>\s*([\d.]+)", body):
+        for variant in re.findall(r"MieOutput::(\w+)", arm.group(1)):
+            constants[variant] = float(arm.group(2))
+    return constants
+
+
+def test_mie_constants_match_the_accuracy_map() -> None:
+    import json
+
+    columns = {
+        "coefficients": "Coefficients",
+        "q_ext": "Extinction",
+        "q_sca": "Scattering",
+        "q_abs": "Absorption",
+        "q_back": "Backscattering",
+        "g": "Asymmetry",
+        "amplitudes": "Amplitudes",
+        "coefficient_derivatives": "CoefficientDerivatives",
+        "efficiency_jacobian": "EfficiencyJacobian",
+        "amplitude_derivatives": "AmplitudeDerivatives",
+    }
+    constants = _declared_mie_constants()
+    assert set(constants) == set(columns.values())
+    data = json.loads((ROOT / "docs/validation/data/mie-accuracy-map.json").read_text())
+    for column, variant in columns.items():
+        assert data["declared"][column] == constants[variant], column
+        assert max(max(row) for row in data["c"][column]) <= constants[variant], column
+    theory = read(MIE_THEORY)
+    for value in sorted({int(c) for c in constants.values()}):
+        assert str(value) in theory
 
 
 def test_reference_suite_page_matches_the_manifest() -> None:

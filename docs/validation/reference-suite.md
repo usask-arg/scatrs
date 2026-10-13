@@ -56,7 +56,7 @@ The 358 records of phase 0 are all certified:
 The Mie records are certified where a proven bound covers the series tail, and high-precision
 otherwise: 297 of the 306 series records of values (the other 9 would need more than 60 000
 terms), and none of the 80 series records of derivatives, which have no tail bound yet. Their
-coefficient records are all certified. The Mie theory chapter derives the bound.
+coefficient records are all certified. {doc}`/theory/mie` derives the bound.
 
 ## Files
 

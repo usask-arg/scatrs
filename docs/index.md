@@ -44,6 +44,7 @@ examples/henyey-greenstein
 :maxdepth: 2
 :caption: Theory
 
+theory/mie
 theory/special-functions
 theory/scalar-types
 ```
@@ -53,6 +54,7 @@ theory/scalar-types
 :caption: Validation
 
 validation/reference-suite
+validation/accuracy
 limitations
 ```
 

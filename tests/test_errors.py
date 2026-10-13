@@ -1,6 +1,7 @@
 import datetime
 import math
 import pickle
+import subprocess
 import sys
 import types
 
@@ -167,6 +168,51 @@ def test_wigner_d_size_bound_is_inclusive():
     assert _scatrs.wigner_d(0, 0, VALUES - 1, np.zeros(0)).shape == (0, VALUES)
     with pytest.raises(scatrs.InvalidInputError, match=f"<= {VALUES}, got x.size = 0"):
         special.wigner_d(0, 0, VALUES, [])
+
+
+# Run in a fresh interpreter: it caps its own address space at 1 GiB above what it already uses,
+# then asks for a full 2 GiB output (2²⁸ values, the most MAX_WIGNER_D_VALUES allows).
+_OUTPUT_ALLOCATION_FAILS = """
+import resource
+
+import numpy as np
+
+from scatrs import special
+
+small = special.wigner_d(0, 0, 3, [0.25, 0.5])
+with open("/proc/self/status", encoding="ascii") as status:
+    in_use = next(int(ln.split()[1]) * 1024 for ln in status if ln.startswith("VmSize:"))
+_, hard = resource.getrlimit(resource.RLIMIT_AS)
+cap = in_use + 2**30
+if hard != resource.RLIM_INFINITY:
+    cap = min(cap, hard)
+resource.setrlimit(resource.RLIMIT_AS, (cap, hard))
+try:
+    special.wigner_d(0, 0, special.MAX_WIGNER_D_VALUES - 1, [0.5])
+except MemoryError as e:
+    print(f"MemoryError: {e}")
+print("intact:", np.array_equal(special.wigner_d(0, 0, 3, [0.25, 0.5]), small))
+"""
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="needs Linux: RLIMIT_AS and /proc")
+def test_failed_output_allocation_is_memory_error_not_an_abort():
+    # A request within the size bound can still fail to allocate. It must raise MemoryError,
+    # leaving the interpreter usable, rather than abort the process.
+    run = subprocess.run(
+        [sys.executable, "-c", _OUTPUT_ALLOCATION_FAILS],
+        capture_output=True,
+        text=True,
+        timeout=300,
+        check=False,
+    )
+    assert run.returncode == 0, run.stderr
+    lines = run.stdout.splitlines()
+    assert len(lines) == 2, run.stdout
+    assert lines[0].startswith(
+        f"MemoryError: wigner_d cannot allocate {VALUES} float64 values for its output: "
+    ), run.stdout
+    assert lines[1] == "intact: True"
 
 
 # --- Robustness: x ------------------------------------------------------------------------------

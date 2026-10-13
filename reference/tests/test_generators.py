@@ -39,7 +39,7 @@ def test_committed_file_matches_manifest(name):
 
 
 def test_committed_data_stay_within_the_budget():
-    # The design budget for committed reference data (the spec, section 8.1).
+    # The budget for committed reference data: docs/specs/2026-10-12-scatrs-design.md, section 8.1.
     sizes = {p.name: p.stat().st_size for p in DATA.glob("*.jsonl")}
     assert sum(sizes.values()) <= 20_000_000, sizes
 

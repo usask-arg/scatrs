@@ -161,6 +161,15 @@ impl Recurrence {
 /// 32 ms at n = 1000, 0.72 s at n = 5000 and 11 s at n = 20 000. The call cannot be
 /// interrupted.
 ///
+/// # Errors
+///
+/// * [`Error::InvalidInput`] if `n == 0` or `n > MAX_GAUSS_LEGENDRE_POINTS`.
+/// * [`Error::NotConverged`] if a Newton iteration fails to converge, with `achieved` the
+///   last Newton step |Δx| (absolute, in x; +∞ if it was NaN) and `requested` 2⁻⁹⁰. The tests
+///   have not found any `n` where this happens: they check every root of every rule with
+///   n ≤ 300 (and, in an ignored test, n ≤ 3000), and the roots nearest ±1 and 0 for over
+///   a hundred values of n up to the cap.
+///
 /// # Examples
 ///
 /// ```
@@ -172,15 +181,6 @@ impl Recurrence {
 /// assert!((integral - 0.4).abs() < 1e-15);
 /// # Ok::<(), scatrs::Error>(())
 /// ```
-///
-/// # Errors
-///
-/// * [`Error::InvalidInput`] if `n == 0` or `n > MAX_GAUSS_LEGENDRE_POINTS`.
-/// * [`Error::NotConverged`] if a Newton iteration fails to converge, with `achieved` the
-///   last Newton step |Δx| (absolute, in x; +∞ if it was NaN) and `requested` 2⁻⁹⁰. The tests
-///   have not found any `n` where this happens: they check every root of every rule with
-///   n ≤ 300 (and, in an ignored test, n ≤ 3000), and the roots nearest ±1 and 0 for over
-///   a hundred values of n up to the cap.
 pub fn gauss_legendre<T: Real>(n: usize) -> Result<GaussLegendre<T>> {
     if n == 0 {
         return Err(Error::InvalidInput(

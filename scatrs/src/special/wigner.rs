@@ -131,6 +131,12 @@ const GENERAL_DIFFERENCE_FROM: f64 = 0.9;
 /// l = 2000, per degree: in `f64` 2.6 ns for (0, 0), 3.1 ns for (2, ±2) and 3.7 ns for (0, 2)
 /// and other m ≠ ±n; in `DoubleDouble` 30, 38 and 45 ns.
 ///
+/// # Errors
+///
+/// [`Error::InvalidInput`] if `x` (for a `Dual`, its value) is NaN or outside [−1, 1], even when
+/// `out` is empty; `out` is then left unchanged. Any `m` and `n` are accepted, `i32::MIN`
+/// included.
+///
 /// # Examples
 ///
 /// ```
@@ -139,15 +145,10 @@ const GENERAL_DIFFERENCE_FROM: f64 = 0.9;
 /// // d^l_{00} is the Legendre polynomial: P₂(0.5) = (3·0.25 − 1)/2 = −0.125.
 /// let mut d = [0.0; 3];
 /// wigner_d(0, 0, 0.5, &mut d)?;
+/// // Exact here: every intermediate value is a dyadic rational.
 /// assert_eq!(d, [1.0, 0.5, -0.125]);
 /// # Ok::<(), scatrs::Error>(())
 /// ```
-///
-/// # Errors
-///
-/// [`Error::InvalidInput`] if `x` (for a `Dual`, its value) is NaN or outside [−1, 1], even when
-/// `out` is empty; `out` is then left unchanged. Any `m` and `n` are accepted, `i32::MIN`
-/// included.
 pub fn wigner_d<T: Real>(m: i32, n: i32, x: T, out: &mut [T]) -> Result<()> {
     check_x(x)?;
     let (m, n) = (i64::from(m), i64::from(n));

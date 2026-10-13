@@ -3,7 +3,7 @@
 from importlib.metadata import PackageNotFoundError as _PackageNotFoundError
 from importlib.metadata import version as _version
 
-from scatrs import _scatrs, special
+from scatrs import _scatrs, mie, special
 from scatrs.errors import (
     InvalidInputError,
     NotConvergedError,
@@ -17,6 +17,7 @@ __all__ = [
     "OutsideValidatedDomainError",
     "ScatrsError",
     "__version__",
+    "mie",
     "special",
 ]
 

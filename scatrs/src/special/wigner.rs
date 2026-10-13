@@ -136,6 +136,19 @@ const GENERAL_DIFFERENCE_FROM: f64 = 0.9;
 /// [`Error::InvalidInput`] if `x` (for a `Dual`, its value) is NaN or outside [−1, 1], even when
 /// `out` is empty; `out` is then left unchanged. Any `m` and `n` are accepted, `i32::MIN`
 /// included.
+///
+/// # Examples
+///
+/// ```
+/// use scatrs::special::wigner_d;
+///
+/// // d^l_{00} is the Legendre polynomial: P₂(0.5) = (3·0.25 − 1)/2 = −0.125.
+/// let mut d = [0.0; 3];
+/// wigner_d(0, 0, 0.5, &mut d)?;
+/// // Exact here: every intermediate value is a dyadic rational.
+/// assert_eq!(d, [1.0, 0.5, -0.125]);
+/// # Ok::<(), scatrs::Error>(())
+/// ```
 pub fn wigner_d<T: Real>(m: i32, n: i32, x: T, out: &mut [T]) -> Result<()> {
     check_x(x)?;
     let (m, n) = (i64::from(m), i64::from(n));

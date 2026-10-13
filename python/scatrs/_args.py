@@ -58,6 +58,19 @@ def size(value: SupportsIndex, name: str) -> int:
     return v
 
 
+def flag(value: bool, name: str) -> bool:
+    """``value`` as a bool: Python and numpy bools only.
+
+    Raises
+    ------
+    TypeError
+        For anything else, such as ``0``, ``"no"`` or ``None``.
+    """
+    if not isinstance(value, _BOOLS):
+        raise TypeError(f"{name} must be a bool, not {type(value).__name__}")
+    return bool(value)
+
+
 def int32(value: SupportsIndex, name: str) -> int:
     """An integer for a Rust ``i32`` parameter.
 
@@ -98,3 +111,24 @@ def real_array(x: ArrayLike, name: str) -> NDArray[np.float64]:
     if xs.dtype == np.float64 and xs.flags.c_contiguous and xs.flags.aligned:
         return xs
     return np.require(xs, dtype=np.float64, requirements=["C", "A"])
+
+
+def complex_array(x: ArrayLike, name: str) -> NDArray[np.complex128]:
+    """``x`` as an aligned, C-contiguous, native-endian complex128 array of the same shape.
+
+    As :func:`real_array`, for complex numbers: such an array is returned as it is, and other
+    real or complex arrays, lists and scalars are converted, copying once.
+
+    Raises
+    ------
+    TypeError
+        If ``x`` is not numeric: boolean, string, object, datetime or timedelta.
+    ValueError
+        Raised by numpy for a ragged nested sequence.
+    """
+    xs = np.asarray(x)
+    if xs.dtype.kind not in "iufc":
+        raise TypeError(f"{name} must be numbers, not an array of dtype {xs.dtype}")
+    if xs.dtype == np.complex128 and xs.flags.c_contiguous and xs.flags.aligned:
+        return xs
+    return np.require(xs, dtype=np.complex128, requirements=["C", "A"])

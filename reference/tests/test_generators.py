@@ -38,6 +38,12 @@ def test_committed_file_matches_manifest(name):
             assert all(len(out[k]) == n for k in ("lo", "lo2", "dec", "err"))
 
 
+def test_committed_data_stay_within_the_budget():
+    # The budget for committed reference data: docs/specs/2026-10-12-scatrs-design.md, section 8.1.
+    sizes = {p.name: p.stat().st_size for p in DATA.glob("*.jsonl")}
+    assert sum(sizes.values()) <= 20_000_000, sizes
+
+
 def test_constants_regenerate_identically(tmp_path):
     _, recs = constants.generate()
     sha = write_jsonl(tmp_path / "constants.jsonl", recs)

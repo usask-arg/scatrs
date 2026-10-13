@@ -23,13 +23,14 @@ classifiers = [
 
 [project.optional-dependencies]
 xarray = ["xarray>=2024.7"]
-test = ["pytest>=8"]
+test = ["pytest>=8", "packaging>=24"]
 docs = [
     "sphinx>=9",
     "furo>=2024.8",
     "myst-nb>=1.1",
     "numpydoc>=1.8",
     "ipykernel>=6.29",
+    "matplotlib>=3.8",
 ]
 
 [project.urls]
@@ -72,8 +73,9 @@ extend-exclude = ["docs/plans", "docs/specs"]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "UP", "B", "NPY", "RUF"]
-# Deliberate typography in docstrings and comments: minus sign and en dash (Gauss–Legendre).
-allowed-confusables = ["−", "–"]
+# Deliberate typography in docstrings and comments: minus sign and en dash (Gauss–Legendre), and
+# the mathematical notation of the Mie docstrings (ρ, ×, the prime of D′).
+allowed-confusables = ["−", "–", "ρ", "×", "′"]
 
 [tool.ruff.lint.per-file-ignores]
 # l is the degree of d^l_{mn}, the notation of the papers the generator follows.

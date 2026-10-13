@@ -1,5 +1,5 @@
 //! num-traits and `Real` implementations for `DoubleDouble`; their semantics are documented
-//! on [`DoubleDouble`] ("Use as `num_traits::Float`").
+//! on [`DoubleDouble`](super::DoubleDouble) ("Use as `num_traits::Float`").
 
 use core::cmp::Ordering;
 use core::num::FpCategory;

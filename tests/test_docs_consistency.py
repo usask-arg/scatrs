@@ -1,14 +1,18 @@
-"""The contracts quoted in the documentation pages must match the rustdoc and docstrings.
+"""The figures quoted in the documentation must match their sources.
 
-The pages under ``docs/`` repeat accuracy bounds, limits and costs from the Rust sources (marked
-``<!-- synced with ... -->``). These tests look for each figure in every file that states it, so
-a change in one place fails until the others follow. Texts are compared after normalising
-Unicode superscripts, LaTeX and Python operators to one form (see ``normalise``).
+The pages under ``docs/`` repeat accuracy bounds, limits, costs and version floors from the
+Rust sources, the docstrings, the build files, the reference manifest and the accuracy map
+(marked ``<!-- synced with ... -->``). These tests look for each figure in every file that
+states it, so a change in one place fails until the others follow. Texts are compared after
+normalising Unicode superscripts, LaTeX and Python operators to one form (see ``normalise``).
 """
 
 from __future__ import annotations
 
+import json
+import math
 import re
+import tomllib
 from pathlib import Path
 
 import pytest
@@ -21,17 +25,34 @@ _SUPERSCRIPTS = str.maketrans("⁰¹²³⁴⁵⁶⁷⁸⁹⁻", "0123456789-")
 
 
 def normalise(text: str) -> str:
-    """One spelling for 2⁻⁵², 2^{-52} and 2**-52; for ·, \\cdot and *; and no spacing."""
+    """One spelling for 2⁻⁵², 2^{-52} and 2**-52; for ·, \\cdot and *; for ≤, ≥, | and their LaTeX;
+    and no spacing."""
     text = re.sub(r"[⁰¹²³⁴⁵⁶⁷⁸⁹⁻]+", lambda m: "^" + m.group().translate(_SUPERSCRIPTS), text)
     text = text.replace("**", "^")
-    for latex in (r"\,", r"\cdot", r"\text", r"\mathrm", r"\left", r"\right"):
+    for latex in (r"\,", r"\cdot", r"\text", r"\mathrm", r"\operatorname", r"\left", r"\right"):
         text = text.replace(latex, "")
-    text = text.replace(r"\le", "≤")
+    text = text.replace(r"\le", "≤").replace(r"\ge", "≥")
+    text = text.replace(r"\lvert", "|").replace(r"\rvert", "|")
     return re.sub(r"[\s{}$`*·\\]", "", text)
 
 
 def read(path: str) -> str:
     return normalise((ROOT / path).read_text(encoding="utf-8"))
+
+
+def states(page: str, text: str) -> bool:
+    """Whether the normalised ``page`` contains ``text``, not followed by more digits when it ends
+    in one: "2^20" is not stated by "2^200", nor "x+6x^(1/3)+3" by "...+30". (Normalising
+    removes spaces, so a digit may legitimately precede ``text``.)"""
+    after = r"(?!\.?\d)" if text[-1].isdigit() else ""
+    return re.search(re.escape(text) + after, page) is not None
+
+
+def states_version(page: str, version: str) -> bool:
+    """Whether the normalised ``page`` states ``version`` as a whole version number, possibly
+    followed by ".0" parts ("1.85.0" states 1.85; "11.85" and "1.85.1" do not)."""
+    pattern = r"(?<![\d.])" + re.escape(version) + r"(?:\.0)*(?![.\d])"
+    return re.search(pattern, page) is not None
 
 
 GL_RS = "scatrs/src/special/gauss_legendre.rs"
@@ -46,6 +67,14 @@ SCALARS = "docs/theory/scalar-types.md"
 LIMITATIONS = "docs/limitations.md"
 WIGNER_EXAMPLE = "docs/examples/wigner-d.md"
 HG_EXAMPLE = "docs/examples/henyey-greenstein.md"
+REFERENCE_SUITE = "docs/validation/reference-suite.md"
+DOMAIN_RS = "scatrs/src/mie/domain.rs"
+MIE_THEORY = "docs/theory/mie.md"
+MIE_RS = "scatrs/src/mie/mod.rs"
+MIE_PY = "python/scatrs/mie.py"
+MIE_BINDINGS_RS = "scatrs-py/src/mie.rs"
+INSTALLATION = "docs/installation.md"
+CONTRIBUTING = "CONTRIBUTING.md"
 
 CONTRACTS = [
     # (what, normalised text, files that must state it)
@@ -54,6 +83,9 @@ CONTRACTS = [
     ("Gauss-Legendre cap", "2^17", [GL_RS, SPECIAL_PY, THEORY, LIMITATIONS]),
     ("Gauss-Legendre cap", "131072", [GL_RS, SPECIAL_PY, THEORY]),
     ("Gauss-Legendre cost model", "28nsn^2", [GL_RS, SPECIAL_PY, THEORY]),
+    ("Gauss-Legendre timing", "0.72s", [GL_RS, SPECIAL_PY, THEORY]),
+    ("Gauss-Legendre timing", "11s", [GL_RS, SPECIAL_PY, THEORY, LIMITATIONS]),
+    ("Wigner cost", "2.6ns", [WIGNER_RS, THEORY]),
     ("Gauss-Legendre f64 node contract", "nodeabsoluteerror≤2^-52", [GL_RS]),
     ("Gauss-Legendre f64 weight contract", "weightrelativeerror≤2^-52", [GL_RS]),
     ("Gauss-Legendre f64 contract", "|f64|≤2^-52|≤2^-52|", [THEORY]),
@@ -64,12 +96,24 @@ CONTRACTS = [
     ("Dual<f64> derivative accuracy", "5.1u", [DUAL_RS, SCALARS]),
     # The executed examples check against the same contract.
     ("Wigner f64 bound in the examples", "16(l+1)eps", [WIGNER_EXAMPLE, HG_EXAMPLE]),
+    ("Mie f64 truncation", "x+6x^(1/3)+3", [MIE_RS, MIE_PY, MIE_THEORY, LIMITATIONS]),
+    ("Mie double-double truncation", "x+12x^(1/3)+6", [MIE_RS, MIE_THEORY]),
+    ("Mie order cap", "2^20", [MIE_RS, MIE_PY, LIMITATIONS]),
+    ("Mie output cap", "2^27", [MIE_BINDINGS_RS, MIE_PY, LIMITATIONS]),
+    ("Mie tolerance", "+cond)2^-52", [DOMAIN_RS, MIE_THEORY]),
+    ("Mie validated domain", "10^-6≤x≤210^4,0<Rem≤10,0≤Imm≤10,|m|≥0.1", [MIE_THEORY, LIMITATIONS]),
+    ("Mie validated domain", "x∈[10^-6,210^4],0<Rem≤10,0≤Imm≤10,|m|≥0.1", [DOMAIN_RS]),
+    ("Mie validated domain", "1e-6<=x<=2e4,0<Rem<=10,0<=Imm<=10,|m|>=0.1", [MIE_PY]),
+    ("Mie accepted x", "xin[10^-30,10^6]", [LIMITATIONS]),
+    ("Mie accepted |m|", "|m|in[10^-6,10^3]", [LIMITATIONS]),
+    ("Mie accepted x", "xoutside[1e-30,1e6]", [MIE_PY]),
+    ("Mie accepted |m|", "|m|outside[1e-6,1e3]", [MIE_PY]),
 ]
 
 
 @pytest.mark.parametrize(("what", "text", "files"), CONTRACTS)
 def test_contract_is_stated_everywhere(what: str, text: str, files: list[str]) -> None:
-    missing = [f for f in files if text not in read(f)]
+    missing = [f for f in files if not states(read(f), text)]
     assert not missing, f"{what} ({text!r}) is not stated in {missing}"
 
 
@@ -78,6 +122,126 @@ def test_limits_in_code_match_the_documented_values() -> None:
     assert re.search(r"pub const MAX_GAUSS_LEGENDRE_POINTS: usize = 1 << 17;", gl)
     bindings = (ROOT / BINDINGS_RS).read_text(encoding="utf-8")
     assert re.search(r"pub const MAX_WIGNER_D_VALUES: usize = 1 << 28;", bindings)
+    mie = (ROOT / MIE_RS).read_text(encoding="utf-8")
+    assert re.search(r"pub const MAX_MIE_ORDER: usize = 1 << 20;", mie)
+    assert re.search(r"terms\(x, 6\.0, 3\.0\)", mie) and re.search(r"terms\(x, 12\.0, 6\.0\)", mie)
+    mie_bindings = (ROOT / MIE_BINDINGS_RS).read_text(encoding="utf-8")
+    assert re.search(r"pub const MAX_MIE_VALUES: usize = 1 << 27;", mie_bindings)
+    for limit in (
+        r"MIN_SIZE_PARAMETER: f64 = 1e-30;",
+        r"MAX_SIZE_PARAMETER: f64 = 1e6;",
+        r"MIN_REFRACTIVE_INDEX: f64 = 1e-6;",
+        r"MAX_REFRACTIVE_INDEX: f64 = 1e3;",
+    ):
+        assert f"pub const {limit}" in mie, limit
+    domain = (ROOT / DOMAIN_RS).read_text(encoding="utf-8")
+    assert re.search(
+        r"VALIDATED_DOMAIN: ValidatedDomain = ValidatedDomain \{\s*x_min: 1e-6,\s*x_max: 2e4,"
+        r"\s*m_re_max: 10\.0,\s*m_im_max: 10\.0,\s*abs_m_min: 0\.1,\s*\};",
+        domain,
+    ), "VALIDATED_DOMAIN differs from the documented domain"
+
+
+def _version_floors() -> dict[str, str]:
+    """The MSRV, the Python floor and the numpy floor, from the build files."""
+    cargo = tomllib.loads((ROOT / "Cargo.toml").read_text(encoding="utf-8"))
+    project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"]
+    python = re.fullmatch(r">=\s*([\d.]+)", project["requires-python"])
+    numpy = [re.fullmatch(r"numpy\s*>=\s*([\d.]+)", d) for d in project["dependencies"]]
+    numpy = [m for m in numpy if m]
+    assert python and len(numpy) == 1, (project["requires-python"], project["dependencies"])
+    return {
+        "MSRV": cargo["workspace"]["package"]["rust-version"],
+        "Python floor": python.group(1),
+        "numpy floor": numpy[0].group(1),
+    }
+
+
+@pytest.mark.parametrize("what", ["MSRV", "Python floor", "numpy floor"])
+def test_version_floors_are_stated_everywhere(what: str) -> None:
+    floor = _version_floors()[what]
+    missing = [f for f in (INSTALLATION, CONTRIBUTING) if not states_version(read(f), floor)]
+    assert not missing, f"{what} {floor} (from the build files) is not stated in {missing}"
+
+
+def _declared_mie_constants() -> dict[str, float]:
+    """The constants of `ValidatedDomain::constant`, by the `MieOutput` variants of each arm."""
+    source = (ROOT / DOMAIN_RS).read_text(encoding="utf-8")
+    body = source[source.index("pub fn constant(") :]
+    body = body[: body.index("\n    }\n")]
+    constants = {}
+    for arm in re.finditer(r"((?:\s*\|?\s*MieOutput::\w+)+)\s*=>\s*([\d.]+)", body):
+        for variant in re.findall(r"MieOutput::(\w+)", arm.group(1)):
+            constants[variant] = float(arm.group(2))
+    return constants
+
+
+def test_mie_constants_match_the_accuracy_map() -> None:
+    columns = {
+        "coefficients": "Coefficients",
+        "q_ext": "Extinction",
+        "q_sca": "Scattering",
+        "q_abs": "Absorption",
+        "q_back": "Backscattering",
+        "g": "Asymmetry",
+        "amplitudes": "Amplitudes",
+        "coefficient_derivatives": "CoefficientDerivatives",
+        "efficiency_jacobian": "EfficiencyJacobian",
+        "amplitude_derivatives": "AmplitudeDerivatives",
+    }
+    constants = _declared_mie_constants()
+    assert set(constants) == set(columns.values())
+    data = json.loads((ROOT / "docs/validation/data/mie-accuracy-map.json").read_text())
+    for column, variant in columns.items():
+        assert data["declared"][column] == constants[variant], column
+        # The documented margin: every constant at least 4 times the worst C of the map. A null
+        # (a non-finite C) counts as infinite.
+        worst = max(math.inf if c is None else c for row in data["c"][column] for c in row)
+        assert 4 * worst <= constants[variant], column
+
+
+# The `MieOutput` variants that share a constant, as the theory chapter and the rustdoc table of
+# `ValidatedDomain::constant` name them.
+MIE_CONSTANT_GROUPS = [
+    (
+        ("Coefficients", "Extinction", "Scattering", "Absorption", "Backscattering", "Asymmetry"),
+        "the coefficients, efficiencies and $g$",
+        "coefficients, efficiencies, g",
+    ),
+    (("Amplitudes",), "$S_1$, $S_2$", "S₁, S₂"),
+    (("AmplitudeDerivatives",), "their derivatives", "derivatives of S₁, S₂"),
+    (("EfficiencyJacobian",), "the efficiency Jacobian", "efficiency Jacobian"),
+    (("CoefficientDerivatives",), "the coefficient derivatives", "coefficient derivatives"),
+]
+
+
+def test_mie_constants_are_stated_in_the_theory_and_the_rustdoc() -> None:
+    constants = _declared_mie_constants()
+    assert {v for variants, _, _ in MIE_CONSTANT_GROUPS for v in variants} == set(constants)
+    phrases, rows = [], []
+    for variants, in_theory, in_table in MIE_CONSTANT_GROUPS:
+        values = {constants[v] for v in variants}
+        assert len(values) == 1, f"{variants} no longer share a constant"
+        value = int(values.pop())
+        phrases.append(f"{value} for {in_theory}")
+        rows.append(f"/// | {in_table} | {value} |")
+    assert normalise("; ".join(phrases)) in read(MIE_THEORY)
+    source = (ROOT / DOMAIN_RS).read_text(encoding="utf-8")
+    missing = [row for row in rows if row not in source]
+    assert not missing, f"rows missing from the table of ValidatedDomain::constant: {missing}"
+
+
+def test_reference_suite_page_matches_the_manifest() -> None:
+    manifest = json.loads((ROOT / "reference/data/manifest.json").read_text(encoding="utf-8"))
+    page = (ROOT / REFERENCE_SUITE).read_text(encoding="utf-8")
+    rows = dict(re.findall(r"^\| `([\w.]+\.jsonl)` \| (\d+) \|", page, re.MULTILINE))
+    assert set(rows) == set(manifest["files"]), "the table and the manifest list different files"
+    for name, entry in manifest["files"].items():
+        assert int(rows[name]) == entry["records"], name
+    total = sum(p.stat().st_size for p in (ROOT / "reference/data").glob("*.jsonl")) / 1e6
+    stated = re.search(r"The committed data take about\s+([\d.]+)\s+MB", page)
+    assert stated, "size sentence not found"
+    assert abs(float(stated.group(1)) - total) <= 0.1, (stated.group(1), total)
 
 
 def test_synced_sections_name_existing_files() -> None:

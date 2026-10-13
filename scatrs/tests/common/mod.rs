@@ -1,6 +1,8 @@
 //! Loader for the committed Arb reference data in `reference/data/`.
 #![allow(dead_code)]
 
+pub mod mie;
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 

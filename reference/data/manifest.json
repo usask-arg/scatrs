@@ -56,6 +56,22 @@
       "records": 17,
       "sha256": "b6a15c32cc8656697fbf95d27edea72e4b6694d4a1b641a7c20e346d18d5ee99"
     },
+    "mie.jsonl": {
+      "flint": "3.6.0",
+      "generator": "mie",
+      "precision_bits": 320,
+      "python_flint": "0.9.0",
+      "records": 612,
+      "sha256": "54af46cae1a7ca937f0f9599f6894b0059d595c6d1ab5b9dbe1e8f8544726ced"
+    },
+    "mie_derivatives.jsonl": {
+      "flint": "3.6.0",
+      "generator": "mie_derivatives",
+      "precision_bits": 320,
+      "python_flint": "0.9.0",
+      "records": 160,
+      "sha256": "72ce63fb87dd1f519d13ad71ed33a3689fdc1477ca50d94e8bd019c08b2b2b1c"
+    },
     "wigner_d.jsonl": {
       "flint": "3.6.0",
       "generator": "wigner_d",

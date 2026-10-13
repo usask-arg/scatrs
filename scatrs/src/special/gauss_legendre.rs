@@ -169,6 +169,18 @@ impl Recurrence {
 ///   have not found any `n` where this happens: they check every root of every rule with
 ///   n ≤ 300 (and, in an ignored test, n ≤ 3000), and the roots nearest ±1 and 0 for over
 ///   a hundred values of n up to the cap.
+///
+/// # Examples
+///
+/// ```
+/// use scatrs::special::gauss_legendre;
+///
+/// // The 3-point rule integrates x⁴ exactly: ∫ x⁴ dx over [-1, 1] = 2/5.
+/// let rule = gauss_legendre::<f64>(3)?;
+/// let integral: f64 = rule.nodes.iter().zip(&rule.weights).map(|(x, w)| w * x.powi(4)).sum();
+/// assert!((integral - 0.4).abs() < 1e-15);
+/// # Ok::<(), scatrs::Error>(())
+/// ```
 pub fn gauss_legendre<T: Real>(n: usize) -> Result<GaussLegendre<T>> {
     if n == 0 {
         return Err(Error::InvalidInput(

@@ -2,7 +2,7 @@
 
 <!-- synced with docs/plans/phase-0-followups.md -->
 
-scatrs is pre-alpha. This page lists what users of phase 0 should know: missing pieces, costs,
+scatrs is pre-alpha. This page lists what users should know: missing pieces, costs,
 and behaviour at the edges. The repository tracks each item, with the phase that is to address
 it, in `docs/plans/phase-0-followups.md`.
 
@@ -14,14 +14,18 @@ it, in `docs/plans/phase-0-followups.md`.
 - **Tested against Arb:** the bounds of the double-double elementary functions, of
   Gauss–Legendre and of the Wigner d-functions. They hold on every reference value, but they
   are not proved for all inputs, and the Wigner bounds are measured, not derived.
+- **Measured and enforced:** the Mie tolerances, C·(κ′ + cond)·2⁻⁵² with measured constants,
+  checked in CI against the Arb references (certified, or high-precision for the series of
+  derivatives and the largest |m|x) and a dense double-double map. See
+  {doc}`validation/accuracy`.
 - **Measured:** worst-case errors and timings quoted from test output, and from probes run
   during code review that are not in the repository (marked as such).
 
 ## Scope and availability
 
-- There are no scattering calculations yet: Mie, layered spheres and the T-matrix arrive from
-  phase 1 on. Phase 0 provides the scalar types, two special functions and the reference suite.
-- Python exposes only `f64` results in phase 0. `DoubleDouble` and the `Dual` derivatives are
+- Mie scattering by homogeneous spheres is the only scattering method yet; layered spheres and
+  the T-matrix follow. Distributions of sizes and the Greek coefficients arrive in later phases.
+- Python exposes only `f64` results. `DoubleDouble` and the `Dual` derivatives are
   available from Rust only.
 - Neither wheels nor the Rust crate are published, and the Rust API is not on docs.rs. See
   {doc}`installation`.
@@ -41,7 +45,7 @@ it, in `docs/plans/phase-0-followups.md`.
   returns. Compute a rule once and reuse it.
 - **Planned speed-ups.** Two tunings of the present method measured about 5× faster together
   during code review (not committed). The real fix is an $O(n)$ method (Bogaert 2014). Faster
-  rules are a priority for phase 1, and the cap will be raised once the $O(n)$ method lands.
+  rules are a priority for phase 1b, and the cap will be raised once the $O(n)$ method lands.
 
 ## Builds without FMA
 
@@ -99,8 +103,9 @@ For `Complex<DoubleDouble>` specifically:
 - **NaN where `f64` is finite.** `exp`, `sin`, `cos`, `powc` and related functions return NaN
   when a component exceeds $2^{50}$, the double-double trigonometric domain.
 
-Phase 1 is to add scatrs-owned complex division, `ln`, `sqrt` and `abs`, validated against
-Arb, before the Mie kernels.
+The Mie kernels use a scatrs-owned complex reciprocal (Smith's algorithm), validated against
+Arb, in place of num-complex's. Complex `ln`, `sqrt` and division by tiny divisors will get
+the same treatment when a kernel needs them.
 
 ## Dual numbers
 
@@ -122,10 +127,44 @@ Arb, before the Mie kernels.
   takes from them allows 3 units instead of 2 on that target only.
 - **Vectorisation.** A loop over many `Dual`s is not vectorised across elements.
 
+## Mie scattering
+
+- **Truncation and narrow resonances.** The default truncation, `ceil(x + 6 x**(1/3) + 3)`
+  terms, can miss an exponentially narrow whispering-gallery resonance of a high-index,
+  weakly absorbing sphere above that order. The size parameter must fall in an exponentially
+  small window to meet one. Pass a larger `n_max` to include higher orders. See
+  {doc}`theory/mie`.
+- **Validated domain.** $10^{-6} \le x \le 2\cdot10^4$, $0 < \operatorname{Re} m \le 10$,
+  $0 \le \operatorname{Im} m \le 10$, $\lvert m\rvert \ge 0.1$ (below 0.1, $Q_\text{abs}$ and
+  the Jacobian of nearly real $m$ lose accuracy). Outside it, calls raise `OutsideValidatedDomain`
+  unless `allow_unvalidated` is set. Accepted inputs extend to $x \in [10^{-30}, 10^6]$ and
+  $\lvert m\rvert \in [10^{-6}, 10^3]$, where the outputs are finite but their accuracy is not
+  validated. The number of terms is at most `MAX_MIE_ORDER` = $2^{20}$.
+- **Accuracy near resonances.** The declared accuracy is relative to the conditioning of each
+  output. Near the sharp resonances of weakly absorbing and lossless spheres the outputs are
+  very sensitive to $x$ and $m$, and their absolute errors grow accordingly. See
+  {doc}`validation/accuracy`.
+- **Absorption derivatives.** $\partial Q_\text{abs}/\partial x$ and
+  $\partial Q_\text{abs}/\partial(\operatorname{Re} m)$ of weakly absorbing spheres are
+  accurate relative to $Q_\text{ext}$, not to $Q_\text{abs}$ itself: near a resonance with
+  $k = 10^{-8}$ their relative error reached $4\cdot10^{-9}$.
+- **Cost.** $O(x + \lvert m\rvert x)$ per sphere; the Python functions loop over the spheres
+  on one thread. Parallel batches arrive in phase 1b. The largest accepted $\lvert m\rvert x$
+  take seconds per sphere, and a call cannot be interrupted.
+- **m = 1 exactly.** The coefficients vanish, but for $x \ge 1$ the lowest orders are computed
+  as rounding noise rather than exact zeros, so $g$ and its derivatives are meaningless there
+  (the efficiencies are at rounding level).
+- **Series derivatives in the reference suite** have no tail bound yet, so they are labelled
+  high-precision.
+
 ## Python bindings
 
 - **Shared inputs.** Calls release the GIL and read input arrays in place. Do not modify or
   resize an input array from another thread during a call.
+- **Output size.** One Mie call returns at most `MAX_MIE_VALUES` = $2^{27}$ complex values,
+  counting derivatives (2 GiB), or twice as many real values for the efficiencies. The bound
+  applies to the broadcast output, which small inputs can make large: a call above it raises
+  `InvalidInputError` before allocating anything.
 - **Per-call overhead.** Measured during code review on an Apple M4 Pro (not committed), the
   extension call costs about 180 ns and the Python wrapper about 0.84 µs. Prefer one call on a
   large array to many small calls.

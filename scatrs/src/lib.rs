@@ -4,7 +4,9 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
+mod complex;
 pub mod error;
+pub mod mie;
 pub mod scalar;
 pub mod special;
 #[cfg(test)]

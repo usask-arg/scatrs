@@ -47,6 +47,12 @@ jobs:
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - name: Build the libraries and the examples (scatrs/examples holds documented code)
         run: cargo build --workspace --lib --examples --locked
+      - name: Run each benchmark once (criterion's test mode; timing is not checked)
+        run: cargo test -p scatrs --bench mie --locked
+      - name: Rustdoc, private items included (warnings are errors)
+        env:
+          RUSTDOCFLAGS: "-D warnings"
+        run: cargo doc -p scatrs --no-deps --document-private-items --locked
       - name: Check the 32-bit and big-endian wheel targets
         run: |
           for target in i686-unknown-linux-gnu armv7-unknown-linux-gnueabihf \
@@ -205,7 +211,8 @@ jobs:
       - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
       - name: Run the generator's tests
         run: uv run --locked --directory reference python -m pytest -q
-      # About 80 s. The scheduled workflow repeats this weekly on Linux and macOS.
+      # About 3 minutes (the Mie files in parallel over the runner's cores). The scheduled
+      # workflow repeats this weekly on Linux and macOS.
       - name: Regenerate every reference file
         run: uv run --locked --directory reference python -m scatrs_reference generate
       - name: Fail on any difference from the committed data

@@ -55,6 +55,14 @@
       "python_flint": "0.9.0",
       "records": 17,
       "sha256": "b6a15c32cc8656697fbf95d27edea72e4b6694d4a1b641a7c20e346d18d5ee99"
+    },
+    "wigner_d.jsonl": {
+      "flint": "3.6.0",
+      "generator": "wigner_d",
+      "precision_bits": 800,
+      "python_flint": "0.9.0",
+      "records": 205,
+      "sha256": "8a689094b66bbed0b737ba8a8c7c23e83a034517887cc335394eabad1841168a"
     }
   },
   "format_version": 2

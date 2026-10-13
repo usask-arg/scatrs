@@ -365,15 +365,22 @@ the design above, or settle what it left open:
   simpler, as cheap, and cannot fail.
 - **Cancellation-free numerators and D + zD′** (sections 2.4 and 2.7), and
   **Q_ext = Q_sca + Q_abs** (section 2.5): found by the reference comparisons.
-- **Accuracy model** (section 5). A tolerance C·κ·2⁻⁵² fails for weakly absorbing and lossless
-  spheres, whose resonances are arbitrarily sharp: on a dense grid the needed C reached 360 for
-  the coefficients and 7600 for the efficiency Jacobian, and grew as the grid was refined. A
-  tolerance from the output's own condition number fails for metallic backscattering, whose
-  alternating series cancels (C ≈ 6600). The declared tolerance is C·(κ′ + cond)·2⁻⁵², with
-  cond the relative condition number of the output in its error measure; every output then
-  stays within a small C (≤ 10 for values, ≤ 60 for derivatives). Declared constants: 16
-  (coefficients, efficiencies, g), 64 (S₁, S₂), 32 (their derivatives), 128 (efficiency
-  Jacobian), 256 (coefficient derivatives).
+- **Accuracy model** (section 5). A tolerance C·κ·2⁻⁵² fails near the sharp resonances of
+  weakly absorbing and lossless spheres: on the dense grid the needed C reached 360 for the
+  coefficients and 7600 for the efficiency Jacobian, and grows as the grid is refined (and g of
+  a small strongly absorbing sphere needs 98). A tolerance from the output's own condition
+  number alone fails where the series cancel: metallic backscattering needs C ≈ 6·10⁵. The
+  declared tolerance is C·(κ′ + cond)·2⁻⁵², with cond the relative condition number of the
+  output in its error measure; every output then stays within a small C (≤ 10 for values,
+  ≤ 70 for derivatives). Amended during execution (Task 5 review): cond is componentwise in
+  Re m and Im m for the real outputs (a normwise cond made the tolerances of Q_ext and Q_abs
+  vacuous at small Im m) and normwise for the holomorphic ones; κ′ is κ for the values,
+  κ·max(1, |m|/|m − 1|) for the efficiency Jacobian and 1 + |m|x for the coefficient and
+  amplitude derivatives. Declared constants: 16 (coefficients, efficiencies, g), 64 (S₁, S₂
+  and their derivatives), 256 (efficiency Jacobian), 512 (coefficient derivatives).
+  `DoubleDouble` is checked against Arb on every output, within 16 times the declared
+  constants in units of 2⁻¹⁰⁴ (section 5 expected it to be far better than that relative to
+  f64; at x = 2·10⁴ its amplitude derivatives are not, a phase 1b follow-up).
 - **The accuracy map is a CI test** (`scatrs/tests/mie_accuracy_map.rs`, about 20 s with all
   cores), not only a scheduled sweep: f64 against DoubleDouble on 104 × 24 points, with
   decimal-valued size parameters so the grid is the same on every platform.
@@ -381,18 +388,31 @@ the design above, or settle what it left open:
   320 bits at order 2000), so the generator uses only the recurrences, seeded by the
   unit-disk enclosure, with disk arithmetic for complex recurrences (Arb's rectangular balls
   grew 1.5× per step). π_n, τ_n come from Arb's Legendre polynomials. The tail bound needs
-  n_ref ≥ |m|x and n_ref ≥ 1.5x; it certifies 297 of 306 series records (the rest would need
-  more than 60 000 terms). Series of derivatives are high-precision. Nine angles; the data
-  take 5.0 MB. Cases run in parallel processes (about 30 s on 10 cores).
+  2n_ref + 3 ≥ 2|m|x and n_ref ≥ 1.5x − ½; it certifies 297 of 306 series records (the rest
+  would need more than 60 000 terms). Series of derivatives are high-precision. Nine angles;
+  the data take 5.0 MB. Cases run in parallel processes (about 30 s on 10 cores).
 - **Q_abs Jacobian measure**: ∂Q_abs/∂x and ∂Q_abs/∂(Re m) of weakly absorbing spheres are
   accurate relative to Q_ext, not Q_abs (relative error up to 4·10⁻⁹ at k = 10⁻⁸ near a
   resonance; `Dual` gives the same values, so it is the conditioning of the computed f64
   path). ∂Q_abs/∂(Im m) stays accurate relative to itself.
-- **Measured cost** (Apple M4 Pro): 0.54 µs at x = 0.1, 36 µs at x = 1000, 345 µs at
-  x = 10⁴; the full Jacobian costs 1.3–1.8× the values (target ≤ 2×).
+- **Measured cost** (Apple M4 Pro): 0.55 µs at x = 0.1, 36 µs at x = 1000, 0.34 ms at
+  x = 10⁴ (m = 1.5 + 0.01i); the full Jacobian costs 1.3–1.8× the values there (target ≤ 2×).
+  Amended during execution (Task 7 review): at real m the values take the real recurrence and
+  cost about 25% less, so the Jacobian reaches 2.0× from x = 1000 on, at the limit of the
+  target (a phase 1b item). The benchmarks do not compare alternative algorithms, so they do
+  not by themselves justify the downward Dₙ and the hybrid ψ scheme (section 8); the accuracy
+  measurements do.
 - **Python amplitude shape** is S + mu.shape (any shape of mu), and `derivatives` accepts
   `True`, `False` or a sequence of names.
 - **Rust API names** follow the plan: output buffers are `AmplitudeBuffers { s1, s2 }` for the
   values and for each derivative; the input limits are `MIN_SIZE_PARAMETER`,
   `MAX_SIZE_PARAMETER`, `MIN_REFRACTIVE_INDEX`, `MAX_REFRACTIVE_INDEX` and `MAX_MIE_ORDER`;
   `ValidatedDomain::tolerance(output, x, m, condition)` takes the condition number.
+- **Python output bounds and validation** (section 4; amended during execution, Task 6
+  review). Broadcasting makes outputs far larger than inputs, so every Python call bounds its
+  output by `MAX_MIE_VALUES` (2²⁷ complex values, or twice as many real values for the
+  efficiencies) before allocating anything, and allocates without the GIL. Rust gains
+  `scatrs::mie::n_terms(x, m, &opts)`, which validates as `compute` does and returns the number
+  of terms without solving; the binding sizes the coefficients with it. Results are frozen
+  dataclasses of read-only arrays; `default_n_max` raises `InvalidInputError` for x outside
+  the accepted range.

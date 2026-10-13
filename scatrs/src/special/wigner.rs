@@ -58,19 +58,25 @@ const GENERAL_DIFFERENCE_FROM: f64 = 0.9;
 ///
 /// # Accuracy
 ///
-/// Absolute error against Arb at the exact `x` (the explicit finite sum, see
-/// `reference/scatrs_reference/generators/wigner_d.py`):
+/// Absolute error against Arb at the exact `x` (the explicit finite sum, or Arb's Legendre
+/// functions at very large l; see `reference/scatrs_reference/generators/wigner_d.py`):
 ///
 /// * `f64`: ≤ 16(l + 1)·2⁻⁵²;
 /// * `DoubleDouble`: ≤ (l + 1)·2⁻⁹⁷.
 ///
-/// These bounds are measured, not proven. The tests check them for every degree l ≤ 100 of
-/// 17 pairs (m, n) covering all sign combinations, m = ±n and |m|, |n| up to 50, at ten values
-/// of x including ±1, ±(1 − 2⁻⁵³), ±(1 − 3·2⁻⁵³) and 0, and for sampled degrees up to l = 2000
-/// (pairs (0, 0), (2, ±2), (0, 2), (50, −37), (−37, −50), (7, 150)) and l = 4000 (next to the
-/// poles). The worst measured errors are 0.53(l + 1)·2⁻⁵² and 0.002(l + 1)·2⁻⁹⁷; in sweeps of
-/// 3300 random (m, n, x) with |m|, |n| ≤ 40 up to l = 4000, half of them next to the poles, the
-/// `f64` error stayed below 0.65(l + 1)·2⁻⁵² (against `DoubleDouble`).
+/// These bounds are measured, not proven, and validated for l ≤ 2.5·10⁵. The Arb tests check:
+///
+/// * every degree l ≤ 100 of 17 pairs (m, n), covering all sign combinations, m = ±n and
+///   |m|, |n| up to 50, at x = ±1, −1 + 2⁻⁵³, 1 − 3·2⁻⁵³, ±0.9999999, −0.5, 0, 0.3 and cos(π/6);
+/// * sampled degrees up to l = 2000 of (0, 0), (2, ±2), (0, 2), (50, −37), (−37, −50) and
+///   (7, 150), up to l = 4000 next to the poles, and up to l = 2.5·10⁵ of (0, 0) and (0, 2) at
+///   seven x covering all three forms.
+///
+/// The worst measured errors are 0.53(l + 1)·2⁻⁵² and 0.002(l + 1)·2⁻⁹⁷ (at most 6·10⁻⁶ of the
+/// double-double bound at l = 2.5·10⁵). An adversarial review probe of about 4500 Arb cases
+/// with |m|, |n| ≤ 1000 and l ≤ 5000 (turning points, the switch at |x| = 0.9, near-diagonal
+/// pairs at small lθ) found at most 0.74(l + 1)·2⁻⁵² and 0.0034(l + 1)·2⁻⁹⁷. All integer
+/// coefficients are exact in double-double for degrees and orders below about 9·10⁷ (2^26.5).
 ///
 /// Values below the normal range are not flushed to zero. Where the start value underflows,
 /// the values that are normal `f64`s have the bound above relative to their size (measured:
@@ -309,10 +315,12 @@ impl<T: Real> Step<T> for Difference<T> {
         let [delta, cur] = *state;
         let (sf, mf) = (s as f64, self.m);
         let s1 = sf + 1.0;
-        // Integers, exact below 2⁵³ (s below about 1.6·10⁵).
-        let k = (2.0 * sf + 1.0) * sf * s1;
-        let b = s1 * ((sf - mf) * (sf + mf));
-        let c = sf * ((s1 - mf) * (s1 + mf));
+        // Integers formed in T: in f64 they would round above 2⁵³ (s ≈ 2·10⁵), perturbing the
+        // ratios B_s/C_s by 2⁻⁵³, far above double-double precision. In double-double they are
+        // exact while (s + 1)² < 2⁵³, s below about 9·10⁷; f64 results are unchanged.
+        let k = T::from_f64(2.0 * sf + 1.0) * sf * s1;
+        let b = T::from_f64(s1) * ((sf - mf) * (sf + mf));
+        let c = T::from_f64(sf) * ((s1 - mf) * (s1 + mf));
         // The reciprocal is off the dependency chain through d: 1.6 times faster in f64 than
         // dividing, for one more rounding of the small Δ.
         let next = (self.w * k * cur + delta * b) * (T::one() / c);
@@ -353,7 +361,8 @@ impl<T: Real> Step<T> for GeneralDifference<T> {
         let numer =
             T::from_f64(s1 * s1) * (1.0 + dmn * dmn - 2.0 * s1) + T::from_f64(2.0 * s1) * (mf * nf);
         let v = numer / (alpha + q1);
-        let k = self.w * ((2.0 * sf + 1.0) * sf * s1) + self.u * s1 + v * sf;
+        // (2s + 1)s(s + 1) in T, as in `Difference`.
+        let k = self.w * (T::from_f64(2.0 * sf + 1.0) * sf * s1) + self.u * s1 + v * sf;
         // As in `Difference`, the reciprocal keeps the division off the chain through d.
         let next = (k * cur + delta * (self.q * s1)) * (T::one() / (q1 * sf));
         (self.q, self.u) = (q1, v + 2.0 * s1);

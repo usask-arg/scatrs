@@ -7,7 +7,7 @@ import pytest
 from flint import arb, ctx
 
 from scatrs_reference.__main__ import main
-from scatrs_reference.generators import GENERATORS, constants, dd_trig
+from scatrs_reference.generators import GENERATORS, constants, dd_trig, wigner_d
 from scatrs_reference.records import record, write_jsonl
 
 DATA = Path(__file__).resolve().parent.parent / "data"
@@ -107,3 +107,12 @@ def test_gauss_legendre_nodes_ascend_and_are_symmetric():
         hi = rec["outputs"]["nodes"]["hi"]
         assert hi == sorted(hi)
         assert hi == [-x for x in reversed(hi)]
+
+
+@pytest.mark.parametrize("m,n", [(0, 0), (0, 2)])
+@pytest.mark.parametrize("x", [-0.95, 0.3, 0.9999])
+def test_wigner_d_from_legendre_matches_the_explicit_sum(m, n, x):
+    with ctx.workprec(400):
+        for l in range(2, 40):
+            a, b = wigner_d.d_legendre(l, m, n, x), wigner_d.d_ref(l, m, n, x)
+            assert (a - b).abs_upper() <= arb(2) ** -300, (l, a, b)

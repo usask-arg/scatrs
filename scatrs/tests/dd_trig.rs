@@ -106,7 +106,7 @@ fn cos() {
 fn sin_and_cos_are_relatively_accurate_next_to_multiples_of_half_pi() {
     // The documented reduction floor: next to kπ/2 the error is at most 2^-100 |f| plus
     // |k| 2^-161 for f64 arguments (|k| 2^-158 for double-double ones), so the error is
-    // within 2^-100 relative wherever |x - kπ/2| >= |k| 2^-60 (|k| 2^-57). Checked on every
+    // within 1.5·2^-100 relative wherever |x - kπ/2| >= |k| 2^-60 (|k| 2^-57). Checked on every
     // reduced argument, including the closest doubles to multiples of π/2 below 2^50.
     let recs = load("dd_trig.jsonl");
     for case in ["sin", "sin_edges", "cos", "cos_edges"] {

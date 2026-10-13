@@ -26,11 +26,11 @@
 //! Next to a nonzero multiple kπ/2 the reduction leaves an absolute error floor: at most
 //! |k|·2⁻¹⁶¹ for `f64` arguments (from rounding k times the third word of π/2, and the fourth
 //! word), and |k|·2⁻¹⁵⁸ for double-double ones (the first subtraction, x − k·P₁ − k·P₂, adds
-//! 3u²·|k·P₂|). sin and cos are therefore within 2⁻¹⁰⁰ relative wherever |x − kπ/2| ≥ |k|·2⁻⁶⁰
-//! (`f64`) or |k|·2⁻⁵⁷ (double-double), and within the floor closer in. At the doubles closest
-//! to such multiples the measured relative error is 2⁻¹⁰⁰ at x = 45.553093477052
-//! (|cos x| = 6.2·10⁻¹⁹, k = 29, the closest of all below 2⁵⁰), 2⁻⁸¹ at x = 14461176.67027838
-//! and 2⁻⁶¹ at x = 410195257422896.8.
+//! 3u²·|k·P₂|). The error is at most 2⁻¹⁰⁰·|f| plus the floor, so sin and cos are within
+//! 1.5·2⁻¹⁰⁰ relative wherever |x − kπ/2| ≥ |k|·2⁻⁶⁰ (`f64`) or |k|·2⁻⁵⁷ (double-double), and
+//! within the floor closer in. At the doubles closest to such multiples the measured relative
+//! error is 2⁻¹⁰⁰ at x = 45.553093477052 (|cos x| = 6.2·10⁻¹⁹, k = 29, the closest of all below
+//! 2⁵⁰), 2⁻⁸¹ at x = 14461176.67027838 and 2⁻⁶¹ at x = 410195257422896.8.
 //!
 //! Ranges: |sin x| ≤ 1 and |cos x| ≤ 1; `atan` and `asin` lie in [−π/2, π/2], `acos` in [0, π]
 //! and `atan2` in [−π, π] (and in [−π/2, π/2] for x > 0), where π/2 and π are the

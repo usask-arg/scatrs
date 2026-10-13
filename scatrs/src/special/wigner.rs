@@ -24,7 +24,8 @@ const SCALED_RANGE_BITS: i64 = 256;
 /// 2⁻⁹⁶⁹, below which double-double loses precision.
 const UNSCALED_FROM_BITS: i64 = -900;
 /// The general difference form is used for |x| ≥ this. Below, the three-term form is as
-/// accurate (in sweeps up to l = 4000) and, in double-double, faster.
+/// accurate (in sweeps up to l = 4000 during code review, not committed) and, in double-double,
+/// faster.
 const GENERAL_DIFFERENCE_FROM: f64 = 0.9;
 
 /// Fills `out[l]` with d^l_{mn}(θ) for `l = 0, …, out.len() − 1`, given `x = cos θ`.
@@ -32,8 +33,8 @@ const GENERAL_DIFFERENCE_FROM: f64 = 0.9;
 /// Entries with `l < max(|m|, |n|)` are zero.
 ///
 /// Convention: Mishchenko, Travis & Lacis (2002), *Scattering, Absorption, and Emission of
-/// Light by Small Particles*, Appendix B. It equals the common d^j_{m′m}(β) with m′ = m.
-/// Examples: d¹₀₁(θ) = sin θ/√2, d¹₁₀(θ) = −sin θ/√2, d²₂₂(θ) = cos⁴(θ/2).
+/// Light by Small Particles*, Appendix B. It is the common d^j_{m′m}(β) with (m′, m) renamed
+/// (m, n). Examples: d¹₀₁(θ) = sin θ/√2, d¹₁₀(θ) = −sin θ/√2, d²₂₂(θ) = cos⁴(θ/2).
 ///
 /// # Method
 ///
@@ -71,28 +72,33 @@ const GENERAL_DIFFERENCE_FROM: f64 = 0.9;
 /// * `f64`: ≤ 16(l + 1)·2⁻⁵²;
 /// * `DoubleDouble`: ≤ (l + 1)·2⁻⁹⁷.
 ///
-/// These bounds are measured, not proven. They are validated up to l = 2.5·10⁵ for (0, 0) and
-/// (0, 2), and for general (m, n) up to l = 4000 in the tests and l = 5000 to 20 000 in review
-/// probes. The Arb tests check:
+/// These bounds are measured, not proven. The tests validate them up to l = 2.5·10⁵ for (0, 0)
+/// and (0, 2), and for general (m, n) at sampled degrees up to l = 2000 (to l = 4000 for two
+/// cases next to the poles, and to l = 3000 for start values below the normal range). The Arb
+/// tests check:
 ///
 /// * every degree l ≤ 100 of 17 pairs (m, n), covering all sign combinations, m = ±n and
 ///   |m|, |n| up to 50, at x = ±1, −1 + 2⁻⁵³, 1 − 3·2⁻⁵³, ±0.9999999, −0.5, 0, 0.3 and cos(π/6);
 /// * sampled degrees up to l = 2000 of (0, 0), (2, ±2), (0, 2), (50, −37), (−37, −50) and
-///   (7, 150), up to l = 4000 next to the poles, and up to l = 2.5·10⁵ of (0, 0) and (0, 2) at
-///   seven x covering all three forms.
+///   (7, 150); up to l = 4000 of (35, 34) at x = cos(4.2·10⁻⁴) and (0, 0) at x = −1 + 2⁻⁵³; up
+///   to l = 1000–3000 of seven cases whose start value lies below the normal range; and up to
+///   l = 2.5·10⁵ of (0, 0) and (0, 2) at seven x covering all three forms.
 ///
 /// The worst measured errors are 0.53(l + 1)·2⁻⁵² and 0.002(l + 1)·2⁻⁹⁷ (at most 6·10⁻⁶ of the
-/// double-double bound at l = 2.5·10⁵). An adversarial review probe of about 4500 Arb cases
-/// with |m|, |n| ≤ 1000 and l ≤ 5000 (turning points, the switch at |x| = 0.9, near-diagonal
-/// pairs at small lθ) found at most 0.74(l + 1)·2⁻⁵² and 0.0034(l + 1)·2⁻⁹⁷. All integer
-/// coefficients are exact in double-double for degrees and orders below about 9·10⁷ (2^26.5).
+/// double-double bound at l = 2.5·10⁵). Measured during code review (not committed): an
+/// adversarial probe of about 4500 Arb cases with |m|, |n| ≤ 1000 and l ≤ 5000 (turning points,
+/// the switch at |x| = 0.9, near-diagonal pairs at small lθ) found at most 0.74(l + 1)·2⁻⁵² and
+/// 0.0034(l + 1)·2⁻⁹⁷, and probes of general (m, n) reached l = 5000 to 20 000. All integer
+/// coefficients are exact in double-double for degrees below about 9·10⁷ (2^26.5) and
+/// |m − n| below 2^26.5: for all orders below about 4.7·10⁷ in magnitude.
 ///
 /// While |d^l| grows with l, before its first turning point, the error is also within the bound
-/// relative to |d^l| (measured: up to 1.05(l + 1)·2⁻⁵², at the start value of (1313, 1313) at
-/// x = 0.2087); in the oscillatory region beyond, near zeros of d^l, only the absolute bound
-/// holds. Values below the normal range are not flushed to zero: where the start value
-/// underflows, the recurrence runs on scaled values, so the values that are normal keep that
-/// relative accuracy, and smaller ones are rounded once to a subnormal or zero.
+/// relative to |d^l| (measured during code review, not committed: up to 1.05(l + 1)·2⁻⁵², at
+/// the start value of (1313, 1313) at x = 0.2087); in the oscillatory region beyond, near zeros
+/// of d^l, only the absolute bound holds. Values below the normal range are not flushed to
+/// zero: where the start value underflows, the recurrence runs on scaled values, so the values
+/// that are normal keep that relative accuracy, and smaller ones are rounded once to a
+/// subnormal or zero.
 /// (`DoubleDouble` has full precision only above 2⁻⁹⁶⁹.)
 ///
 /// # Derivatives

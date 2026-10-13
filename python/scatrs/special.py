@@ -59,11 +59,11 @@ def gauss_legendre(n: SupportsIndex) -> tuple[NDArray[np.float64], NDArray[np.fl
     The rule is computed in double-double arithmetic and rounded once, so nodes and weights
     are accurate to about half an ulp, and the rule is exactly symmetric.
 
-    The cost is ``O(n**2)`` time and ``O(n)`` memory: about ``28 ns * n**2`` on an Apple M4
-    Pro, which is 32 ms at n = 1000, 0.72 s at n = 5000, 11 s at n = 20000 and about 8 minutes
-    at the cap; x86-64 builds without FMA are roughly ten times slower. The call releases the
-    GIL, so other Python threads keep running, but it cannot be interrupted: Ctrl+C takes
-    effect only once it returns. Compute a rule once and reuse it.
+    The cost is ``O(n**2)`` time and ``O(n)`` memory: about ``28 ns * n**2`` for large n on an
+    Apple M4 Pro, measured as 32 ms at n = 1000, 0.72 s at n = 5000 and 11 s at n = 20000, and
+    about 8 minutes at the cap; x86-64 builds without FMA are roughly ten times slower. The
+    call releases the GIL, so other Python threads keep running, but it cannot be interrupted:
+    Ctrl+C takes effect only once it returns. Compute a rule once and reuse it.
     """
     return _scatrs.gauss_legendre(_args.size(n, "n"))
 
@@ -114,8 +114,8 @@ def wigner_d(
     Notes
     -----
     The absolute error is within ``16 * (l + 1) * 2**-52``, a bound measured against Arb (not
-    proven): for degrees up to 4000 with general orders, and up to 2.5e5 for
-    ``(m, n) = (0, 0)`` and ``(0, 2)``.
+    proven): up to degree 2.5e5 for ``(m, n) = (0, 0)`` and ``(0, 2)``, and for general orders
+    at sampled degrees up to 2000 (up to 4000 in two cases next to the poles).
 
     The cost is ``O(max(|m|, |n|))`` per element of ``x`` for the start value, then about 3 ns
     per degree (2.6 to 3.7 ns on an Apple M4 Pro); the output takes ``8 * x.size * (l_max + 1)``

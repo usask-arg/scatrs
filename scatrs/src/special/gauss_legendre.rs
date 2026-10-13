@@ -1,10 +1,13 @@
 //! Gauss–Legendre quadrature on [−1, 1].
 //!
 //! Nodes come from Newton iteration on Pₙ in double-double arithmetic, started from
-//! Tricomi's approximation, and are then rounded to the requested type. A plain `f64`
-//! computation loses about n² ulps in the weights next to ±1, which are exactly where Mie
-//! forward peaks sit. Rounding from double-double keeps `f64` nodes and weights within
-//! about half an ulp. The cost is O(n²); callers that reuse a rule should cache it.
+//! Tricomi's approximation, and are then rounded to the requested type. Next to ±1 the weights
+//! are ill-conditioned in the nodes: a node error of one ulp changes the weight by about n²/6
+//! units of 2⁻⁵² (relative), so a plain `f64` computation loses that much there; even from the
+//! correctly rounded nodes, the extreme weight at n = 1000 is about 7·10⁴ units off. Mie
+//! forward-scattering peaks sit next to +1. Rounding from double-double keeps `f64` nodes and
+//! weights within about half an ulp. The cost is O(n²); callers that reuse a rule should cache
+//! it.
 
 use crate::scalar::{DoubleDouble as Dd, Real};
 use crate::{Error, Result};
@@ -27,9 +30,9 @@ pub struct GaussLegendre<T> {
 ///
 /// Below the cap a call can still be expensive, and it cannot be interrupted:
 ///
-/// * time: about 28 ns·n² on an Apple M4 Pro with FMA, so about 8 minutes at the cap, and
-///   roughly 10 times longer on x86_64 builds without the `fma` target feature, where every
-///   double-double operation calls a software `mul_add`;
+/// * time: about 28 ns·n² for large n on an Apple M4 Pro with FMA, so about 8 minutes at the
+///   cap, and roughly 10 times longer on x86_64 builds without the `fma` target feature, where
+///   every double-double operation calls a software `mul_add`;
 /// * memory: (32 + 2·`size_of::<T>()`)·n bytes, 32 bytes per point of recurrence coefficients
 ///   besides the rule itself: 6.3 MB for `f64` at the cap, 277 MB for `Dual<DoubleDouble, 64>`.
 pub const MAX_GAUSS_LEGENDRE_POINTS: usize = 1 << 17;

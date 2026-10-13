@@ -12,13 +12,15 @@ These items came out of the Phase 0 reviews and were deliberately deferred. Each
   - **Side benefits:** it removes the dependence on the platform's `f64::ln` seed, and the ×4.5 error amplification near |ln a| ≈ 0.22.
 - **`ln_1p_series` (about 200 ns).** Use reciprocal tables, or an f64 tail for terms below 2⁻⁵³.
 - **Gauss–Legendre is O(n²) in DD and too slow for large Mie rules. This is a priority for Phase 1.**
-  - Measured on an M4 Pro, about 28 ns·n²: n = 1000 takes 32 ms, n = 5000 takes 0.72 s, n = 20000 takes 11 s.
-  - Mie at x = 2·10⁴ needs about 4·10⁴ nodes (≈ 45 s).
-  - Options:
-    - Bogaert (2014), an iteration-free O(n) method with about ε-accurate nodes and weights in θ, cross-checked against the DD rule.
-    - Interleave the recurrences of 2–4 roots, for an estimated 2–4×.
-    - Cache rules per n.
-  - Working in θ would also remove the inherent DD weight loss near ±1, which is about log₂(n²/10) bits.
+  - **Current cost:** about 28 ns·n² on an M4 Pro (n = 1000 takes 32 ms, n = 5000 takes 0.72 s, n = 20000 takes 11 s). Mie at x = 2·10⁴ needs about 4·10⁴ nodes, about 45 s.
+  - **Cap:** `MAX_GAUSS_LEGENDRE_POINTS` = 2¹⁷, a controller decision in Task 9. Raise it when the O(n) method lands.
+  - **Speed-ups measured in the Task 9 review, without changing the algorithm:**
+    1. **Drop the polish step.** The remaining error after |Δx| ≤ 2⁻⁹⁰ is ≤ 2⁻¹⁴² at 2²⁰. Replace the final Pₙ′ evaluation with the ODE correction P′(x−δ) ≈ P′(x)(1 − 2xδ/(1−x²)), stopping at |Δx| ≤ 2⁻⁶⁰/n. This needs 2.0–2.2× fewer evaluations, with f64 output bit-identical on 31 random n ≤ 6000.
+    2. **Interleave K roots in lockstep.** K = 2 gives 1.9×; K = 4 or 8 gives 2.7× (saturated). Results are bitwise identical per root.
+    - Combined, about 5×: n = 4·10⁴ goes from about 45 s to about 8 s.
+  - **Real fix: Bogaert (2014),** an iteration-free O(n) method that works in θ. It is about ε-accurate and also removes the DD weight loss near ±1, about log₂(n²/10) bits. Cross-check it against the DD rule and Arb.
+  - **Caching (Phase 1 design note):** a rule exact to degree D is exact for every lower degree, so an ensemble needs only the rule at its largest n_q. Round n_q up to buckets if caching. A hidden global cache conflicts with §4.5, so use a cache owned by the caller or an `Arc`.
+- **CI for `#[ignore]` tests.** These tests (e.g. GL at n = 20000) must run on a schedule in Task 13, or the claims they back are never re-checked.
 - **x86_64 builds without FMA.**
   - **Problem:** `f64::mul_add` becomes a libm call, which makes every DD operation about 10× slower in default wheels.
   - **Fix:** select Dekker's split `two_prod` when `cfg(not(target_feature = "fma"))`, and consider shipping x86-64-v3 wheels as well. Decide this before Task 13's wheels are published. A non-FMA build also has to change `mul_dd` and `mul_f64`, which use FMA in their non-exact steps. Those operations then need the non-FMA error bounds from Joldes, Muller & Popescu (2017), not just a different `two_prod`. FMA and non-FMA builds will then give bitwise different results. The spec allows this, since it only requires determinism across thread counts.

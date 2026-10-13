@@ -72,5 +72,18 @@ These items came out of the Phase 0 reviews and were deliberately deferred. Each
 - **Libm accuracy assumptions in tests.** The f64 derivative bounds in `dual_functions.rs` assume each libm call is within 2 ulps, which has only been checked on macOS. If CI on glibc or the Windows CRT fails, measure that platform's libm and adjust the per-platform bound with a written justification.
 - **`Dual<DoubleDouble>` sin speed.** The derivative needs DD cos, so `Dual<Dd>` sin costs about 2× DD sin. It benefits directly from the DD sin_cos speedups above.
 
+- **Indicative `Dual<T, 4>` costs, throughput relative to plain T.** Measured in the Task 8 review on an M4; replace these with the phase 1 criterion benchmarks.
+
+  | Function | Cost |
+  |---|---|
+  | f64 sin | 1.2–1.9× (the baseline is noisy) |
+  | f64 exp | 1.15× |
+  | f64 sqrt | 4.3× (plain f64 sqrt vectorises across elements) |
+  | DD sin | 2.0× |
+  | tanh, \|x\| > 0.55 | 2.5× |
+
+- **Cross-platform CI is essential.** The Task 8 review found a Linux-only failure: macOS passed only because Apple's `pow` happened to cancel a test-reference error. Run the full test suite on Linux and Windows in CI before trusting libm-dependent bounds (Task 13).
+- **`Dual<Dd>::log` cost.** The value must come bitwise from `T::log`, so it computes DD `ln` twice, about 2× DD `log`.
+
 ## Platform notes
 - On aarch64, `f64::max`/`f64::min` return NaN for a signaling NaN, contrary to Rust's documentation. `DoubleDouble` follows the documented rule. No DD operation produces a signaling NaN.

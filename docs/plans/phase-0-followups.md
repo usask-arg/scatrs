@@ -47,10 +47,19 @@ These items came out of the Phase 0 reviews and were deliberately deferred. Each
   3. **sin/cos(j/64) tables.** An estimated 3–4× on sin_cos.
   4. **A table-driven DD atan.** This avoids sin_cos and the libm seed.
 
-## Packaging (Task 13)
-- Ship `LICENSE` inside the `scatrs` crate package, for example by copying it to `scatrs/LICENSE`.
-- Use absolute GitHub URLs in `README.md`, since crates.io breaks relative links.
-- `scatrs/tests/common/mod.rs` reads `../reference/data`. Exclude the reference-backed tests from the published crate, or make them skip when the data is absent.
+## Packaging and CI
+- **Done in Task 13:**
+  - `LICENSE` ships in the crate.
+  - README links are absolute.
+  - Reference-backed tests are excluded from the crate, or skip unless `SCATRS_REQUIRE_REFERENCE_DATA=1`.
+  - The release has a preflight job, tests every wheel with `test-wheels` and smoke-tests the sdist.
+  - Actions are SHA-pinned.
+  - Reference generators no longer depend on the platform: regeneration is byte-identical on macOS, Linux x86_64 and Linux aarch64.
+- **Open:**
+  - musllinux wheels are built but never installed and tested. Test them inside a `python:3.x-alpine` container on `ubuntu-latest`.
+- **First real CI run:**
+  - Windows numerics (UCRT sin/cos/pow/fma) are the main unknown; the logs record the measured worst sin/cos error.
+  - The `intel-macos` 3u sin/cos bound was measured under Rosetta (2.40u), so the weekly job confirms it on real Intel hardware.
 
 ## Complex arithmetic (Phase 1, before the Mie kernels)
 - **Accuracy of num-complex.** num-complex's formulas give only norm-wise accuracy. This was found in the Task 6 review and holds for `Complex<f64>` as well as `Complex<DoubleDouble>`:

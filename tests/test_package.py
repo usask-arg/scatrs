@@ -1,4 +1,5 @@
 import importlib
+import importlib.metadata
 import tomllib
 from importlib.metadata import version
 from pathlib import Path
@@ -25,6 +26,19 @@ def test_version_matches_cargo_workspace():
 def test_extension_is_built_from_the_installed_version():
     # The extension reports the Cargo version it was compiled from (SemVer form).
     assert Version(_scatrs.__version__) == Version(scatrs.__version__)
+
+
+def test_version_falls_back_to_the_extension_without_metadata(monkeypatch):
+    def not_installed(name):
+        raise importlib.metadata.PackageNotFoundError(name)
+
+    monkeypatch.setattr(importlib.metadata, "version", not_installed)
+    try:
+        assert importlib.reload(scatrs).__version__ == _scatrs.__version__
+    finally:
+        monkeypatch.undo()
+        importlib.reload(scatrs)
+    assert scatrs.__version__ == version("scatrs")
 
 
 def test_crate_license_is_the_repository_license():

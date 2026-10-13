@@ -306,8 +306,15 @@ longer sum lies inside the certified ball.
 <!-- synced with scatrs/benches/mie.rs -->
 
 $O(N + \lvert m\rvert x)$ per sphere: the $D_n(mx)$ recurrence starts at about
-$1.5\lvert m\rvert x$. Measured with `cargo bench -p scatrs --bench mie` on an Apple M4 Pro
-($m = 1.5 + 0.01i$): 0.54 µs at $x = 0.1$, 1.1 µs at $x = 10$, 36 µs at $x = 1000$ and 345 µs
-at $x = 10^4$ for the efficiencies (about 34 ns per term); with the full
-$(x, \mathrm{Re}\,m, \mathrm{Im}\,m)$ Jacobian 1.3 to 1.8 times that; amplitudes at 100 angles
-add about 4.5 ns per angle and term.
+$1.5\lvert m\rvert x$ (or $N$ if that is larger). Measured with
+`cargo bench -p scatrs --bench mie` on an Apple M4 Pro, timings varying by about 10% between
+runs:
+
+- the efficiencies at $m = 1.5 + 0.01i$: 0.55 µs at $x = 0.1$, 1.1 µs at $x = 10$, 36 µs at
+  $x = 1000$ and 0.34 ms at $x = 10^4$, about 34 ns per term for large $x$; the cost per term
+  grows with $\lvert m\rvert$, to about 130 ns at $\lvert m\rvert = 10$;
+- at real $m$, about 25% less: the values take a real recurrence;
+- with the full $(x, \mathrm{Re}\,m, \mathrm{Im}\,m)$ Jacobian, the same derivative work in
+  both cases: 1.3 to 1.8 times the values at $m = 1.5 + 0.01i$, and 1.4 to 2.0 times at
+  $m = 1.5$ (2.0 from $x = 1000$ on, at the limit of the target of twice the values);
+- amplitudes at 100 angles add about 4 ns per angle and term.

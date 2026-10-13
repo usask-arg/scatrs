@@ -88,8 +88,8 @@ assert abs(0.5 * np.sum(w * f11 * mu) - q.g) < 1e-13
 ## Derivatives
 
 `derivatives=True` returns the derivatives with respect to the size parameter and the real
-and imaginary parts of the refractive index, in closed form, for about 1.3 to 1.8 times the
-cost of the values. Here they are checked against central differences.
+and imaginary parts of the refractive index, in closed form, for 1.3 to 2 times the cost of
+the values. Here they are checked against central differences.
 
 ```{code-cell} python
 x0, m0 = 12.0, 1.45 + 0.02j

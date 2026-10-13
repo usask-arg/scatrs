@@ -10,7 +10,7 @@ Each function runs entirely in Rust, with the GIL released, over all elements in
 ``derivatives`` is ``True`` (all of ``"x"``, ``"m_real"``, ``"m_imag"``) or a sequence of those
 names; the result's ``d`` method (for example :meth:`MieEfficiencies.d`) then returns the
 derivative with respect to one of them, in the same structure. Derivatives cost little: all
-three together take 1.3 to 1.8 times as long as the values alone.
+three together take 1.3 to 2 times as long as the values alone.
 
 Results are frozen dataclasses of read-only arrays (copy an array to modify it); they compare
 by identity.

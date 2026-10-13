@@ -47,6 +47,8 @@ jobs:
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - name: Build the libraries and the examples (scatrs/examples holds documented code)
         run: cargo build --workspace --lib --examples --locked
+      - name: Run each benchmark once (criterion's test mode; timing is not checked)
+        run: cargo test -p scatrs --benches --locked
       - name: Rustdoc, private items included (warnings are errors)
         env:
           RUSTDOCFLAGS: "-D warnings"

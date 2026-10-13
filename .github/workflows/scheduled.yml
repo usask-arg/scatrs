@@ -1,0 +1,65 @@
+name: Scheduled checks
+
+on:
+  schedule:
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  reference-drift:
+    name: Regenerate the Arb reference data and check for drift
+    # macOS, where the data were generated. Some generators draw random inputs through the
+    # platform's sin, cos and pow; 71 of those results are not correctly rounded on macOS, so
+    # another libm (glibc) can draw different inputs. The Arb computations are portable.
+    runs-on: macos-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@v10.3.0
+      - name: Regenerate every reference file
+        run: uv run --locked --directory reference python -m scatrs_reference generate
+      - name: Fail on any difference from the committed data
+        run: |
+          changes=$(git status --porcelain --untracked-files=all -- reference/data)
+          if [ -n "$changes" ]; then
+            echo "::error::The regenerated reference data differ from the committed files."
+            echo "$changes"
+            git diff --stat -- reference/data
+            exit 1
+          fi
+      - name: Keep the regenerated data for inspection
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: regenerated-reference-data
+          path: reference/data
+
+  ignored-tests:
+    name: Slow Rust tests (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 120
+    defaults:
+      run:
+        shell: bash # on Windows too, so that the `--` reaches cargo unchanged
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+      # The #[ignore] tests: Gauss–Legendre at n = 20000 against Arb, and every rule up to 3000
+      # points. --nocapture shows the worst errors they measure.
+      - name: Run the ignored tests
+        run: cargo test -p scatrs --release --locked -- --ignored --nocapture

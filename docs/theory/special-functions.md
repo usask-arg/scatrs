@@ -47,7 +47,7 @@ double-double arithmetic, and mirrors them. For odd $n$ the middle node is 0.
 
 Nodes ascend and the rule is exactly symmetric. The rule uses only IEEE 754 operations and
 fused multiply-adds, with no platform maths library, so its bits are designed not to depend on
-the platform. The tests have run on macOS so far; CI on Linux and Windows is pending.
+the platform. CI runs the tests on Linux, macOS and Windows.
 
 ### Why double-double
 
@@ -67,8 +67,8 @@ measures this against Arb.
 The tests check the bounds below against Arb for every node of the full reference rules
 ($n$ = 1, 2, 3, 4, 5, 8, 16, 33, 64, 100, 128, 257, 500 and 1000). They also check them for
 the 8 nodes nearest each of $\pm1$ and the 4 nearest 0 at $n$ = 5000, 20 000 and $2^{17}$, the
-cap. The $n$ = 20 000 rule takes about 11 s, so its check is an ignored test, run on demand.
-At the cap the test computes only the individual roots. Other values of $n$ are not
+cap. The $n$ = 20 000 rule takes about 11 s, so its check is an ignored test, which CI runs
+weekly. At the cap the test computes only the individual roots. Other values of $n$ are not
 individually checked against Arb.
 
 | Type | Nodes: absolute error | Weights: relative error | Measured worst |

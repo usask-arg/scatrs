@@ -25,10 +25,12 @@ it, in `docs/plans/phase-0-followups.md`.
   available from Rust only.
 - Neither wheels nor the Rust crate are published, and the Rust API is not on docs.rs. See
   {doc}`installation`.
-- Continuous integration is not yet in place:
-  - the test suite has not been run routinely on Linux and Windows;
-  - the slow tests marked `#[ignore]` run only on demand. These are the 20 000-point
-    Gauss–Legendre rule against Arb, and the root checks for every rule up to 3000 points.
+- Continuous integration runs the Rust and Python tests on Linux (x86_64), macOS (arm64) and
+  Windows (x86_64) for every change. The slow tests marked `#[ignore]` run only weekly, on the
+  same three systems: the 20 000-point Gauss–Legendre rule against Arb, and the root checks for
+  every rule up to 3000 points. The release workflow also builds wheels for platforms that no
+  tests run on (32-bit x86 and ARM, aarch64 Linux and Windows, s390x, ppc64le, musl Linux and
+  Intel macOS).
 
 ## Gauss–Legendre quadrature
 
@@ -114,7 +116,8 @@ Arb, before the Mie kernels.
   functions from those of `Complex<f64>`, by a few ulps or in special cases. See
   {ref}`dual-zero-tests`.
 - **libm accuracy.** The tests of `f64` derivatives assume each libm call is within 2 ulps.
-  That has been checked only on macOS.
+  That has been measured only on macOS (arm64); CI also runs these tests with glibc and the
+  Windows C runtime.
 - **Vectorisation.** A loop over many `Dual`s is not vectorised across elements.
 
 ## Python bindings
@@ -129,5 +132,12 @@ Arb, before the Mie kernels.
 
 - **Recorded precision.** The manifest records the starting precision of the `wigner_d`
   generator, 800 bits, although it doubles that as needed, to at most 51 200 bits.
-- **Drift check.** Regeneration is checked byte for byte only for `constants.jsonl` today. The
-  scheduled job that will regenerate every file is planned with CI.
+- **Drift check.** For every change, CI regenerates only `constants.jsonl` byte for byte, and
+  checks the other files against their manifest hashes. Every file is regenerated and compared
+  byte for byte only weekly, by a scheduled job.
+- **Platform-dependent inputs.** The generators of `dd_complex`, `dd_elementary` and `dd_trig`
+  draw some random inputs through the platform's `sin`, `cos` and `pow`. On the Mac (arm64)
+  that generated the data, 71 of about 7400 such results are not correctly rounded (measured
+  against Arb), so another maths library, such as glibc on Linux, can draw different inputs.
+  The data would then differ, though every Arb value stays correct for its own inputs. The
+  weekly job therefore runs on macOS.

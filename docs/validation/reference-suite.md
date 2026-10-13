@@ -113,9 +113,9 @@ The committed data take about 7.8 MB, within the 20 MB budget.
   (run `cargo test -- --nocapture` to see it).
 - **Loading.** The loader rejects malformed records, duplicate case names and output arrays of
   unequal length.
-- **Slow cases.** Records that take too long to recompute are checked by ignored tests, run on
-  demand with `cargo test -p scatrs --release -- --ignored`. Today that is the 20 000-point
-  Gauss–Legendre rule.
+- **Slow cases.** Records that take too long to recompute are checked by ignored tests, which
+  CI runs weekly, and which run on demand with `cargo test -p scatrs --release -- --ignored`.
+  Today that is the 20 000-point Gauss–Legendre rule.
 - **The largest rule.** The rule with $2^{17}$ points is checked root by root, by a unit test.
 
 **Tolerance policy.** A test tolerance is never loosened without a written justification in the
@@ -131,9 +131,10 @@ uv run --directory reference python -m pytest
 
 python-flint is pinned exactly (0.9.0), so that regeneration can be checked byte for byte
 against the SHA-256 in the manifest. The generator's own tests check this for
-`constants.jsonl`, and they check every committed file against its manifest hash. A scheduled
-CI job that regenerates every file and fails on any difference is planned with the CI
-workflows.
+`constants.jsonl`, and they check every committed file against its manifest hash. A weekly
+scheduled CI job regenerates every file and fails on any difference. It runs on macOS, where
+the data were generated, because some generators draw random inputs through the platform's
+maths library (see {doc}`../limitations`).
 
 The manifest's precision for `wigner_d.jsonl`, 800 bits, is only the starting precision. The
 generator doubles it as needed, to at most 51 200 bits, until each ball is narrow enough: a

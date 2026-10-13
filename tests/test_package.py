@@ -1,3 +1,4 @@
+import importlib
 import tomllib
 from importlib.metadata import version
 from pathlib import Path
@@ -33,3 +34,17 @@ def test_public_names():
 def test_limits_are_exposed():
     assert special.MAX_GAUSS_LEGENDRE_POINTS == _scatrs.MAX_GAUSS_LEGENDRE_POINTS == 2**17
     assert special.MAX_WIGNER_D_VALUES == _scatrs.MAX_WIGNER_D_VALUES == 2**28
+
+
+def test_test_hooks_live_outside_the_extension_namespace():
+    assert set(_scatrs.__all__) == {
+        "MAX_GAUSS_LEGENDRE_POINTS",
+        "MAX_WIGNER_D_VALUES",
+        "__version__",
+        "gauss_legendre",
+        "wigner_d",
+    }
+    assert not hasattr(_scatrs, "_raise_core_error")
+    testing = importlib.import_module("scatrs._scatrs._testing")
+    assert testing is _scatrs._testing
+    assert set(testing.__all__) == {"raise_core_error", "with_write_borrow"}

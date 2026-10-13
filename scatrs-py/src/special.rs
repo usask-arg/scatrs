@@ -29,7 +29,7 @@ type Rule<'py> = (Bound<'py, PyArray1<f64>>, Bound<'py, PyArray1<f64>>);
 /// Gauss–Legendre nodes and weights on [-1, 1]; see `scatrs.special.gauss_legendre`.
 ///
 /// Raises `InvalidInputError` for n == 0 or n > MAX_GAUSS_LEGENDRE_POINTS (checked by the core
-/// before it allocates), and `OverflowError` for n < 0 or n >= 2**64.
+/// before it allocates), and `OverflowError` for n < 0 or n > usize::MAX.
 #[pyfunction]
 pub fn gauss_legendre(py: Python<'_>, n: usize) -> PyResult<Rule<'_>> {
     let rule = py
@@ -50,7 +50,7 @@ pub fn gauss_legendre(py: Python<'_>, n: usize) -> PyResult<Rule<'_>> {
 /// [-1, 1] or NaN, and for max(len(x), 1)·(l_max + 1) > MAX_WIGNER_D_VALUES; `BufferError` if
 /// another rust-numpy extension holds a writeable borrow of `x`; `MemoryError` if the output
 /// cannot be allocated; `OverflowError` for m or n outside the 32-bit range, or l_max < 0 or
-/// l_max >= 2**64.
+/// l_max > usize::MAX.
 #[pyfunction]
 pub fn wigner_d<'py>(
     py: Python<'py>,

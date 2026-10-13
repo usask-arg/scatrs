@@ -8,7 +8,8 @@ import numpy as np
 import pytest
 
 import scatrs
-from scatrs import _scatrs, special
+from scatrs import _args, _scatrs, special
+from scatrs._scatrs import _testing
 
 
 def test_invalid_n_raises_invalid_input():
@@ -74,7 +75,7 @@ def test_not_converged_error_defaults_and_pickles():
 )
 def test_core_errors_map_to_python_classes(variant, cls, message):
     with pytest.raises(cls) as info:
-        _scatrs._raise_core_error(variant, "bad")
+        _testing.raise_core_error(variant, "bad")
     assert type(info.value) is cls
     assert str(info.value) == message
 
@@ -82,19 +83,20 @@ def test_core_errors_map_to_python_classes(variant, cls, message):
 @pytest.mark.parametrize("achieved", [1e-3, math.inf])
 def test_core_not_converged_maps_with_its_accuracies(achieved):
     with pytest.raises(scatrs.NotConvergedError) as info:
-        _scatrs._raise_core_error("NotConverged", achieved=achieved, requested=2.0**-90)
+        _testing.raise_core_error("NotConverged", achieved=achieved, requested=2.0**-90)
     assert (info.value.achieved, info.value.requested) == (achieved, 2.0**-90)
     assert str(info.value).startswith("not converged: achieved ")
 
 
 def test_unknown_core_error_variant_is_rejected():
     with pytest.raises(ValueError, match="unknown"):
-        _scatrs._raise_core_error("Nonsense")
+        _testing.raise_core_error("Nonsense")
 
 
 # --- Robustness: integer arguments -------------------------------------------------------------
 
 CAP = special.MAX_GAUSS_LEGENDRE_POINTS
+USIZE_MAX = _args._USIZE_MAX  # 2**64 - 1 or 2**32 - 1, as the platform's usize
 VALUES = special.MAX_WIGNER_D_VALUES  # 2²⁸
 
 
@@ -104,11 +106,11 @@ VALUES = special.MAX_WIGNER_D_VALUES  # 2²⁸
         # Values the Rust core sees, and words the errors for:
         (0, "Gauss-Legendre rule needs n >= 1"),
         (CAP + 1, f"Gauss-Legendre rule needs n <= {CAP}, got {CAP + 1}"),
-        (2**63, f"Gauss-Legendre rule needs n <= {CAP}, got {2**63}"),
+        (USIZE_MAX, f"Gauss-Legendre rule needs n <= {CAP}, got {USIZE_MAX}"),
         # Values that do not fit a usize, rejected while converting:
         (-1, "n must not be negative, got -1"),
         (-(2**70), "n must not be negative"),
-        (2**64, f"n must be at most {2**64 - 1}, got {2**64}"),
+        (USIZE_MAX + 1, f"n must be at most {USIZE_MAX}, got {USIZE_MAX + 1}"),
         (2**200, "n must be at most"),
     ],
 )
@@ -209,7 +211,7 @@ def test_wigner_d_non_real_x_is_type_error(x):
 
 
 def test_x_borrowed_for_writing_by_another_extension_is_buffer_error():
-    # rust-numpy tracks borrows across all extensions built on it; _with_write_borrow holds a
+    # rust-numpy tracks borrows across all extensions built on it; with_write_borrow holds a
     # writeable one, as another such extension could, while the callback runs.
     x = np.linspace(-1, 1, 6)
     for call in (
@@ -218,11 +220,11 @@ def test_x_borrowed_for_writing_by_another_extension_is_buffer_error():
         lambda: _scatrs.wigner_d(0, 0, 3, x),
     ):
         with pytest.raises(BufferError, match="x cannot be read: The given array is already"):
-            _scatrs._with_write_borrow(x, call)
+            _testing.with_write_borrow(x, call)
     with pytest.raises(BufferError):  # a borrow of an overlapping view conflicts too
-        _scatrs._with_write_borrow(x[2:4], lambda: special.wigner_d(0, 0, 3, x))
+        _testing.with_write_borrow(x[2:4], lambda: special.wigner_d(0, 0, 3, x))
     # Disjoint data does not conflict, and the borrow ends with the call.
-    assert _scatrs._with_write_borrow(x[:2], lambda: special.wigner_d(0, 0, 3, x[3:])).shape == (
+    assert _testing.with_write_borrow(x[:2], lambda: special.wigner_d(0, 0, 3, x[3:])).shape == (
         3,
         4,
     )
@@ -232,10 +234,10 @@ def test_x_borrowed_for_writing_by_another_extension_is_buffer_error():
 def test_error_mapping_without_scatrs_errors_falls_back_to_runtime_error(monkeypatch):
     monkeypatch.setitem(sys.modules, "scatrs.errors", None)  # importing it now fails
     with pytest.raises(RuntimeError, match=r"^invalid input: bad$") as info:
-        _scatrs._raise_core_error("InvalidInput", "bad")
+        _testing.raise_core_error("InvalidInput", "bad")
     assert isinstance(info.value.__cause__, ImportError)
     with pytest.raises(RuntimeError, match=r"^not converged: achieved inf") as info:
-        _scatrs._raise_core_error("NotConverged", achieved=math.inf, requested=1e-6)
+        _testing.raise_core_error("NotConverged", achieved=math.inf, requested=1e-6)
     assert isinstance(info.value.__cause__, ImportError)
     with pytest.raises(RuntimeError, match="-1 <= x <= 1"):
         special.wigner_d(0, 0, 3, [math.nan])
@@ -249,14 +251,14 @@ class _InterruptingModule(types.ModuleType):
 def test_error_mapping_passes_non_exceptions_through(monkeypatch):
     monkeypatch.setitem(sys.modules, "scatrs.errors", _InterruptingModule("scatrs.errors"))
     with pytest.raises(KeyboardInterrupt):
-        _scatrs._raise_core_error("InvalidInput", "bad")
+        _testing.raise_core_error("InvalidInput", "bad")
 
 
 def test_extension_rejects_out_of_range_integers():
     with pytest.raises(OverflowError):
         _scatrs.gauss_legendre(-1)
     with pytest.raises(OverflowError):
-        _scatrs.gauss_legendre(2**64)
+        _scatrs.gauss_legendre(USIZE_MAX + 1)
     with pytest.raises(OverflowError):
         _scatrs.wigner_d(2**31, 0, 3, np.zeros(1))
     with pytest.raises(OverflowError):
@@ -275,7 +277,7 @@ def test_extension_checks_limits_itself():
     with pytest.raises(scatrs.InvalidInputError, match=f"<= {VALUES}, got x.size = 3"):
         _scatrs.wigner_d(0, 0, VALUES // 2, np.zeros(3))
     with pytest.raises(scatrs.InvalidInputError):
-        _scatrs.wigner_d(0, 0, 2**64 - 1, np.zeros(1))
+        _scatrs.wigner_d(0, 0, USIZE_MAX, np.zeros(1))
 
 
 @pytest.mark.parametrize(

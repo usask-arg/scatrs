@@ -33,8 +33,8 @@ it, in `docs/plans/phase-0-followups.md`.
   Windows (x86_64) for every change. The slow tests marked `#[ignore]` run only weekly, on the
   same three systems: the 20 000-point Gauss–Legendre rule against Arb, and the root checks for
   every rule up to 3000 points. The release workflow also builds wheels for platforms that no
-  tests run on (32-bit x86 and ARM, aarch64 Linux and Windows, s390x, ppc64le, musl Linux and
-  Intel macOS).
+  tests run on (aarch64 Linux and Windows, s390x, ppc64le, musl Linux and Intel macOS). 32-bit
+  platforms are not supported.
 
 ## Gauss–Legendre quadrature
 

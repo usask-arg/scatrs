@@ -70,8 +70,8 @@ actions, `Cargo.lock` and both `uv.lock` files weekly, in one grouped pull reque
 only to releases at least a week old.
 
 - `.github/workflows/ci.yml`, on every pull request and push to `main`:
-  - lint: rustfmt, clippy, the examples, `cargo check` for the 32-bit and big-endian wheel
-    targets, the crate package and its tests, ruff and actionlint;
+  - lint: rustfmt, clippy, the examples, `cargo check` for the big-endian wheel target (s390x;
+    32-bit platforms are not supported), the crate package and its tests, ruff and actionlint;
   - the Rust tests on Linux, macOS and Windows, and `cargo check` of the libraries with Rust
     1.85.0 (the MSRV);
   - on each of the three systems, one abi3 wheel built and tested with Python 3.11 and 3.14,

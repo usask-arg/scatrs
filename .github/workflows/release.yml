@@ -72,11 +72,7 @@ jobs:
           - runner: ubuntu-22.04
             target: x86_64
           - runner: ubuntu-22.04
-            target: x86
-          - runner: ubuntu-22.04
             target: aarch64
-          - runner: ubuntu-22.04
-            target: armv7
           - runner: ubuntu-22.04
             target: s390x
           - runner: ubuntu-22.04
@@ -112,11 +108,7 @@ jobs:
           - runner: ubuntu-22.04
             target: x86_64
           - runner: ubuntu-22.04
-            target: x86
-          - runner: ubuntu-22.04
             target: aarch64
-          - runner: ubuntu-22.04
-            target: armv7
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -148,9 +140,6 @@ jobs:
           - runner: windows-latest
             target: x64
             python_architecture: x64
-          - runner: windows-latest
-            target: x86
-            python_architecture: x86
           - runner: windows-11-arm
             target: aarch64
             python_architecture: arm64
@@ -247,9 +236,6 @@ jobs:
           - runner: windows-latest
             artifact: wheels-windows-x64
             python_architecture: x64
-          - runner: windows-latest
-            artifact: wheels-windows-x86
-            python_architecture: x86
           - runner: windows-11-arm
             artifact: wheels-windows-aarch64
             python_architecture: arm64

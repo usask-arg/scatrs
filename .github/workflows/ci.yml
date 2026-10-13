@@ -30,11 +30,10 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Install Rust, and the 32-bit and big-endian targets of the release wheels
+      - name: Install Rust, and the big-endian target of the release wheels
         run: |
           rustup toolchain install stable --profile minimal --no-self-update \
-            --component clippy,rustfmt \
-            --target i686-unknown-linux-gnu,armv7-unknown-linux-gnueabihf,s390x-unknown-linux-gnu
+            --component clippy,rustfmt --target s390x-unknown-linux-gnu
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
@@ -53,12 +52,8 @@ jobs:
         env:
           RUSTDOCFLAGS: "-D warnings"
         run: cargo doc -p scatrs --no-deps --document-private-items --locked
-      - name: Check the 32-bit and big-endian wheel targets
-        run: |
-          for target in i686-unknown-linux-gnu armv7-unknown-linux-gnueabihf \
-            s390x-unknown-linux-gnu; do
-            cargo check --workspace --locked --target "$target"
-          done
+      - name: Check the big-endian wheel target (32-bit platforms are not supported)
+        run: cargo check --workspace --locked --target s390x-unknown-linux-gnu
       # As `cargo publish` does at release time: package the crate, then build it from the
       # packaged files alone (the reference-backed tests are not published).
       - name: Package the scatrs crate

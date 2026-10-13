@@ -6,6 +6,7 @@
 
 pub mod error;
 pub mod scalar;
+pub mod special;
 
 pub use error::{Error, Result};
 pub use scalar::Real;

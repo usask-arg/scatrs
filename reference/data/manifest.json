@@ -47,6 +47,14 @@
       "python_flint": "0.9.0",
       "records": 14,
       "sha256": "0860dd3469f917d2e6fe4bb6a08ea66c60625e766ef3d4b8b3252dfed9af84b2"
+    },
+    "gauss_legendre.jsonl": {
+      "flint": "3.6.0",
+      "generator": "gauss_legendre",
+      "precision_bits": 300,
+      "python_flint": "0.9.0",
+      "records": 16,
+      "sha256": "9e37ebc4be4549d0e3c8c2a03b750637608a1af0897de3405d2e051f4c774b05"
     }
   },
   "format_version": 2

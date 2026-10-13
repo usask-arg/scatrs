@@ -2,7 +2,15 @@
 
 from collections.abc import Callable
 
-from scatrs_reference.generators import constants, dd_arith, dd_complex, dd_elementary, dd_parse, dd_trig
+from scatrs_reference.generators import (
+    constants,
+    dd_arith,
+    dd_complex,
+    dd_elementary,
+    dd_parse,
+    dd_trig,
+    gauss_legendre,
+)
 
 Generator = Callable[[], tuple[int, list[dict]]]
 
@@ -13,4 +21,5 @@ GENERATORS: dict[str, Generator] = {
     "dd_elementary": dd_elementary.generate,
     "dd_parse": dd_parse.generate,
     "dd_trig": dd_trig.generate,
+    "gauss_legendre": gauss_legendre.generate,
 }

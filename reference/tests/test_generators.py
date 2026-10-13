@@ -98,3 +98,12 @@ def test_hardest_reduction_cases_match_brute_force(e):
                         best = (d, cand, k)
     x, k = dd_trig.closest_to_multiple_of_half_pi(e)
     assert (x, k) == (best[1], best[2])
+
+
+def test_gauss_legendre_nodes_ascend_and_are_symmetric():
+    lines = (DATA / "gauss_legendre.jsonl").read_text().splitlines()
+    for line in lines:
+        rec = json.loads(line)
+        hi = rec["outputs"]["nodes"]["hi"]
+        assert hi == sorted(hi)
+        assert hi == [-x for x in reversed(hi)]

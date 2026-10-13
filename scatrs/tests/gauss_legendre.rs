@@ -1,0 +1,291 @@
+#![allow(clippy::needless_range_loop)] // parallel reference arrays are indexed together
+
+mod common;
+
+use std::f64::consts::PI;
+
+use common::{Record, load};
+use scatrs::Error;
+use scatrs::scalar::{DoubleDouble as Dd, Dual};
+use scatrs::special::{GaussLegendre, MAX_GAUSS_LEGENDRE_POINTS, gauss_legendre};
+
+const EPS: f64 = f64::EPSILON; // 2^-52
+/// u² = 2^-106.
+const U2: f64 = 1.232_595_164_407_831e-32;
+
+/// The indices into the rule of the values that reference record `r` holds, in the order
+/// stored: every node of the rule, or only those listed in its `indices` input.
+fn indices(r: &Record) -> Vec<usize> {
+    if r.inputs.contains_key("indices") {
+        r.input_i64s("indices")
+            .into_iter()
+            .map(|i| i as usize)
+            .collect()
+    } else {
+        (0..r.input_i64("n") as usize).collect()
+    }
+}
+
+/// Rules above this size take seconds each (the cost is O(n²)), so their records are checked
+/// only by the ignored test `largest_rules_match_arb`.
+const SLOW_N: usize = 10_000;
+
+/// The reference records whose rules have at most `SLOW_N` points, or more if `slow`.
+fn records(slow: bool) -> Vec<Record> {
+    load("gauss_legendre.jsonl")
+        .into_iter()
+        .filter(|r| (r.input_i64("n") as usize > SLOW_N) == slow)
+        .collect()
+}
+
+/// Checks the `f64` rule against every record; returns the worst node and weight errors in
+/// units of eps.
+fn check_f64(records: &[Record]) -> (f64, f64) {
+    let (mut worst_x, mut worst_w) = (0.0_f64, 0.0_f64);
+    for r in records {
+        let n = r.input_i64("n") as usize;
+        let rule = gauss_legendre::<f64>(n).unwrap();
+        let (xs, ws) = (r.output("nodes"), r.output("weights"));
+        for (k, i) in indices(r).into_iter().enumerate() {
+            let ex = xs.dd_error(k, rule.nodes[i], 0.0);
+            let ew = ws.dd_error(k, rule.weights[i], 0.0) / ws.hi[k];
+            worst_x = worst_x.max(ex / EPS);
+            worst_w = worst_w.max(ew / EPS);
+            assert!(ex <= EPS, "n={n} node {i}: error {ex:e}");
+            assert!(ew <= EPS, "n={n} weight {i}: relative error {ew:e}");
+        }
+    }
+    (worst_x, worst_w)
+}
+
+/// Checks the double-double rule against every record; returns the worst node and weight
+/// errors in units of u², and the worst weight error as a fraction of its bound.
+fn check_dd(records: &[Record]) -> (f64, f64, f64) {
+    let tol = 2f64.powi(-100);
+    let (mut worst_x, mut worst_w, mut worst_w_tol) = (0.0_f64, 0.0_f64, 0.0_f64);
+    for r in records {
+        let n = r.input_i64("n") as usize;
+        let rule = gauss_legendre::<Dd>(n).unwrap();
+        let (xs, ws) = (r.output("nodes"), r.output("weights"));
+        for (k, i) in indices(r).into_iter().enumerate() {
+            let (x, w) = (rule.nodes[i], rule.weights[i]);
+            let ex = xs.dd_error(k, x.hi(), x.lo());
+            let ew = ws.dd_error(k, w.hi(), w.lo()) / ws.hi[k];
+            assert!(ex <= 4.0 * tol, "n={n} node {i}: error {ex:e}");
+            // Weights next to ±1 inherit the n² conditioning of 1 − x².
+            let wtol = tol * (4.0 + (n * n) as f64);
+            assert!(
+                ew <= wtol,
+                "n={n} weight {i}: relative error {ew:e} > {wtol:e}"
+            );
+            worst_x = worst_x.max(ex / U2);
+            worst_w = worst_w.max(ew / U2);
+            worst_w_tol = worst_w_tol.max(ew / wtol);
+        }
+    }
+    (worst_x, worst_w, worst_w_tol)
+}
+
+#[test]
+fn f64_rule_matches_arb_to_half_an_ulp_level() {
+    let (x, w) = check_f64(&records(false));
+    eprintln!("f64, n <= {SLOW_N}: worst node error {x:.3} eps, worst weight error {w:.3} eps");
+}
+
+#[test]
+fn double_double_rule_matches_arb() {
+    let (x, w, w_tol) = check_dd(&records(false));
+    eprintln!(
+        "DD, n <= {SLOW_N}: worst node error {x:.3} u², worst weight error {w:.3e} u² \
+         ({w_tol:.3e} of its bound); u² = 2^-106"
+    );
+}
+
+#[test]
+#[ignore = "computes two 20000-point rules, about 11 s each in release builds"]
+fn largest_rules_match_arb() {
+    let recs = records(true);
+    assert!(!recs.is_empty());
+    let (x, w) = check_f64(&recs);
+    eprintln!("f64, n > {SLOW_N}: worst node error {x:.3} eps, worst weight error {w:.3} eps");
+    let (x, w, w_tol) = check_dd(&recs);
+    eprintln!(
+        "DD, n > {SLOW_N}: worst node error {x:.3} u², worst weight error {w:.3e} u² \
+         ({w_tol:.3e} of its bound); u² = 2^-106"
+    );
+}
+
+#[test]
+fn integrates_even_monomials_exactly() {
+    for n in [1usize, 2, 5, 16, 64, 257] {
+        let rule = gauss_legendre::<f64>(n).unwrap();
+        for k in (0..=(2 * n - 1).min(40)).step_by(2) {
+            let s: f64 = rule
+                .nodes
+                .iter()
+                .zip(&rule.weights)
+                .map(|(x, w)| w * x.powi(k as i32))
+                .sum();
+            let exact = 2.0 / (k as f64 + 1.0);
+            // Sequential summation of n terms: allow 64 eps of accumulated rounding.
+            assert!(
+                (s - exact).abs() <= 64.0 * EPS,
+                "n={n} k={k}: {s} vs {exact}"
+            );
+        }
+    }
+}
+
+/// Checks what every `n`-point rule must satisfy, whatever its accuracy: exact symmetry, a
+/// `+0` middle node for odd `n`, each node strictly inside its own interval of Bruns's
+/// inequality, and positive weights summing to 2 within the accuracy contract.
+///
+/// Bruns: with the roots of Pₙ written cos θⱼ, θ₁ < … < θₙ (so the largest root first),
+/// (j − ½)π/(n + ½) < θⱼ < jπ/(n + ½) (Szegő, *Orthogonal Polynomials*, §6.21). The
+/// intervals are disjoint, so this also proves that the nodes ascend strictly and that Newton
+/// found every root once. Each root lies at least about 0.7/(n + ½) inside its interval in θ
+/// (it is close to Tricomi's (j − ¼)π/(n + ½), the middle of the interval, and θ₁ is close to
+/// 2.405/(n + ½)), so at least about 1/n² inside in x: far above the rounding of the `f64`
+/// bounds computed here.
+fn check_structure(n: usize, rule: &GaussLegendre<f64>) {
+    assert_eq!(rule.nodes.len(), n);
+    assert_eq!(rule.weights.len(), n);
+    for i in 0..n {
+        assert_eq!(rule.nodes[i], -rule.nodes[n - 1 - i], "n={n} node {i}");
+        assert_eq!(rule.weights[i].to_bits(), rule.weights[n - 1 - i].to_bits());
+    }
+    if n % 2 == 1 {
+        let mid = rule.nodes[n / 2];
+        assert_eq!(
+            mid.to_bits(),
+            0.0_f64.to_bits(),
+            "n={n}: middle node {mid:e}"
+        );
+    }
+    let h = n as f64 + 0.5;
+    for i in 0..n {
+        let j = (n - i) as f64; // ascending index i holds the (n − i)-th largest root
+        let (below, above) = ((j * PI / h).cos(), ((j - 0.5) * PI / h).cos());
+        let x = rule.nodes[i];
+        assert!(
+            below < x && x < above,
+            "n={n} node {i}: {x} outside ({below}, {above})"
+        );
+    }
+    assert!(rule.weights.iter().all(|&w| w > 0.0));
+    // Summed in double-double, so the sum's own error is negligible; each weight is within
+    // eps relative of the exact one, and the exact weights sum to 2.
+    let sum = rule.weights.iter().fold(Dd::ZERO, |s, &w| s + w);
+    assert!(
+        (sum - 2.0).abs().hi() <= 2.0 * EPS,
+        "n={n}: weights sum to {sum:?}"
+    );
+}
+
+#[test]
+fn rule_is_symmetric_and_sorted() {
+    for n in [1usize, 2, 7, 64] {
+        let rule = gauss_legendre::<f64>(n).unwrap();
+        for i in 0..n {
+            assert_eq!(rule.nodes[i], -rule.nodes[n - 1 - i]);
+            assert_eq!(rule.weights[i], rule.weights[n - 1 - i]);
+        }
+        assert!(rule.nodes.windows(2).all(|w| w[0] < w[1]));
+        if n % 2 == 1 {
+            assert!(rule.nodes[n / 2] == 0.0 && rule.nodes[n / 2].is_sign_positive());
+        }
+    }
+}
+
+#[test]
+fn every_small_rule_converges_to_the_right_roots() {
+    for n in 1..=300 {
+        check_structure(n, &gauss_legendre::<f64>(n).unwrap());
+    }
+}
+
+#[test]
+fn large_rules_converge_to_the_right_roots() {
+    for n in [511usize, 512, 1023, 1024, 2047, 2048, 4999, 5000] {
+        check_structure(n, &gauss_legendre::<f64>(n).unwrap());
+    }
+}
+
+#[test]
+fn double_double_middle_node_is_positive_zero() {
+    for n in [1usize, 3, 33, 257] {
+        let x = gauss_legendre::<Dd>(n).unwrap().nodes[n / 2];
+        assert_eq!((x.hi().to_bits(), x.lo().to_bits()), (0, 0), "n={n}");
+    }
+}
+
+#[test]
+fn zero_points_is_invalid() {
+    assert!(matches!(
+        gauss_legendre::<f64>(0),
+        Err(Error::InvalidInput(_))
+    ));
+}
+
+#[test]
+fn too_many_points_is_invalid() {
+    for n in [
+        MAX_GAUSS_LEGENDRE_POINTS + 1,
+        usize::MAX / 2 + 1,
+        usize::MAX,
+    ] {
+        assert!(
+            matches!(gauss_legendre::<f64>(n), Err(Error::InvalidInput(_))),
+            "n={n}"
+        );
+        assert!(matches!(
+            gauss_legendre::<Dual<Dd, 2>>(n),
+            Err(Error::InvalidInput(_))
+        ));
+    }
+}
+
+#[test]
+fn dual_instantiation_has_zero_derivatives() {
+    let rule = gauss_legendre::<Dual<f64, 1>>(4).unwrap();
+    assert!(
+        rule.nodes
+            .iter()
+            .chain(&rule.weights)
+            .all(|v| v.eps()[0] == 0.0)
+    );
+}
+
+/// The nodes followed by the weights.
+fn values<T: Copy>(rule: &GaussLegendre<T>) -> Vec<T> {
+    rule.nodes.iter().chain(&rule.weights).copied().collect()
+}
+
+fn dd_bits(x: Dd) -> (u64, u64) {
+    (x.hi().to_bits(), x.lo().to_bits())
+}
+
+#[test]
+fn every_type_gets_the_same_rule_bit_for_bit() {
+    for n in [1usize, 2, 3, 4, 7, 8, 64, 257, 1000] {
+        let f = gauss_legendre::<f64>(n).unwrap();
+        let d = gauss_legendre::<Dd>(n).unwrap();
+        let df = gauss_legendre::<Dual<f64, 2>>(n).unwrap();
+        let dd = gauss_legendre::<Dual<Dd, 3>>(n).unwrap();
+        let (f, d, df, dd) = (values(&f), values(&d), values(&df), values(&dd));
+        for i in 0..2 * n {
+            // The f64 rule is the double-double rule rounded to nearest.
+            assert_eq!(d[i].hi().to_bits(), f[i].to_bits(), "n={n} value {i}");
+            assert_eq!(df[i].re().to_bits(), f[i].to_bits(), "n={n} value {i}");
+            assert_eq!(dd_bits(dd[i].re()), dd_bits(d[i]), "n={n} value {i}");
+            assert!(
+                df[i].eps().iter().all(|e| e.to_bits() == 0),
+                "n={n} value {i}"
+            );
+            assert!(
+                dd[i].eps().iter().all(|&e| dd_bits(e) == (0, 0)),
+                "n={n} value {i}"
+            );
+        }
+    }
+}

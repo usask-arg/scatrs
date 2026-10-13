@@ -1,3 +1,12 @@
+//! `Dual` as a `Real`: the chain rule for every `Float` method, checked bit for bit on special
+//! values, against analytic derivatives in double-double over each whole domain, and against
+//! central differences.
+//!
+//! The `f64` accuracy bounds are built from the measured error of each libm result a derivative
+//! is computed from, so they hold whatever the platform's libm, and they do not detect an
+//! inaccurate libm: platform accuracy is a matter for CI and platform validation.
+
+use std::hint::black_box;
 use std::num::FpCategory;
 
 use num_complex::Complex;
@@ -255,6 +264,22 @@ fn dd_special() -> Vec<Dd> {
     v
 }
 
+/// `T::sin_cos(x).0` with the cosine computed too, so that LLVM fuses the two `f64` calls into one
+/// `sincos` as in `Dual::sin` (on Apple targets `__sincos_stret`, whose sine can be an ulp off a
+/// lone `sin`).
+fn fused_sin<T: Real>(x: T) -> T {
+    let (s, c) = x.sin_cos();
+    black_box(c);
+    s
+}
+
+/// `T::sin_cos(x).1`, fused as in [`fused_sin`].
+fn fused_cos<T: Real>(x: T) -> T {
+    let (s, c) = x.sin_cos();
+    black_box(s);
+    c
+}
+
 /// A unary method on `Dual<T, N>` and the matching method on `T`.
 type Unary<T, const N: usize> = (&'static str, fn(Dual<T, N>) -> Dual<T, N>, fn(T) -> T);
 
@@ -278,8 +303,8 @@ fn unary_methods<T: Real, const N: usize>() -> Vec<Unary<T, N>> {
         ("ln_1p", Float::ln_1p, Float::ln_1p),
         ("log2", Float::log2, Float::log2),
         ("log10", Float::log10, Float::log10),
-        ("sin", Float::sin, Float::sin),
-        ("cos", Float::cos, Float::cos),
+        ("sin", Float::sin, fused_sin),
+        ("cos", Float::cos, fused_cos),
         ("tan", Float::tan, Float::tan),
         ("sin_cos.0", |x| x.sin_cos().0, |x| x.sin_cos().0),
         ("sin_cos.1", |x| x.sin_cos().1, |x| x.sin_cos().1),
@@ -865,17 +890,24 @@ fn power_derivatives_at_the_special_cases() {
         (-1e-200, 2.0),
         (-1e-110, 3.0),
         (-1e-110, 4.0),
+        // From review: even y beyond 2⁵³ with x < 0, where fl(y − 1) is rounded and even, so
+        // its parity cannot give the sign of x^(y−1) (about −5.6e-304 and −3.0e-303 here), and
+        // the rounded exponent would change the magnitude by |ln x|·ulp(y).
+        (-0.9999999999999184, 9007199254740994.0),
+        (-0.9999999999999593, 18014398509481984.0),
+        (-0.9999999999999593, 18014398509481988.0),
+        (0.9999999999999184, 9007199254740994.0),
     ] {
         let [a, b] = Dual::<f64, 2>::variables([x, y]);
         let r = a.powf(b);
         assert!(same(r.re(), x.powf(y)));
         let (xd, yd) = (Dd::from_f64(x), Dd::from_f64(y));
         let (bx, by) = powf_bounds(x, y);
-        let want_x = if x > 0.0 {
-            let (m, k) = pow_pair(xd, yd - 1.0);
-            (yd * m, k)
-        } else {
-            split(yd * xd.powf(yd - 1.0))
+        // y·|x|^(y−1), negative for x < 0 with an even y.
+        let want_x = {
+            let (m, k) = pow_pair(xd.abs(), yd - 1.0);
+            let negative = x < 0.0 && (y * 0.5).fract() == 0.0;
+            (if negative { -(yd * m) } else { yd * m }, k)
         };
         // Partials beyond the normal range must be 0 or ±∞ (or subnormal) accordingly.
         let check = |got: f64, want: (Dd, i32), bound: f64, what: &str| {
@@ -1270,8 +1302,8 @@ fn pow_pair(x: Dd, e: Dd) -> (Dd, i32) {
 /// Bounds in u for ∂/∂x and ∂/∂y of x^y with `Dual<f64, _>`, following the implementation's
 /// choice of formula (x > 0, or x < 0 with an integer y; finite arguments):
 /// * y·(f/x), or (y·f)/x for |y| < 1, while f is normal: the power's error and two roundings;
-/// * otherwise y·p·p with p = |x|^e, e = fl((y − 1)/2): twice p's error, two roundings, and the
-///   rounding of e, which changes x^(y−1) by 2·|ln x|·|e − (y − 1)/2|;
+/// * otherwise y·p·p with p = |x|^((y − 1)/2), or |x|^(y/2)/√|x| where y − 1 is not exact: twice
+///   p's error and two roundings;
 /// * f·ln x while f is normal, otherwise p·ln x·p with p = x^(y/2): the errors of the powers and
 ///   of ln x, and one or two roundings.
 fn powf_bounds(x: f64, y: f64) -> (f64, f64) {
@@ -1285,13 +1317,13 @@ fn powf_bounds(x: f64, y: f64) -> (f64, f64) {
     let q = f / x;
     let bx = if f.is_normal() && (q.is_normal() || y.abs() < 1.0) {
         ef + 2.0
-    } else {
+    } else if (y - 1.0) - y == -1.0 {
         let e = (y - 1.0) * 0.5;
-        let p = x.abs().powf(e);
-        let rounding = ((yd - 1.0) * 0.5 - Dd::from_f64(e)).abs().hi();
-        2.0 * ulps(p, xd.abs().powf(Dd::from_f64(e)))
-            + 2.0
-            + 2.0 * x.abs().ln().abs() * rounding / U
+        2.0 * ulps(x.abs().powf(e), xd.abs().powf(Dd::from_f64(e))) + 2.0
+    } else {
+        // p = |x|^(y/2)/√|x|: the power's error, the root's and the quotient's.
+        let p = x.abs().powf(y * 0.5);
+        2.0 * (ulps(p, xd.abs().powf(yd * 0.5)) + 2.0) + 2.0
     };
     let eln = ulps(x.ln(), xd.ln());
     let by = if f.is_normal() {
@@ -1466,7 +1498,7 @@ fn specs() -> Vec<Spec> {
             bound: |_| 2.0,
             cond: unit,
         },
-        // cos x and −sin x from libm.
+        // cos x and −sin x from libm's (fused) sin_cos: the derivative is exactly that result.
         Spec {
             name: "sin",
             deriv: |x| x.cos(),
@@ -1476,7 +1508,7 @@ fn specs() -> Vec<Spec> {
             },
             moderate: |r| r.range(-100.0, 100.0),
             scale: unit,
-            bound: |x| ulps(x.cos(), Dd::from_f64(x).cos()),
+            bound: |x| ulps(fused_cos(x), Dd::from_f64(x).cos()),
             cond: unit,
         },
         Spec {
@@ -1488,7 +1520,7 @@ fn specs() -> Vec<Spec> {
             },
             moderate: |r| r.range(-100.0, 100.0),
             scale: unit,
-            bound: |x| ulps(x.sin(), Dd::from_f64(x).sin()),
+            bound: |x| ulps(fused_sin(x), Dd::from_f64(x).sin()),
             cond: unit,
         },
         // 1 + t²: t's error doubled, times t²/(1 + t²); two roundings. The reference is 1/cos²x.
@@ -3108,4 +3140,120 @@ fn mul_add_and_abs_sub_follow_the_arithmetic_rules_with_nan() {
     }
     let [x, y, _] = F3::variables([1.0, 3.0, 0.0]);
     assert_eq!(x.abs_sub(y).eps(), &[0.0; 3]);
+}
+
+/// `f64` sine and cosine of one argument, in a function of their own as in any kernel computing
+/// both (fused into one `sincos` call where the target has one).
+#[inline(never)]
+fn sin_cos_f64(x: f64) -> (f64, f64) {
+    (x.sin(), x.cos())
+}
+
+#[inline(never)]
+fn dual_sin(x: F1) -> F1 {
+    x.sin()
+}
+
+#[inline(never)]
+fn dual_cos(x: F1) -> F1 {
+    x.cos()
+}
+
+#[inline(never)]
+fn exp_f64(z: Complex<f64>) -> Complex<f64> {
+    z.exp()
+}
+
+#[inline(never)]
+fn exp_dual(z: C2) -> C2 {
+    z.exp()
+}
+
+/// r·(cos θ, sin θ), as in `Complex::from_polar` and many kernels.
+#[inline(never)]
+fn polar_f64(r: f64, t: f64) -> (f64, f64) {
+    (r * t.cos(), r * t.sin())
+}
+
+#[inline(never)]
+fn polar_dual(r: Dual<f64, 2>, t: Dual<f64, 2>) -> (Dual<f64, 2>, Dual<f64, 2>) {
+    (r * t.cos(), r * t.sin())
+}
+
+#[test]
+fn sin_and_cos_values_are_those_of_sin_cos_and_of_complex_f64() {
+    // Controller decision: `sin` and `cos` take value and derivative from one `T::sin_cos`, so
+    // value-only (f64) and derivative (`Dual`) evaluations of a kernel agree bit for bit. On
+    // Apple targets the fused sine can be an ulp off a lone `sin`, e.g. at the first two points.
+    let mut r = Rng::new("sin_cos");
+    let mut points = vec![
+        0.768039326588954,
+        -0.3820992815488752,
+        0.0,
+        -0.0,
+        1e-300,
+        1e10,
+    ];
+    points.extend((0..4000).map(|_| {
+        let x = r.pow2(-30, 30);
+        r.sign(x)
+    }));
+    for &x in &points {
+        let (s, c) = sin_cos_f64(x);
+        let (ds, dc) = (dual_sin(F1::new(x, [1.0])), dual_cos(F1::new(x, [1.0])));
+        assert!(
+            same(ds.re(), s) && same(ds.eps()[0], c),
+            "sin({x:e}): {ds:?} vs {s:e}, {c:e}"
+        );
+        assert!(
+            same(dc.re(), c) && same(dc.eps()[0], -s),
+            "cos({x:e}): {dc:?} vs {c:e}, {s:e}"
+        );
+        let (a, b) = F1::new(x, [1.0]).sin_cos();
+        assert!(same(a.re(), s) && same(b.re(), c), "sin_cos({x:e})");
+        // Within an ulp of the correctly rounded values.
+        let xd = Dd::from_f64(x);
+        assert!(
+            ulps(s, xd.sin()) <= 2.0 && ulps(c, xd.cos()) <= 2.0,
+            "{x:e}"
+        );
+    }
+    // Complex<Dual>::exp and the polar pattern r·(cos θ, sin θ) give Complex<f64>'s values bit
+    // for bit, with derivatives in both directions.
+    for (i, &t) in points.iter().enumerate() {
+        let re = [0.5, -1.25, 2.0, 0.0][i % 4];
+        let w = exp_dual(seeded(re, t));
+        let w64 = exp_f64(Complex::new(re, t));
+        assert!(
+            same(w.re.re(), w64.re) && same(w.im.re(), w64.im),
+            "exp({re}, {t:e}): {w:?} vs {w64:?}"
+        );
+        let [rd, td] = Dual::<f64, 2>::variables([1.5 + re, t]);
+        let (a, b) = polar_dual(rd, td);
+        let (a64, b64) = polar_f64(1.5 + re, t);
+        assert!(
+            same(a.re(), a64) && same(b.re(), b64),
+            "polar({t:e}): {a:?}, {b:?} vs {a64:e}, {b64:e}"
+        );
+    }
+}
+
+#[test]
+fn log_at_negative_zero_takes_the_limit_from_the_right() {
+    // As for ln, log2 and log10: 1/(x ln b) as x → 0+, whatever the sign of the zero.
+    let inf = f64::INFINITY;
+    for (x, b, want) in [
+        (0.0, 3.0, inf),
+        (-0.0, 3.0, inf),
+        (-0.0, 0.5, -inf),
+        (0.0, 0.5, -inf),
+    ] {
+        let [p, q] = Dual::<f64, 2>::variables([x, b]);
+        let l = p.log(q);
+        assert!(same(l.re(), x.log(b)));
+        assert_eq!(l.eps()[0], want, "log({x:?}, {b}) = {l:?}");
+        let ld =
+            Dual::<Dd, 1>::new(Dd::from_f64(x), [Dd::ONE]).log(Dual::constant(Dd::from_f64(b)));
+        assert_eq!(ld.eps()[0].hi(), want, "DD log({x:?}, {b}) = {ld:?}");
+    }
 }

@@ -80,10 +80,14 @@ mod traits;
 /// `Dual` implements `num_traits::Float`, `FloatConst` and [`Real`], so generic kernels and
 /// `num_complex::Complex<Dual<T, N>>` carry derivatives, and `Dual<Dual<T, M>, N>` gives second
 /// derivatives. The value of every method is `T`'s method on the value, bit for bit, including
-/// special values and signed zeros. (`sin` and `cos` compute the other function for the
-/// derivative separately: LLVM would otherwise merge the two calls into one `sincos`, whose
-/// results can differ from `sin`'s and `cos`'s in the last bit, as Apple's `__sincos_stret`
-/// does. `sin_cos` takes both values from `T::sin_cos`.) Constants (`FloatConst`,
+/// special values and signed zeros. The exceptions are `sin` and `cos`, which take their values
+/// and derivatives from one `T::sin_cos`, so that value-only and derivative calls of a kernel
+/// agree. On Apple targets LLVM fuses an `f64` `sin` and `cos` of one argument into
+/// `__sincos_stret`, whose sine can be an ulp off a lone `f64::sin` (about 1 in 13,000
+/// arguments, e.g. 0.768039326588954 and −0.3820992815488752). The value is then the one every
+/// `f64` code computing both functions of the argument gets, such as `Complex::exp`. `f64` code
+/// computing only `sin x` gets the lone sine instead, which `Dual::sin` (which also needs `cos x`)
+/// may then miss by an ulp. On glibc the fused and separate values agree. Constants (`FloatConst`,
 /// `Real::from_f64`, `nan()`, `epsilon()`, …) have zero derivatives. With `x′` and `y′` the
 /// derivatives of `self` and of the second argument:
 ///
@@ -119,8 +123,9 @@ mod traits;
 ///   replace √(x² ± 1) by |x| beyond 2⁵⁴.
 /// * `hypot` and `atan2` rescale arguments whose squares leave the normal range.
 /// * `powf` uses y·(xʸ/x) while xʸ and xʸ/x are normal, and (y·xʸ)/x for |y| < 1 where xʸ/x
-///   overflows. Otherwise it uses y·p·p with p = |x|^((y−1)/2), and p·ln x·p with p = x^(y/2),
-///   so that no subnormal or infinite power enters a normal result.
+///   overflows. Otherwise it uses y·p·p with p = |x|^((y−1)/2), or |x|^(y/2)/√|x| where y − 1
+///   is not exact, and p·ln x·p with p = x^(y/2), so that no subnormal or infinite power, or
+///   rounded exponent, enters a normal result.
 /// * `log` computes its two partials directly, not through `/`.
 ///
 /// Accuracy was measured over each whole domain against high-precision derivatives
@@ -164,8 +169,9 @@ mod traits;
 ///   part, ln|z|, silently, while `atan2`'s NaN flags the imaginary part.
 /// * `atan2` jumps at the origin and has NaN derivatives there; with an infinite argument its
 ///   derivatives are 0.
-/// * `log` at base ±0 has derivative −sign(ln x)·∞ in the base (0 for x = 1, where the function
-///   is 0 for every base), and at base 1 the IEEE 754 values of 1/(x·ln b).
+/// * `log` at x = ±0 has the limit from the right in x, 1/(x·ln b) → ±∞ (as `ln`); at base ±0
+///   it has derivative −sign(ln x)·∞ in the base (0 for x = 1, where the function is 0 for
+///   every base); and at base 1 the IEEE 754 values of 1/(x·ln b).
 /// * `max`, `min` and `clamp` take the derivatives of the operand whose value `T` returns: the
 ///   larger (or smaller), the one that is not NaN, and at a tie the one whose sign the result
 ///   has (`self` if both have it). `clamp` takes a bound's derivatives outside the interval and
@@ -219,10 +225,11 @@ mod traits;
 /// An elementary function adds to `T`'s cost that of f′(x) and one multiplication per
 /// derivative:
 ///
-/// * almost nothing for `exp`, whose derivative is its value;
+/// * almost nothing for `exp`, whose derivative is its value, or for `sin` and `cos`, which get
+///   both from one `sin_cos`;
 /// * a division for `sqrt`, `ln` and the inverse functions;
-/// * a second function call for `sin`, `cos`, `cosh`, `tanh` (beyond |t| = ½) and `exp_m1`
-///   (below eˣ − 1 = −½);
+/// * a second function call for `cosh`, `tanh` (beyond |t| = ½) and `exp_m1` (below
+///   eˣ − 1 = −½);
 /// * `ln x` for `powf` with a varying exponent;
 /// * for `DoubleDouble`, whose functions dominate, the second function is a second series.
 #[derive(Clone, Copy, Debug)]

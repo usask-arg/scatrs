@@ -35,6 +35,10 @@ pub use dual::Dual;
 /// * For [`Dual`], `==` and `<` compare values only, while `is_zero`, `is_one`, `is_nan` and
 ///   `is_finite` also inspect the derivatives (see its "Comparisons and zero tests"): branch on
 ///   comparisons of values, as `x == T::zero()`, where the derivatives should not matter.
+/// * `Dual<T, N>` takes the values of `sin` and `cos` from `T::sin_cos`. They equal `T::sin` and
+///   `T::cos` where `sin_cos` does: always for `DoubleDouble`. For `f64` on Apple targets, LLVM
+///   fuses `sin` and `cos` of one argument into one call whose sine can be an ulp off a lone
+///   `sin`, in `Dual` as in any `f64` code computing both.
 pub trait Real:
     Float
     + FloatConst

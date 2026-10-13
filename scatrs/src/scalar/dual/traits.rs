@@ -2,7 +2,6 @@
 //! semantics are documented on [`Dual`] ("Elementary functions").
 
 use core::array;
-use core::hint::black_box;
 use core::num::FpCategory;
 
 use num_traits::{Float, FloatConst};
@@ -258,7 +257,8 @@ impl<T: Real, const N: usize> Float for Dual<T, N> {
         // ∂/∂x = 1/(x ln b) and ∂/∂b = −ln x/(b ln²b) = −(q/ln b)/b, with 1/ln b normal.
         let inv = b.ln().recip();
         let (dx, db) = (inv / x, -(q * inv) / b);
-        let eps = if dx.is_finite() & db.is_finite() & !q.is_nan() {
+        // A NaN q makes db NaN.
+        let eps = if dx.is_finite() & db.is_finite() {
             array::from_fn(|i| self.eps[i] * dx + base.eps[i] * db)
         } else {
             log_special(self, base, q).eps
@@ -361,20 +361,21 @@ impl<T: Real, const N: usize> Float for Dual<T, N> {
         Self { re: h, eps }
     }
 
-    /// The value is `T::sin`. LLVM merges `sin` and `cos` of one argument into one `sincos`
-    /// call, whose sine can differ from `sin` in the last bit (Apple's `__sincos_stret`), so the
-    /// derivative's `cos` takes its argument through `black_box`.
+    /// The value and the derivative come from one `T::sin_cos`. On Apple targets LLVM fuses an
+    /// `f64` `sin` and `cos` of one argument into `__sincos_stret`, whose sine can be an ulp off a
+    /// lone `f64::sin` (about 1 in 13,000 arguments, e.g. 0.768039326588954): the value is then
+    /// the one every `f64` kernel computing both gets.
     #[inline]
     fn sin(self) -> Self {
-        let x = self.re;
-        self.chain(x.sin(), black_box(x).cos())
+        let (s, c) = self.re.sin_cos();
+        self.chain(s, c)
     }
 
-    /// The value is `T::cos`; see `sin`.
+    /// The value and the derivative come from one `T::sin_cos`; see `sin`.
     #[inline]
     fn cos(self) -> Self {
-        let x = self.re;
-        self.chain(x.cos(), -black_box(x).sin())
+        let (s, c) = self.re.sin_cos();
+        self.chain(c, -s)
     }
 
     #[inline]
@@ -600,12 +601,20 @@ fn powf_dx<T: Real>(a: T, b: T, f: T) -> T {
     }
     if finite_nonzero {
         // x^(y−1) is zero, subnormal or infinite: y·p·p with p = |x|^((y−1)/2), which is normal
-        // wherever y·x^(y−1) can be. For x < 0, y is an integer (f is not NaN), and an odd y − 1
-        // (a half-integer exponent of |x|) makes x^(y−1) negative.
-        let e = (b - T::one()) * 0.5;
-        let p = a.abs().powf(e);
+        // wherever y·x^(y−1) can be. Where y − 1 is not exact (as for |y| > 2⁵³, where |x| is
+        // within 2⁻⁴³ of 1 for a representable result), p = |x|^(y/2)/√|x| instead: a rounded
+        // exponent would change x^(y−1) by |ln x|·ulp(y). (The check e − y = −1 is itself exact
+        // there.)
+        let (ax, e) = (a.abs(), b - T::one());
+        let p = if e - b == -T::one() {
+            ax.powf(e * 0.5)
+        } else {
+            ax.powf(b * 0.5) / ax.sqrt()
+        };
         let m = b * p * p;
-        return if a < T::zero() && e.fract() != T::zero() {
+        // For x < 0, y is an integer (f is not NaN), and x^(y−1) is negative for an odd y − 1,
+        // that is an even y (y/2 is exact, and every y beyond 2⁵³ is even).
+        return if a < T::zero() && (b * 0.5).fract() == T::zero() {
             -m
         } else {
             m
@@ -648,7 +657,8 @@ fn log_special<T: Real, const N: usize>(x: Dual<T, N>, b: Dual<T, N>, q: T) -> D
         } else {
             -(q * inv) / b.re
         };
-        (inv / x.re, db)
+        // At x = −0 the limit from the right, as for `ln`.
+        (inv / (x.re + T::zero()), db)
     };
     Dual {
         re: q,

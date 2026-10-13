@@ -128,11 +128,11 @@ $7\cdot10^4$ units at $n = 1000$. scatrs avoids this by computing
 the rule in double-double arithmetic and rounding it once. This matters next to $+1$, where
 the Mie forward-scattering peak is integrated.
 
-numpy's error, about $37n^2$ units, is much larger, and the difference is algorithmic.
+numpy's error, $3.7\cdot10^7$ units here, is much larger, and the difference is algorithmic.
 `leggauss` computes the weights as $2/\bigl(n\,P_{n-1}(x)\,P_n'(x)\bigr)$, up to a final
-normalisation. That equals the weight only at an exact root, and it is far more sensitive to
-the node. The next cell evaluates both formulas exactly, in rational arithmetic, at the
-correctly rounded node nearest $+1$:
+normalisation. That equals the weight only at an exact root, and it is $(n+2)/2$ times as
+sensitive to the node, so its error grows like $n^3$. The next cell evaluates both formulas
+exactly, in rational arithmetic, at the correctly rounded node nearest $+1$:
 
 ```{code-cell} python
 n = 1000
@@ -150,7 +150,9 @@ error = {name: float(abs(v - exact) / exact * 2**52) for name, v in formulas.ite
 for name, e in error.items():
     print(f"{name:>27}: weight error {e:.3g} units of 2**-52")
 textbook, leggauss_form = error.values()
-assert textbook <= n**2 / 6 < leggauss_form
+print(f"ratio {leggauss_form / textbook:.4f}; (n + 2) / 2 = {(n + 2) / 2}")
+assert textbook <= n**2 / 6
+assert math.isclose(leggauss_form / textbook, (n + 2) / 2, rel_tol=1e-4)
 ```
 
 See {ref}`gauss-legendre` for the method.

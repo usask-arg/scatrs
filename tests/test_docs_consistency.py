@@ -44,6 +44,8 @@ DUAL_RS = "scatrs/src/scalar/dual/mod.rs"
 THEORY = "docs/theory/special-functions.md"
 SCALARS = "docs/theory/scalar-types.md"
 LIMITATIONS = "docs/limitations.md"
+WIGNER_EXAMPLE = "docs/examples/wigner-d.md"
+HG_EXAMPLE = "docs/examples/henyey-greenstein.md"
 
 CONTRACTS = [
     # (what, normalised text, files that must state it)
@@ -60,6 +62,8 @@ CONTRACTS = [
     ("Double-double full precision", "2^-969", [DD_RS, SCALARS]),
     ("Double-double trigonometric domain", "2^50", [TRIG_RS, SCALARS, LIMITATIONS]),
     ("Dual<f64> derivative accuracy", "5.1u", [DUAL_RS, SCALARS]),
+    # The executed examples check against the same contract.
+    ("Wigner f64 bound in the examples", "16(l+1)eps", [WIGNER_EXAMPLE, HG_EXAMPLE]),
 ]
 
 

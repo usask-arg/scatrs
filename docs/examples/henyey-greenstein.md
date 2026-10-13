@@ -51,43 +51,64 @@ $\rho < 1/g$, because the singularity of $p$ lies at $\mu = (g + 1/g)/2$. On $E_
 - $\lvert p\rvert \le (1 - g^2)/c^{3/2}$, with $c = 1 + g^2 - g(\rho + 1/\rho) > 0$, a lower bound
   on $\operatorname{Re}(1 + g^2 - 2g\mu)$ there.
 
-An $n$-point Gauss rule then integrates $p\,P_l$ to within
-$\frac{64}{15}\,M\rho^{-2n}/(\rho^2 - 1)$, where $M$ bounds $\lvert p\,P_l\rvert$ on $E_\rho$
-(Trefethen, *Approximation Theory and Approximation Practice*, Theorem 19.3). The cell takes
-the best $\rho$ on a grid.
+An $n$-point Gauss rule ($n \ge 2$) then integrates $p\,P_l$ to within
+$\frac{64}{15}\,M\rho^{-2(n-1)}/(\rho^2 - 1)$, where $M$ bounds $\lvert p\,P_l\rvert$ on
+$E_\rho$ (Trefethen, *Approximation Theory and Approximation Practice*, Theorem 19.3, which is
+stated for rules with $n + 1$ points). The cell takes the best $\rho$ on a grid.
 
 **Rounding.** With $\epsilon = 2^{-52}$:
 
-- each $P_l$ is within the contract, $16(l+1)\epsilon$, of the true value;
+- each $P_l$ is within the contract, $16(l+1)\epsilon$, of the true value at the computed node;
+- each node is within $\epsilon$ of the true node, which moves $p\,P_l$ there by about
+  $\lvert(p\,P_l)'\rvert\epsilon$: $N_l = \epsilon\sum w\,\lvert(p\,P_l)'\rvert$ in all, to
+  first order (19–50 $\epsilon$ here, but growing fast as $g \to 1$, where the peak sharpens);
 - $p$ is within about $5\epsilon$ (relative) and each weight within $\epsilon$;
 - the products and the sum of $n$ terms add up to about $(n + 2)\epsilon$ relative to
   $\sum w\,p\,\lvert P_l\rvert \le 2$.
 
 So the error of $\alpha_l$ is at most
-$\frac{2l+1}{2}\bigl(2\cdot16(l+1)\epsilon + 2(n + 8)\epsilon + Q_l\bigr)$, where $Q_l$ is the
-quadrature bound. The term $2(n + 8)\epsilon$ also covers rounding in $(2l+1)g^l$.
+$\frac{2l+1}{2}\bigl(2\cdot16(l+1)\epsilon + N_l + 2(n + 8)\epsilon + Q_l\bigr)$, where $Q_l$
+is the quadrature bound. The term $2(n + 8)\epsilon$ also covers rounding in $(2l+1)g^l$.
 
 ```{code-cell} python
 eps = 2.0**-52
 
 
+def bound(l):
+    """The accuracy contract of wigner_d in f64."""
+    return 16 * (l + 1) * eps
+
+
 def quadrature_bound(l, n, g):
-    """Smallest Trefethen bound for a Gauss rule on p P_l, over a grid of ellipses."""
+    """Smallest Trefethen bound for an n-point Gauss rule on p P_l, over a grid of ellipses."""
     best = math.inf
     for rho in np.linspace(1.001, 1 / g, 400, endpoint=False):
         c = 1 + g * g - g * (rho + 1 / rho)
         m = (1 - g * g) / c**1.5 * rho**l
-        best = min(best, 64 / 15 * m * rho ** (-2 * n) / (rho * rho - 1))
+        best = min(best, 64 / 15 * m * rho ** (-2 * (n - 1)) / (rho * rho - 1))
     return best
 
 
+# N_l: p' = 3g p / (1 + g^2 - 2g mu), and (1 - mu^2) P_l' = l (P_{l-1} - mu P_l).
+dp = 3 * g * p / ((1 - g) ** 2 + 2 * g * (1 - mu))
+dlegendre = np.zeros_like(legendre)
+dlegendre[:, 1:] = l[1:] * (legendre[:, :-1] - mu[:, None] * legendre[:, 1:])
+dlegendre /= (1 - mu * mu)[:, None]
+node_term = eps * (w @ np.abs(dp[:, None] * legendre + p[:, None] * dlegendre))
+print(f"N_l from {node_term.min() / eps:.0f} to {node_term.max() / eps:.0f} eps")
+
 tolerance = np.array(
-    [(2 * k + 1) / 2 * (32 * (k + 1) * eps + 2 * (n + 8) * eps + quadrature_bound(k, n, g))
-     for k in l]
+    [
+        (2 * k + 1) / 2
+        * (2 * bound(k) + node_term[k] + 2 * (n + 8) * eps + quadrature_bound(k, n, g))
+        for k in l
+    ]
 )
 error = np.abs(alpha - exact)
-print(f"largest error {error.max():.1e}, largest fraction of its tolerance "
-      f"{np.max(error / tolerance):.3f}")
+print(
+    f"largest error {error.max():.1e}, "
+    f"largest fraction of its tolerance {np.max(error / tolerance):.3f}"
+)
 assert np.all(error <= tolerance)
 ```
 

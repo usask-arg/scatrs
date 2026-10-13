@@ -1,7 +1,7 @@
 """Wigner d^l_{mn}(θ) in Arb at exact x = cos θ: the explicit finite sum, and Legendre functions.
 
-Convention: d^l_{mn} equals the common d^j_{m'm}(β) with m' = m (Mishchenko, Travis & Lacis
-2002, Appendix B). The sum is finite, so every value is certified.
+Convention: d^l_{mn} is the common d^j_{m'm}(β) with (m', m) renamed (m, n) (Mishchenko,
+Travis & Lacis 2002, Appendix B). The sum is finite, so every value is certified.
 
 The terms of the sum cancel to about 2^-l of their size, so each value is evaluated at
 ``PRECISION_BITS`` and the precision is doubled until the ball radius is at most

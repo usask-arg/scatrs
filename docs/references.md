@@ -3,7 +3,8 @@
 **Quadrature**
 
 - F. G. Tricomi, "Sugli zeri dei polinomi sferici ed ultrasferici", *Annali di Matematica Pura
-  ed Applicata* 31 (1950), 93–97. The starting approximation of the Gauss–Legendre nodes.
+  ed Applicata* (4) 31 (1950), as cited in N. Hale and A. Townsend, *SIAM Journal on
+  Scientific Computing* 35 (2013). The starting approximation of the Gauss–Legendre nodes.
 - G. Szegő, *Orthogonal Polynomials*, 4th ed., American Mathematical Society Colloquium
   Publications 23 (1975), Theorem 6.21.2. Bruns's inequality for the zeros of $P_n$, used by
   the tests.
@@ -12,7 +13,7 @@
   method.
 - L. N. Trefethen, *Approximation Theory and Approximation Practice*, SIAM (2013), Theorem
   19.3. The error bound for Gauss quadrature of analytic functions, used in
-  {doc}`examples/henyey-greenstein`.
+  {doc}`examples/henyey-greenstein`. The theorem is stated for rules with $n + 1$ points.
 
 **Wigner d-functions and polarized radiative transfer**
 

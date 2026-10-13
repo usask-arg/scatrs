@@ -19,7 +19,12 @@ num-traits.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
+criterion = { version = "0.8", default-features = false, features = ["cargo_bench_support"] }
 proptest = "1"
 serde = { version = "1", features = ["derive"] }
 # float_roundtrip makes f64 parsing correctly rounded; without it, reference values can be 1 ulp off.
 serde_json = { version = "1", features = ["float_roundtrip"] }
+
+[[bench]]
+name = "mie"
+harness = false

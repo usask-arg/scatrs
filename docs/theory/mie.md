@@ -300,3 +300,14 @@ $\lvert P_k'\rvert \le (n-1)n/2$ for $k \le n - 1$, gives $\lvert P_n''\rvert \l
 $\lvert\tau_n\rvert \le n(n+1)/2 + (n-1)n^2(n+1)/4 \le n^2(n+1)^2/4$. The bound is added to
 each value's error; the generator's tests check that it dominates the next terms and that a
 longer sum lies inside the certified ball.
+
+## Cost
+
+<!-- synced with scatrs/benches/mie.rs -->
+
+$O(N + \lvert m\rvert x)$ per sphere: the $D_n(mx)$ recurrence starts at about
+$1.5\lvert m\rvert x$. Measured with `cargo bench -p scatrs --bench mie` on an Apple M4 Pro
+($m = 1.5 + 0.01i$): 0.54 µs at $x = 0.1$, 1.1 µs at $x = 10$, 36 µs at $x = 1000$ and 345 µs
+at $x = 10^4$ for the efficiencies (about 34 ns per term); with the full
+$(x, \mathrm{Re}\,m, \mathrm{Im}\,m)$ Jacobian 1.3 to 1.8 times that; amplitudes at 100 angles
+add about 4.5 ns per angle and term.

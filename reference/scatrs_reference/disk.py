@@ -21,7 +21,9 @@ from flint import acb, arb
 class Disk:
     """The closed disk {w : |w − centre| ≤ radius}.
 
-    ``centre`` is an exact ``acb`` (zero radius) and ``radius`` an exact ``arb`` ≥ 0.
+    The module builds disks with an exact ``centre`` (a midpoint) and an exact ``radius`` (an
+    upper bound). The operations stay enclosures when ``centre`` or ``radius`` carry radii of
+    their own: they then cover every disk that the balls describe.
     """
 
     centre: acb
@@ -41,7 +43,7 @@ def _recentre(v: acb, extra: arb | None = None) -> Disk:
 
 
 def disk(v: acb) -> Disk:
-    """The smallest disk this module builds around the ball ``v``."""
+    """The disk centred on the midpoint of ``v``, of radius re.rad + im.rad: it contains ``v``."""
     return _recentre(v)
 
 

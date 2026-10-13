@@ -36,11 +36,15 @@ from scatrs_reference import disk
 
 
 def _ceil_abs(v: arb | acb) -> int:
+    """The smallest integer certainly ≥ |w| for every w in the (finite) ball ``v``."""
     return int(abs(v).abs_upper().ceil().unique_fmpz())
 
 
 def ratios_real(x: arb, n_top: int) -> list[arb]:
-    """u_k(x) = ψ_k(x)/ψ_{k−1}(x) for k = 1, …, n_top + 1, at index k (index 0 is unused)."""
+    """u_k(x) = ψ_k(x)/ψ_{k−1}(x) for k = 1, …, n_top + 1, at index k (index 0 is unused).
+
+    A ball that straddles a pole of u_k (a zero of ψ_{k−1}) makes the values NaN.
+    """
     start = max(n_top + 1, 2 * _ceil_abs(x)) + ctx.prec // 2
     out: list[arb] = [arb(0)] * (n_top + 2)
     inv_x = 1 / x
@@ -53,7 +57,10 @@ def ratios_real(x: arb, n_top: int) -> list[arb]:
 
 
 def ratios_complex(z: acb, n_top: int) -> list[acb]:
-    """u_k(z) = ψ_k(z)/ψ_{k−1}(z) for k = 1, …, n_top + 1, at index k, in disk arithmetic."""
+    """u_k(z) = ψ_k(z)/ψ_{k−1}(z) for k = 1, …, n_top + 1, at index k, in disk arithmetic.
+
+    A disk that contains a pole of u_k raises ``ArithmeticError`` (from `disk.inv`).
+    """
     start = max(n_top + 1, 2 * _ceil_abs(z)) + ctx.prec // 2
     out: list[acb] = [acb(0)] * (n_top + 2)
     inv_z = 1 / z
@@ -78,12 +85,15 @@ class Solution:
     da_dm: list[acb]
     db_dx: list[acb]
     db_dm: list[acb]
-    #: D_n(mx) and the denominators Δ_a, Δ_b of a_n and b_n.
+    #: D_n(mx).
     d: list[acb]
+    #: The denominator Δ_a of a_n.
     delta_a: list[acb]
+    #: The denominator Δ_b of b_n.
     delta_b: list[acb]
-    #: T = ψ_N/ξ_N and R = ξ_{N−1}/ξ_N at N = n_ref, for the tail bound.
+    #: T = ψ_N/ξ_N at N = n_ref, for the tail bound.
     t_last: acb
+    #: R = ξ_{N−1}/ξ_N at N = n_ref, for the tail bound.
     r_last: acb
 
 
@@ -107,7 +117,22 @@ def solve_exact(xa: arb, m: acb, n_ref: int) -> Solution:
     w = disk.Disk(acb(0, -1), arb(0))  # w₀ = ξ₀/ξ₋₁
     i = acb(0, 1)
     m2 = m * m
-    s = Solution(xa, m, n_ref, [], [], [], [], [], [], [], [], [], acb(0), acb(0))
+    s = Solution(
+        x=xa,
+        m=m,
+        n_ref=n_ref,
+        a=[],
+        b=[],
+        da_dx=[],
+        da_dm=[],
+        db_dx=[],
+        db_dm=[],
+        d=[],
+        delta_a=[],
+        delta_b=[],
+        t_last=acb(0),
+        r_last=acb(0),
+    )
     xi_prev = disk.ball(xi)
     xin = xi_prev
     for n in range(1, n_ref + 1):

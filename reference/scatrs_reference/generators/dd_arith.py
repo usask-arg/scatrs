@@ -120,7 +120,7 @@ def _basic(op: str, rng: random.Random) -> dict:
         ah, al, bh, bl = _pair(rng, op, i)
         if op.endswith("_f64"):
             bl = 0.0
-        for key, v in zip(cols, (ah, al, bh, bl)):
+        for key, v in zip(cols, (ah, al, bh, bl), strict=True):
             cols[key].append(v)
         z.append(_exact(ah, al, bh, bl, op.removesuffix("_f64")))
     return record("dd_arith", op, cols, {"z": z})
@@ -134,7 +134,7 @@ def _div_big_y(rng: random.Random) -> dict:
         bh, bl = _structured_dd(rng, ey) if i % 2 else _random_dd(rng, ey)
         ea = rng.randint(ey - 60, 1023)
         ah, al = _random_dd(rng, ea) if i % 4 < 2 else _structured_dd(rng, ea)
-        for key, v in zip(cols, (ah, al, bh, bl)):
+        for key, v in zip(cols, (ah, al, bh, bl), strict=True):
             cols[key].append(v)
         z.append(_exact(ah, al, bh, bl, "div"))
     return record("dd_arith", "div_big_y", cols, {"z": z})
@@ -180,7 +180,7 @@ def _rem(rng: random.Random) -> dict:
         x = Fraction(ah) + Fraction(al)
         y = Fraction(bh) + Fraction(bl)
         r = x - y * int(x / y)  # int() truncates towards zero, as f64 `%` does
-        for key, v in zip(cols, (ah, al, bh, bl)):
+        for key, v in zip(cols, (ah, al, bh, bl), strict=True):
             cols[key].append(v)
         z.append(arb(fmpq(r.numerator, r.denominator)))
     return record("dd_arith", "rem", cols, {"z": z})

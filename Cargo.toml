@@ -1,5 +1,5 @@
 [workspace]
-members = ["scatrs"]
+members = ["scatrs", "scatrs-py"]
 resolver = "3"
 
 [workspace.package]

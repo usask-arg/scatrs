@@ -112,7 +112,7 @@ def generate() -> tuple[int, list[dict]]:
             )
         xs = [_polar(rng, -30.0, 30.0) for _ in range(N)]
         ys = [_polar(rng, -30.0, 30.0) for _ in range(N)]
-        quotients = [_acb(x) / _acb(y) for x, y in zip(xs, ys)]
+        quotients = [_acb(x) / _acb(y) for x, y in zip(xs, ys, strict=True)]
         recs.append(
             record(
                 "dd_complex",

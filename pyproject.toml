@@ -1,0 +1,81 @@
+[build-system]
+requires = ["maturin>=1.8,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "scatrs"
+dynamic = ["version"]
+description = "Fast, linearized, rigorously validated single-scattering calculations"
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+requires-python = ">=3.11"
+dependencies = ["numpy>=1.26"]
+classifiers = [
+    "Development Status :: 2 - Pre-Alpha",
+    "Intended Audience :: Science/Research",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Rust",
+    "Topic :: Scientific/Engineering :: Atmospheric Science",
+    "Topic :: Scientific/Engineering :: Physics",
+]
+
+[project.optional-dependencies]
+xarray = ["xarray>=2024.7"]
+test = ["pytest>=8"]
+docs = [
+    "sphinx>=8",
+    "furo>=2024.8",
+    "myst-nb>=1.1",
+    "numpydoc>=1.8",
+    "ipykernel>=6.29",
+]
+
+[project.urls]
+Documentation = "https://usask-arg.github.io/scatrs/"
+Repository = "https://github.com/usask-arg/scatrs"
+
+[dependency-groups]
+dev = ["maturin>=1.8,<2.0", "pytest>=8", "mypy>=1.13", "ruff>=0.8", "pre-commit>=4"]
+
+[tool.uv]
+# uv rebuilds the (editable, release-profile) install only when a cache key changes; listing
+# the Rust sources means `uv run pytest` never tests a stale extension.
+cache-keys = [
+    { file = "pyproject.toml" },
+    { file = "Cargo.toml" },
+    { file = "Cargo.lock" },
+    { file = "scatrs/Cargo.toml" },
+    { file = "scatrs/src/**/*.rs" },
+    { file = "scatrs-py/Cargo.toml" },
+    { file = "scatrs-py/src/**/*.rs" },
+]
+
+[tool.maturin]
+manifest-path = "scatrs-py/Cargo.toml"
+python-source = "python"
+module-name = "scatrs._scatrs"
+features = ["scatrs-py/extension-module"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+# First-party packages: scatrs (python/) and the reference generator (reference/).
+src = ["python", "reference", "."]
+# The design records keep the plan's code blocks verbatim; ruff would reformat them.
+extend-exclude = ["docs/plans", "docs/specs"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "NPY", "RUF"]
+# Deliberate typography in docstrings and comments: minus sign and en dash (Gauss–Legendre).
+allowed-confusables = ["−", "–"]
+
+[tool.ruff.lint.per-file-ignores]
+# l is the degree of d^l_{mn}, the notation of the papers the generator follows.
+"reference/scatrs_reference/generators/wigner_d.py" = ["E741"]
+"reference/tests/test_generators.py" = ["E741"]
+# The edge-case tables concatenate sublists grouped by what they probe.
+"reference/scatrs_reference/generators/dd_elementary.py" = ["RUF005"]

@@ -1,0 +1,32 @@
+[package]
+name = "scatrs-py"
+description = "Python extension module for scatrs"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[lib]
+name = "_scatrs"
+crate-type = ["cdylib"]
+# The bindings are tested from Python (tests/*.py). With extension-module, pyo3 does not link
+# libpython, and a Rust test harness for this crate then fails to link on Linux (PyO3 issue #341).
+test = false
+doctest = false
+
+[dependencies]
+scatrs = { path = "../scatrs" }
+# extension-module is always on (as in pratmo): the crate is only ever built as an extension
+# module, and with it pyo3 needs no Python interpreter for `cargo check`/`clippy`, so the
+# workspace builds wherever the interpreter on PATH is missing or older than 3.11.
+pyo3 = { version = "0.29", features = ["abi3-py311", "extension-module"] }
+numpy = "0.29"
+
+[build-dependencies]
+pyo3-build-config = "0.29"
+
+[features]
+# Selected by `[tool.maturin] features` (as in pratmo); pyo3's extension-module is on regardless.
+extension-module = ["pyo3/extension-module"]

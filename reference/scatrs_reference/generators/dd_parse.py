@@ -94,7 +94,9 @@ EDGE_LITERALS = [
 
 def _literal(rng: random.Random) -> tuple[str, Fraction]:
     while True:
-        digits = "".join(rng.choice("0123456789") for _ in range(rng.randint(1, 40))).lstrip("0") or "1"
+        digits = (
+            "".join(rng.choice("0123456789") for _ in range(rng.randint(1, 40))).lstrip("0") or "1"
+        )
         point = rng.randint(0, len(digits))
         mantissa = digits[:point] + "." + digits[point:] if rng.random() < 0.7 else digits
         frac_digits = len(digits) - point if "." in mantissa else 0
@@ -121,7 +123,12 @@ def generate() -> tuple[int, list[dict]]:
     with ctx.workprec(PRECISION_BITS):
         rng = random.Random(SEED)
         recs = []
-        for case, pairs in (("literals", [_literal(rng) for _ in range(N)]), ("literals_edges", _edges())):
+        for case, pairs in (
+            ("literals", [_literal(rng) for _ in range(N)]),
+            ("literals_edges", _edges()),
+        ):
             values = [_as_arb(v) for _, v in pairs]
-            recs.append(record("dd_parse", case, {"text": [t for t, _ in pairs]}, {"value": values}))
+            recs.append(
+                record("dd_parse", case, {"text": [t for t, _ in pairs]}, {"value": values})
+            )
         return PRECISION_BITS, recs

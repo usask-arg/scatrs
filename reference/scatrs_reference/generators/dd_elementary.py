@@ -62,7 +62,9 @@ SAMPLERS: dict[str, Callable[[random.Random], float]] = {
     "sqrt": lambda r: _logu(r, -300, 300),
     "exp": lambda r: r.uniform(-670.0, 709.0) if r.random() < 0.5 else _signed(r, _logu(r, -30, 0)),
     "exp_m1": lambda r: _signed(r, _logu(r, -30, 1.5)),
-    "ln": lambda r: _logu(r, -300, 300) if r.random() < 0.5 else 1.0 + _signed(r, _logu(r, -15, -0.7)),
+    "ln": lambda r: (
+        _logu(r, -300, 300) if r.random() < 0.5 else 1.0 + _signed(r, _logu(r, -15, -0.7))
+    ),
     "ln_1p": _ln1p_sample,
     "log2": lambda r: _logu(r, -300, 300),
     "log10": lambda r: _logu(r, -300, 300),
@@ -72,9 +74,11 @@ SAMPLERS: dict[str, Callable[[random.Random], float]] = {
     "tanh": lambda r: _signed(r, _logu(r, -30, 1.7)),
     "asinh": lambda r: _signed(r, _logu(r, -30, 30)),
     "acosh": lambda r: 1.0 + _logu(r, -15, 30),
-    "atanh": lambda r: _signed(r, _logu(r, -30, -0.3))
-    if r.random() < 0.5
-    else _signed(r, 1.0 - _logu(r, -15, -0.0005)),
+    "atanh": lambda r: (
+        _signed(r, _logu(r, -30, -0.3))
+        if r.random() < 0.5
+        else _signed(r, 1.0 - _logu(r, -15, -0.0005))
+    ),
     "exp2": lambda r: r.uniform(-960.0, 1020.0),
 }
 
@@ -226,27 +230,86 @@ def _edges() -> dict[str, list[tuple[float, float]]]:
 
 
 HYPOT_EDGES = [
-    (3.0, 4.0), (MAX, 1.0), (MAX, 1e300), (1e308, 1e308), (0.7 * MAX, 0.7 * MAX),
-    (_below(MAX), TINY), (2.0**-960, 2.0**-960), (2.0**-969, 2.0**-1000), (1.0, 1e-200),
-    (1e-200, 1.0), (1.0, 2.0**-27), (1.0, 1.0), (-1.0, 1.0), (1e150, 1e-150), (0.0, 5.0),
+    (3.0, 4.0),
+    (MAX, 1.0),
+    (MAX, 1e300),
+    (1e308, 1e308),
+    (0.7 * MAX, 0.7 * MAX),
+    (_below(MAX), TINY),
+    (2.0**-960, 2.0**-960),
+    (2.0**-969, 2.0**-1000),
+    (1.0, 1e-200),
+    (1e-200, 1.0),
+    (1.0, 2.0**-27),
+    (1.0, 1.0),
+    (-1.0, 1.0),
+    (1e150, 1e-150),
+    (0.0, 5.0),
     (-0.0, -3.0),
 ]
 POWF_EDGES = [
-    (_above(1.0), 1e15), (_below(1.0), 1e15), (2.0, 1023.5), (2.0, -960.0), (10.0, 308.0),
-    (10.0, -290.0), (1e300, 1.02), (1e-300, 0.9), (MAX, 1.0), (MAX, 0.5), (0.999999, 1e8),
-    (4.0, 0.5), (3.0, 2.0), (2.0, 0.5), (0.5, -1000.0), (TINY, -0.9), (TINY, 0.9),
-    (-2.0, 3.0), (-2.0, 4.0), (-1.5, 11.0), (-1.5, -11.0), (-1.000001, 1000001.0),
-    (-1.000001, -1000001.0), (-0.999999, 1000000.0), (-3.0, 7.0), (-3.0, 8.0), (-3.0, -7.0),
-    (-10.0, 300.0), (-1e-300, -1.0), (-2.0, 1023.0), (1e300, 1.0), (TINY, 1.0), (MAX, -1.0),
-    (-3.0, 5.0), (0.3, -7.0), (1.0000001, 7.0), (-1.5, 7.0), (2.0**-1000, -1.0), (7.0, 8.0),
+    (_above(1.0), 1e15),
+    (_below(1.0), 1e15),
+    (2.0, 1023.5),
+    (2.0, -960.0),
+    (10.0, 308.0),
+    (10.0, -290.0),
+    (1e300, 1.02),
+    (1e-300, 0.9),
+    (MAX, 1.0),
+    (MAX, 0.5),
+    (0.999999, 1e8),
+    (4.0, 0.5),
+    (3.0, 2.0),
+    (2.0, 0.5),
+    (0.5, -1000.0),
+    (TINY, -0.9),
+    (TINY, 0.9),
+    (-2.0, 3.0),
+    (-2.0, 4.0),
+    (-1.5, 11.0),
+    (-1.5, -11.0),
+    (-1.000001, 1000001.0),
+    (-1.000001, -1000001.0),
+    (-0.999999, 1000000.0),
+    (-3.0, 7.0),
+    (-3.0, 8.0),
+    (-3.0, -7.0),
+    (-10.0, 300.0),
+    (-1e-300, -1.0),
+    (-2.0, 1023.0),
+    (1e300, 1.0),
+    (TINY, 1.0),
+    (MAX, -1.0),
+    (-3.0, 5.0),
+    (0.3, -7.0),
+    (1.0000001, 7.0),
+    (-1.5, 7.0),
+    (2.0**-1000, -1.0),
+    (7.0, 8.0),
 ]
 LOG_X = [TINY, 2.0**-969, 1e-300, 0.5, _above(1.0), 2.0, 10.0, 1e300, MAX]
 LOG_BASES = [2.0, 10.0, math.e, 0.5, 1.5, 0.9, 1e-300, 1e300, MAX]
 LOG_EDGES_2 = [(x, b) for x in LOG_X for b in LOG_BASES]
 POWI_EDGES = [
-    (1e-3, -100), (0.71, -2000), (0.5, -969), (2.0, 1023), (2.0, -969), (1.0001, 100000),
-    (-1.5, 1001), (-1.5, -1000), (10.0, 308), (10.0, -290), (MAX, 1), (2.0**-1000, -1),
-    (1e-300, -1), (1e-150, -2), (3.0, 600), (-3.0, 601), (1.5, 0), (_below(1.0), 2**31 - 1),
+    (1e-3, -100),
+    (0.71, -2000),
+    (0.5, -969),
+    (2.0, 1023),
+    (2.0, -969),
+    (1.0001, 100000),
+    (-1.5, 1001),
+    (-1.5, -1000),
+    (10.0, 308),
+    (10.0, -290),
+    (MAX, 1),
+    (2.0**-1000, -1),
+    (1e-300, -1),
+    (1e-150, -2),
+    (3.0, 600),
+    (-3.0, 601),
+    (1.5, 0),
+    (_below(1.0), 2**31 - 1),
     (_above(1.0), -(2**31)),
 ]
 
@@ -331,16 +394,16 @@ def generate() -> tuple[int, list[dict]]:
             )
         xs = [_dd(rng, _signed(rng, _logu(rng, -150, 150))) for _ in range(N)]
         ys = [_dd(rng, _signed(rng, _logu(rng, -150, 150))) for _ in range(N)]
-        recs.append(_binary_record("hypot", list(zip(xs, ys)), _hypot, "y"))
+        recs.append(_binary_record("hypot", list(zip(xs, ys, strict=True)), _hypot, "y"))
         xs = [_dd(rng, _logu(rng, -5, 5)) for _ in range(N)]
         ys = [_dd(rng, rng.uniform(-20.0, 20.0)) for _ in range(N)]
-        recs.append(_binary_record("powf", list(zip(xs, ys)), _pow, "y"))
+        recs.append(_binary_record("powf", list(zip(xs, ys, strict=True)), _pow, "y"))
         xs = [_dd(rng, _signed(rng, _logu(rng, -3, 3))) for _ in range(N)]
         ns = [rng.randint(-100, 100) for _ in range(N)]
-        recs.append(_binary_record("powi", list(zip(xs, ns)), _pow, "n"))
+        recs.append(_binary_record("powi", list(zip(xs, ns, strict=True)), _pow, "n"))
         xs = [_dd(rng, SAMPLERS["ln"](rng)) for _ in range(N)]
         ys = [_dd(rng, _log_base(rng)) for _ in range(N)]
-        recs.append(_binary_record("log", list(zip(xs, ys)), _log, "y"))
+        recs.append(_binary_record("log", list(zip(xs, ys, strict=True)), _log, "y"))
 
         for name, pairs in _edges().items():
             kept = [(p, v) for p in pairs if _in_domain(v := FUNCTIONS[name](_as_arb(p)))]

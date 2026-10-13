@@ -65,8 +65,9 @@ pub enum MieOutput {
 ///   and the separate losses of each order near m = 1, where aₙ, bₙ ∝ m − 1. It is
 ///   [`condition_factor`](Self::condition_factor) κ for the values, κ·max(1, |m|/|m − 1|) for
 ///   the efficiency Jacobian (the derivatives of g lose a second factor |m|/|m − 1| near
-///   m = 1), and 1 + |m|x for the derivatives of the coefficients and amplitudes, which do not
-///   vanish at m = 1.
+///   m = 1), and 1 + |m|x for the derivatives of the coefficients and amplitudes, which lose
+///   nothing near m = 1: m − 1 enters the x-derivatives as an exact factor of m² − 1, and the
+///   m-derivatives have no factor that cancels.
 /// * C is the output's constant ([`constant`](Self::constant)).
 ///
 /// Neither term alone is a bound: the accuracy map in the documentation shows outputs that

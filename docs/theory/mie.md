@@ -223,7 +223,9 @@ the amplitudes, with $S_\text{rms} = x\sqrt{Q_\text{sca}}/2$). The two condition
   (1 + \lvert m\rvert x)\max(1, \lvert m\rvert/\lvert m - 1\rvert)$ for the values;
   $\kappa\max(1, \lvert m\rvert/\lvert m - 1\rvert)$ for the efficiency Jacobian, whose
   derivatives of $g$ lose a second such factor near $m = 1$; and $1 + \lvert m\rvert x$ for the
-  derivatives of the coefficients and amplitudes, which do not vanish at $m = 1$.
+  derivatives of the coefficients and amplitudes, which lose nothing near $m = 1$: $m - 1$
+  enters the $x$-derivatives as an exact factor of $m^2 - 1 = (m - 1)(m + 1)$, and the
+  $m$-derivatives have no factor that cancels.
 
 The constants C are measured, with a margin of at least 4 over the worst case found at every
 Arb reference point and on a dense double-double grid: 16 for the coefficients, efficiencies

@@ -8,7 +8,7 @@
 //! ([`start_value`]) does not flush later, normal values to zero.
 //!
 //! Method selection: a difference form wherever |x| ≥ 0.9, and for m = ±n on the side of the
-//! pole where |d| → 1 (x ≥ 0 for m = n, x ≤ 0 for m = −n); the three-term form elsewhere, where
+//! pole where |d| → 1 (x ≥ 0 for m = n, x < 0 for m = −n); the three-term form elsewhere, where
 //! its results are bitwise those of the implementation plan's code. The plan used the
 //! three-term form everywhere; the difference forms are a change of method, approved by the
 //! controller after the Task 10 review, because the three-term form loses accuracy like l² next
@@ -51,7 +51,7 @@ const GENERAL_DIFFERENCE_FROM: f64 = 0.9;
 /// Δ^s = d^s − d^{s−1}, with the small coefficient K_s = A_s − B_s − C_s computed without
 /// cancellation:
 ///
-/// * for m = ±n on the side of the pole where |d| → 1 (x ≥ 0 for m = n, x ≤ 0 for m = −n),
+/// * for m = ±n on the side of the pole where |d| → 1 (x ≥ 0 for m = n, x < 0 for m = −n),
 ///   where B_s and C_s are integers and K_s = (2s + 1)s(s + 1)(x − 1);
 /// * for any other m, n where |x| ≥ 0.9;
 ///
@@ -108,18 +108,21 @@ const GENERAL_DIFFERENCE_FROM: f64 = 0.9;
 /// * a ≥ 3: zero, the exact derivative.
 ///
 /// The same holds at x = −1 with b = |m + n| in place of a. With nested duals
-/// (`Dual<Dual<T, M>, N>`), second derivatives at x = ±1 are exact only for a ≤ 2 (not finite
-/// for a = 1, where they are infinite). For a ≥ 3 the start value is the constant zero, so
-/// every derivative beyond the first is zero: silently wrong, since the true second derivative
-/// is infinite for a = 3 and finite but nonzero for a = 4 (7.5, 105 and 500.5 for (2, −2) at
-/// l = 4, 8 and 12). For |x| < 1 derivatives of every order are those of the computed values.
+/// (`Dual<Dual<T, M>, N>`), second derivatives at x = ±1 are exact for a = 0 and a = 2, and not
+/// finite for a = 1, where they are infinite. For a ≥ 3 the start value is the constant zero, so
+/// every derivative beyond the first is zero. That is right for a ≥ 5, since d^l is
+/// (1 − x)^(a/2) times a function smooth at x = 1, but silently wrong for a = 3, where the true
+/// second derivative is infinite, and for a = 4, where it is finite but nonzero (7.5, 105 and
+/// 500.5 for (2, −2) at l = 4, 8 and 12). For |x| < 1 derivatives of every order are those of
+/// the computed values.
 ///
 /// # Cost
 ///
-/// O(max(|m|, |n|) + `out.len()`): |m − n| square roots and divisions and
-/// max(|m − n|, |m + n|) ≤ 2·max(|m|, |n|) multiplications for the start value, then per degree
-/// one division and two square roots (three-term form), one division and no square root
-/// (m = ±n difference form), or two divisions and one square root (general difference form).
+/// O(max(|m|, |n|) + `out.len()`): for the start value, once sin(θ/2) and cos(θ/2) are known,
+/// |m − n| divisions and square roots and 2|m − n| + |m + n| ≤ 4·max(|m|, |n|) multiplications;
+/// then per degree one division and two square roots (three-term form), one division and no
+/// square root (m = ±n difference form), or two divisions and one square root (general
+/// difference form).
 /// Measured on an Apple M4 Pro over the nodes of the 64-point Gauss–Legendre rule, up to
 /// l = 2000, per degree: in `f64` 2.6 ns for (0, 0), 3.1 ns for (2, ±2) and 3.7 ns for (0, 2)
 /// and other m ≠ ±n; in `DoubleDouble` 30, 38 and 45 ns.

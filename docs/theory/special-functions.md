@@ -261,17 +261,19 @@ The same holds at $x = -1$ with $b = \lvert m + n\rvert$ in place of $a$. The te
 for every $l \le 30$ and $\lvert m\rvert, \lvert n\rvert \le 4$.
 
 **Second derivatives.** With nested duals (`Dual<Dual<T, M>, N>`), second derivatives at
-$x = \pm1$ are right for $a \le 2$; for $a = 1$ they are not finite, as the true value is
-infinite. For $a \ge 3$ the start value is the constant zero, so every derivative beyond the
-first is zero. That is right for $a \ge 5$ but silently wrong for $a = 3$ and $a = 4$. The true
-second derivative is infinite for $a = 3$. For $a = 4$ it is finite but nonzero: 7.5, 105 and
-500.5 for $(2, -2)$ at $l$ = 4, 8 and 12. For
+$x = \pm1$ are right for $a = 0$ and $a = 2$; for $a = 1$ they are not finite, as the true
+value is infinite. For $a \ge 3$ the start value is the constant zero, so every derivative
+beyond the first is zero. That is right for $a \ge 5$, since $d^l$ is $(1 - x)^{a/2}$ times a
+function smooth at $x = 1$, but silently wrong for $a = 3$ and $a = 4$. The true second
+derivative is infinite for $a = 3$. For $a = 4$ it is finite but nonzero: 7.5, 105 and 500.5
+for $(2, -2)$ at $l$ = 4, 8 and 12. For
 $\lvert x\rvert < 1$ derivatives of every order are those of the computed values.
 
 ### Cost
 
-The start value costs $O(\max(\lvert m\rvert, \lvert n\rvert))$: $\lvert m - n\rvert$ square
-roots and divisions, and $2\lvert m - n\rvert + \lvert m + n\rvert$ multiplications, at most
+The start value costs $O(\max(\lvert m\rvert, \lvert n\rvert))$. Once $\sin(\theta/2)$ and
+$\cos(\theta/2)$ are known, it takes $\lvert m - n\rvert$ divisions and square roots, and
+$2\lvert m - n\rvert + \lvert m + n\rvert$ multiplications, at most
 $4\max(\lvert m\rvert, \lvert n\rvert)$. Each
 further degree then costs:
 

@@ -14,7 +14,8 @@ build it locally. Both APIs follow the {doc}`conventions`.
 .. py:data:: __version__
    :type: str
 
-   The package version, which is the version of the Rust workspace.
+   The installed package's version: the version of the Rust workspace, in PEP 440 form (the
+   pre-release ``0.1.0-alpha.1``, for example, is ``0.1.0a1``).
 ```
 
 The package also re-exports the exceptions of {mod}`scatrs.errors` and the module

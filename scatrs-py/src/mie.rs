@@ -138,6 +138,7 @@ fn bounded(
     what: &str,
     count: Option<usize>,
     kind: &str,
+    derivatives: bool,
     limit: usize,
     limit_name: &str,
 ) -> scatrs::Result<usize> {
@@ -145,20 +146,25 @@ fn bounded(
         Some(c) if c <= limit => Ok(c),
         _ => {
             let count = count.map_or_else(|| "more than usize::MAX".to_owned(), |c| c.to_string());
+            let counting = if derivatives {
+                " (counting derivatives)"
+            } else {
+                ""
+            };
             Err(invalid(format!(
-                "{what} would hold {count} {kind} (counting derivatives), more than \
-                 {limit_name} = {limit}"
+                "{what} would hold {count} {kind}{counting}, more than {limit_name} = {limit}"
             )))
         }
     }
 }
 
 /// `count` complex values, at most `MAX_MIE_VALUES`.
-fn complex_values(what: &str, count: Option<usize>) -> scatrs::Result<usize> {
+fn complex_values(what: &str, count: Option<usize>, derivatives: bool) -> scatrs::Result<usize> {
     bounded(
         what,
         count,
         "complex values",
+        derivatives,
         MAX_MIE_VALUES,
         "MAX_MIE_VALUES",
     )
@@ -228,6 +234,7 @@ pub fn mie_efficiencies<'py>(
         "the efficiencies",
         count,
         "real values",
+        derivatives,
         2 * MAX_MIE_VALUES,
         "2 * MAX_MIE_VALUES",
     )
@@ -293,7 +300,8 @@ pub fn mie_coefficients<'py>(
     let len = xv.len();
     let arrays = if derivatives { 6 } else { 2 };
     // Every sphere has at least one term, so this bounds the sizing pass below.
-    complex_values("the coefficients", len.checked_mul(arrays)).map_err(|e| to_pyerr(py, e))?;
+    complex_values("the coefficients", len.checked_mul(arrays), derivatives)
+        .map_err(|e| to_pyerr(py, e))?;
     let (terms, a, b, d, width) = py
         .detach(|| -> Result<_, Failure> {
             // Check every element and find the largest number of terms, before allocating.
@@ -302,7 +310,7 @@ pub fn mie_coefficients<'py>(
                 width = width.max(n_terms(xi, mi, &opts).map_err(at(i))?);
             }
             let count = len.checked_mul(width).and_then(|v| v.checked_mul(arrays));
-            let per_array = complex_values("the coefficients", count)? / arrays;
+            let per_array = complex_values("the coefficients", count, derivatives)? / arrays;
             let mut terms = zeros::<u64>(len, "the numbers of terms")?;
             let mut a = zeros::<Complex64>(per_array, "the coefficients")?;
             let mut b = zeros::<Complex64>(per_array, "the coefficients")?;
@@ -311,7 +319,12 @@ pub fn mie_coefficients<'py>(
             let mut mie = Mie::<f64>::new();
             for (i, (&xi, &mi)) in xv.iter().zip(mv.iter()).enumerate() {
                 let s = solve(&mut mie, i, xi, mi, &opts, derivatives)?;
-                // At most `width`: `n_terms` above made the same checks and choice.
+                // `n_terms` above made the same checks and choice, unless x or m changed since.
+                if s.n_terms() > width {
+                    return Err(
+                        invalid(format!("element {i}: x or m changed during the call")).into(),
+                    );
+                }
                 terms[i] = s.n_terms() as u64;
                 let row = i * width..i * width + s.n_terms();
                 a[row.clone()].copy_from_slice(s.a());
@@ -382,8 +395,13 @@ pub fn mie_amplitudes<'py>(
     }
     let (len, n_mu) = (xv.len(), mu.len());
     let arrays = if derivatives { 6 } else { 2 };
-    let count = len.checked_mul(n_mu).and_then(|v| v.checked_mul(arrays));
-    let per_array = complex_values("the amplitudes", count).map_err(|e| to_pyerr(py, e))? / arrays;
+    // At least one angle, so that an empty mu does not leave the number of spheres (each still
+    // checked) unbounded.
+    let count = len
+        .checked_mul(n_mu.max(1))
+        .and_then(|v| v.checked_mul(arrays));
+    complex_values("the amplitudes", count, derivatives).map_err(|e| to_pyerr(py, e))?;
+    let per_array = len * n_mu;
     let (s, d) = py
         .detach(|| -> Result<_, Failure> {
             let mut s = zeros::<Complex64>(2 * per_array, "the amplitudes")?;

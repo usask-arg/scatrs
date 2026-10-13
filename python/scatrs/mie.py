@@ -20,7 +20,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
-from typing import Final, SupportsIndex
+from typing import Final, SupportsIndex, TypeVar
 
 import numpy as np
 from numpy.typing import ArrayLike, NDArray
@@ -50,11 +50,13 @@ many real values for :func:`efficiencies`."""
 PARAMETERS: Final = ("x", "m_real", "m_imag")
 """The parameters ``derivatives`` may name."""
 
+_A = TypeVar("_A")
+
 
 def _parameters(derivatives: bool | Sequence[str]) -> tuple[str, ...]:
     if isinstance(derivatives, (bool, np.bool_)):
         return PARAMETERS if derivatives else ()
-    if isinstance(derivatives, str) or not isinstance(derivatives, Iterable):
+    if isinstance(derivatives, (str, bytes)) or not isinstance(derivatives, Iterable):
         raise TypeError(
             "derivatives must be a bool or a sequence of parameter names, "
             f"not {type(derivatives).__name__}"
@@ -81,12 +83,14 @@ def _n_max(n_max: SupportsIndex | None) -> int | None:
     return None if n_max is None else _args.size(n_max, "n_max")
 
 
-def _freeze(*arrays: object) -> None:
-    """Makes the arrays read-only (numpy scalars, which ``d`` gives for scalar inputs, already
-    are)."""
-    for a in arrays:
-        if isinstance(a, np.ndarray):
-            a.flags.writeable = False
+def _frozen(a: _A) -> _A:
+    """A read-only view of ``a``. An array that owns its data can be made writeable again; a view
+    of a read-only array cannot. (Numpy scalars, which ``d`` gives for scalar inputs, are
+    immutable already.)"""
+    if not isinstance(a, np.ndarray):
+        return a
+    a.flags.writeable = False
+    return a.view()
 
 
 def _check(params: tuple[str, ...], param: str) -> None:
@@ -143,9 +147,6 @@ class MieEfficiencies:
     params: tuple[str, ...] = ()
     _jacobian: NDArray[np.float64] | None = field(default=None, repr=False)
 
-    def __post_init__(self) -> None:
-        _freeze(self.q_ext, self.q_sca, self.q_abs, self.q_back, self.g, self._jacobian)
-
     def d(self, param: str) -> MieEfficiencies:
         """The derivatives with respect to ``param`` (``"x"``, ``"m_real"`` or ``"m_imag"``).
 
@@ -184,9 +185,6 @@ class MieCoefficients:
     params: tuple[str, ...] = ()
     _derivatives: NDArray[np.complex128] | None = field(default=None, repr=False)
 
-    def __post_init__(self) -> None:
-        _freeze(self.a, self.b, self.n_terms, self._derivatives)
-
     def d(self, param: str) -> MieCoefficients:
         """The derivatives with respect to ``param``: ``"x"``, ``"m_real"``, ``"m_imag"``, or
         ``"m"`` for the complex derivative d/dm (which equals ∂/∂(Re m); ∂/∂(Im m) is i d/dm).
@@ -202,7 +200,7 @@ class MieCoefficients:
         if param == "x":
             return MieCoefficients(da_dx, db_dx, self.n_terms)
         if param == "m_imag":
-            return MieCoefficients(1j * da_dm, 1j * db_dm, self.n_terms)
+            return MieCoefficients(_frozen(1j * da_dm), _frozen(1j * db_dm), self.n_terms)
         return MieCoefficients(da_dm, db_dm, self.n_terms)
 
 
@@ -223,9 +221,6 @@ class MieAmplitudes:
     params: tuple[str, ...] = ()
     _derivatives: NDArray[np.complex128] | None = field(default=None, repr=False)
 
-    def __post_init__(self) -> None:
-        _freeze(self.s1, self.s2, self._derivatives)
-
     def d(self, param: str) -> MieAmplitudes:
         """The derivatives with respect to ``param``: ``"x"``, ``"m_real"``, ``"m_imag"``, or
         ``"m"`` for the complex derivative d/dm.
@@ -241,7 +236,7 @@ class MieAmplitudes:
         if param == "x":
             return MieAmplitudes(ds1_dx, ds2_dx)
         if param == "m_imag":
-            return MieAmplitudes(1j * ds1_dm, 1j * ds2_dm)
+            return MieAmplitudes(_frozen(1j * ds1_dm), _frozen(1j * ds2_dm))
         return MieAmplitudes(ds1_dm, ds2_dm)
 
 
@@ -308,6 +303,7 @@ def efficiencies(
     values, jacobian = _scatrs.mie_efficiencies(
         xb, mb, _n_max(n_max), bool(params), bool(allow_unvalidated)
     )
+    values, jacobian = _frozen(values), _frozen(jacobian)
     fields = [v.reshape(shape) for v in values]
     jac = None if jacobian is None else jacobian.reshape((3, 5, *shape))
     return MieEfficiencies(*fields, params=params, _jacobian=jac)
@@ -335,8 +331,9 @@ def coefficients(
     terms, a, b, d = _scatrs.mie_coefficients(
         xb, mb, _n_max(n_max), bool(params), bool(allow_unvalidated)
     )
+    a, b, d = _frozen(a), _frozen(b), _frozen(d)
     width = a.shape[1]
-    n_terms = terms.astype(np.int64).reshape(shape)
+    n_terms = _frozen(terms.astype(np.int64)).reshape(shape)
     dd = None if d is None else d.reshape((4, *shape, width))
     return MieCoefficients(
         a.reshape((*shape, width)), b.reshape((*shape, width)), n_terms, params, dd
@@ -367,6 +364,7 @@ def amplitudes(
     s, d = _scatrs.mie_amplitudes(
         xb, mb, mus.reshape(mus.shape), _n_max(n_max), bool(params), bool(allow_unvalidated)
     )
+    s, d = _frozen(s), _frozen(d)
     out = (*shape, *mus.shape)
     dd = None if d is None else d.reshape((4, *out))
     return MieAmplitudes(s[0].reshape(out), s[1].reshape(out), params, dd)

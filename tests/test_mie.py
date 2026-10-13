@@ -143,7 +143,7 @@ def test_derivative_subsets():
         mie.efficiencies(5.0, 1.5, derivatives=True).d("m")
     assert mie.efficiencies(5.0, 1.5, derivatives=np.True_).params == mie.PARAMETERS
     assert mie.efficiencies(5.0, 1.5, derivatives=np.False_).params == ()
-    for bad in (None, 1, 1.0):
+    for bad in (None, 1, 1.0, b"x"):
         with pytest.raises(TypeError, match="derivatives must be a bool or a sequence"):
             mie.efficiencies(5.0, 1.5, derivatives=bad)
 
@@ -221,6 +221,9 @@ def test_output_size_limits():
     # Within the bound on the number of spheres, but not with their numbers of terms.
     with pytest.raises(InvalidInputError, match="MAX_MIE_VALUES"):
         mie.coefficients(np.full(2**14, 1e4), 1.5)
+    # No angles, but each sphere is still checked: bounded as if there were one.
+    with pytest.raises(InvalidInputError, match="MAX_MIE_VALUES"):
+        mie.amplitudes(x, m, np.zeros(0))
 
 
 def test_outputs_are_rust_vectors_handed_over_without_copying():
@@ -244,6 +247,12 @@ def test_results_are_frozen_and_read_only():
     for a in (q.q_ext, q.d("x").g, c.a, c.n_terms, c.d("m").a, c.d("m_imag").b, s.s2, s.d("x").s1):
         with pytest.raises(ValueError, match="read-only"):
             a[...] = 0
+        with pytest.raises(ValueError):
+            a.flags.writeable = True  # they are views of read-only arrays
+    # Arrays the caller passes in stay as they are.
+    a = np.ones(3, dtype=complex)
+    mie.MieCoefficients(a, a, np.ones(3, dtype=np.int64))
+    assert a.flags.writeable
     # Identity comparison and hashing, not elementwise array comparison.
     assert q == q and q != mie.efficiencies([1.0, 2.0], 1.5 + 0.1j, derivatives=True)
     assert len({q, c, s}) == 3

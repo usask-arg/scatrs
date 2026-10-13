@@ -8,15 +8,51 @@ from . import _testing as _testing
 
 __all__ = [
     "MAX_GAUSS_LEGENDRE_POINTS",
+    "MAX_MIE_ORDER",
+    "MAX_MIE_VALUES",
     "MAX_WIGNER_D_VALUES",
     "__version__",
     "gauss_legendre",
+    "mie_amplitudes",
+    "mie_coefficients",
+    "mie_default_n_max",
+    "mie_efficiencies",
     "wigner_d",
 ]
 
 __version__: Final[str]
 MAX_GAUSS_LEGENDRE_POINTS: Final[int]
 MAX_WIGNER_D_VALUES: Final[int]
+MAX_MIE_ORDER: Final[int]
+MAX_MIE_VALUES: Final[int]
 
 def gauss_legendre(n: int) -> tuple[NDArray[np.float64], NDArray[np.float64]]: ...
 def wigner_d(m: int, n: int, l_max: int, x: NDArray[np.float64]) -> NDArray[np.float64]: ...
+def mie_default_n_max(x: NDArray[np.float64]) -> NDArray[np.uint64]: ...
+def mie_efficiencies(
+    x: NDArray[np.float64],
+    m: NDArray[np.complex128],
+    n_max: int | None,
+    derivatives: bool,
+    allow_unvalidated: bool,
+) -> tuple[NDArray[np.float64], NDArray[np.float64] | None]: ...
+def mie_coefficients(
+    x: NDArray[np.float64],
+    m: NDArray[np.complex128],
+    n_max: int | None,
+    derivatives: bool,
+    allow_unvalidated: bool,
+) -> tuple[
+    NDArray[np.uint64],
+    NDArray[np.complex128],
+    NDArray[np.complex128],
+    NDArray[np.complex128] | None,
+]: ...
+def mie_amplitudes(
+    x: NDArray[np.float64],
+    m: NDArray[np.complex128],
+    mu: NDArray[np.float64],
+    n_max: int | None,
+    derivatives: bool,
+    allow_unvalidated: bool,
+) -> tuple[NDArray[np.complex128], NDArray[np.complex128] | None]: ...

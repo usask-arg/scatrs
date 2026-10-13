@@ -48,6 +48,7 @@ def test_crate_license_is_the_repository_license():
 
 def test_public_names():
     for name in (
+        "mie",
         "special",
         "ScatrsError",
         "InvalidInputError",
@@ -68,9 +69,15 @@ def test_limits_are_exposed():
 def test_test_hooks_live_outside_the_extension_namespace():
     assert set(_scatrs.__all__) == {
         "MAX_GAUSS_LEGENDRE_POINTS",
+        "MAX_MIE_ORDER",
+        "MAX_MIE_VALUES",
         "MAX_WIGNER_D_VALUES",
         "__version__",
         "gauss_legendre",
+        "mie_amplitudes",
+        "mie_coefficients",
+        "mie_default_n_max",
+        "mie_efficiencies",
         "wigner_d",
     }
     assert not hasattr(_scatrs, "_raise_core_error")

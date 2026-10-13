@@ -1,7 +1,7 @@
 # API reference
 
-This is the Python API. In phase 0 it returns `float64` results only: double-double values
-and derivatives are available from Rust. The Rust API reference will be on
+This is the Python API. It returns `float64` and `complex128` results: double-double values
+are available from Rust. The Rust API reference will be on
 [docs.rs](https://docs.rs/scatrs) once the crate is published; see {doc}`installation` to
 build it locally. Both APIs follow the {doc}`conventions`.
 
@@ -18,8 +18,15 @@ build it locally. Both APIs follow the {doc}`conventions`.
    pre-release ``0.1.0-alpha.1``, for example, is ``0.1.0a1``).
 ```
 
-The package also re-exports the exceptions of {mod}`scatrs.errors` and the module
-{mod}`scatrs.special`.
+The package also re-exports the exceptions of {mod}`scatrs.errors` and the modules
+{mod}`scatrs.mie` and {mod}`scatrs.special`.
+
+## `scatrs.mie`
+
+```{eval-rst}
+.. automodule:: scatrs.mie
+   :members:
+```
 
 ## `scatrs.special`
 

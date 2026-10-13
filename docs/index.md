@@ -35,6 +35,7 @@ other figures are measurements. Python exposes only `f64` results in phase 0. Se
 
 installation
 conventions
+examples/mie
 examples/quadrature
 examples/wigner-d
 examples/henyey-greenstein

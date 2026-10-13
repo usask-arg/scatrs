@@ -66,7 +66,7 @@ numpydoc_xref_aliases = {
     "NotConvergedError": "scatrs.errors.NotConvergedError",
     "OutsideValidatedDomainError": "scatrs.errors.OutsideValidatedDomainError",
 }
-numpydoc_xref_ignore = {"optional"}
+numpydoc_xref_ignore = {"optional", "of"}
 
 OFFLINE = os.environ.get("SCATRS_DOCS_OFFLINE", "") not in ("", "0")
 

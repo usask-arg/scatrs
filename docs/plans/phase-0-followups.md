@@ -11,6 +11,14 @@ These items came out of the Phase 0 reviews and were deliberately deferred. Each
   - **Expected:** about 40–50 ns, versus about 235 ns now.
   - **Side benefits:** it removes the dependence on the platform's `f64::ln` seed, and the ×4.5 error amplification near |ln a| ≈ 0.22.
 - **`ln_1p_series` (about 200 ns).** Use reciprocal tables, or an f64 tail for terms below 2⁻⁵³.
+- **Gauss–Legendre is O(n²) in DD and too slow for large Mie rules. This is a priority for Phase 1.**
+  - Measured on an M4 Pro, about 28 ns·n²: n = 1000 takes 32 ms, n = 5000 takes 0.72 s, n = 20000 takes 11 s.
+  - Mie at x = 2·10⁴ needs about 4·10⁴ nodes (≈ 45 s).
+  - Options:
+    - Bogaert (2014), an iteration-free O(n) method with about ε-accurate nodes and weights in θ, cross-checked against the DD rule.
+    - Interleave the recurrences of 2–4 roots, for an estimated 2–4×.
+    - Cache rules per n.
+  - Working in θ would also remove the inherent DD weight loss near ±1, which is about log₂(n²/10) bits.
 - **x86_64 builds without FMA.**
   - **Problem:** `f64::mul_add` becomes a libm call, which makes every DD operation about 10× slower in default wheels.
   - **Fix:** select Dekker's split `two_prod` when `cfg(not(target_feature = "fma"))`, and consider shipping x86-64-v3 wheels as well. Decide this before Task 13's wheels are published. A non-FMA build also has to change `mul_dd` and `mul_f64`, which use FMA in their non-exact steps. Those operations then need the non-FMA error bounds from Joldes, Muller & Popescu (2017), not just a different `two_prod`. FMA and non-FMA builds will then give bitwise different results. The spec allows this, since it only requires determinism across thread counts.

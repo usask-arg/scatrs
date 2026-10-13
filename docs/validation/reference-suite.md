@@ -45,7 +45,7 @@ A record is **certified** when every source of error is rigorously bounded, incl
 truncation of a series. It is **high-precision** when some error, such as a series tail, is
 not yet rigorously bounded. Labels are never overstated.
 
-All 358 records in phase 0 are certified:
+The 358 records of phase 0 are all certified:
 
 - the arithmetic, constants and decimal values are exact rationals or Arb balls;
 - the elementary and complex functions are Arb's rigorous implementations;
@@ -53,8 +53,10 @@ All 358 records in phase 0 are certified:
 - the Wigner values come from the finite explicit sum, or, at very large degrees, from Arb's
   Legendre functions.
 
-The `high-precision` label is for later phases: for example, values of a scattering series
-whose truncation does not yet have a rigorous tail bound.
+The Mie records are certified where a proven bound covers the series tail, and high-precision
+otherwise: 297 of the 306 series records of values (the other 9 would need more than 60 000
+terms), and none of the 80 series records of derivatives, which have no tail bound yet. Their
+coefficient records are all certified. See {doc}`/theory/mie`.
 
 ## Files
 
@@ -76,6 +78,8 @@ whose truncation does not yet have a rigorous tail bound.
 | `dd_parse.jsonl` | 2 | exact values of 300 random decimal literals and of hand-picked edge cases |
 | `dd_trig.jsonl` | 14 | `sin`, `cos`, `tan`, `atan`, `asin`, `acos` and `atan2`, each with 200 random inputs and a record of edge cases |
 | `gauss_legendre.jsonl` | 17 | see below |
+| `mie.jsonl` | 612 | see below |
+| `mie_derivatives.jsonl` | 160 | see below |
 | `wigner_d.jsonl` | 212 | see below |
 
 The edge cases sit at the edges of each function's domain and of its algorithm's branches:
@@ -104,7 +108,16 @@ The edge cases sit at the edges of each function's domain and of its algorithm's
 | 7 | five degrees from $10^5$ to $2.5\cdot10^5$, for $(0, 0)$ and $(0, 2)$, from Arb's Legendre functions |
 | 7 | start values below the normal double range, with later degrees that are normal doubles |
 
-The committed data take about 7.8 MB, within the 20 MB budget.
+**`mie.jsonl`** holds two records per sphere, for 306 spheres: the 19 size parameters
+$10^{-6}, 10^{-4}, 10^{-2}, 0.1, 0.5, 1, 2, 5, 10, 20, 50, 100, 200, 500, 10^3,
+2\cdot10^3, 5\cdot10^3, 10^4, 2\cdot10^4$ against 14 refractive indices (near 1, water and
+aerosol, high index, strong absorption and metal-like), and 40 random spheres in the validated
+domain. A `,coefficients` record holds $a_n$ and $b_n$ at up to 11 orders; a `,series`
+record holds the efficiencies, $g$, and $S_1$, $S_2$ at 9 angles from 0° to 180°.
+**`mie_derivatives.jsonl`** holds the same for 80 spheres, with the derivatives of each
+output instead of the values.
+
+The committed data take about 12.8 MB, within the 20 MB budget, which a test enforces.
 
 ## How the tests use it
 

@@ -10,6 +10,7 @@ from scatrs_reference.generators import (
     dd_parse,
     dd_trig,
     gauss_legendre,
+    mie,
     wigner_d,
 )
 
@@ -23,5 +24,7 @@ GENERATORS: dict[str, Generator] = {
     "dd_parse": dd_parse.generate,
     "dd_trig": dd_trig.generate,
     "gauss_legendre": gauss_legendre.generate,
+    "mie": mie.generate,
+    "mie_derivatives": mie.generate_derivatives,
     "wigner_d": wigner_d.generate,
 }

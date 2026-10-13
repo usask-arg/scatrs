@@ -77,7 +77,7 @@ These items came out of the Phase 0 reviews and were deliberately deferred. Each
 - **Conventions at non-differentiable points** (controller decision, Task 8):
   - `hypot` at the origin returns derivative 0. That is a valid subgradient, since hypot is convex.
   - `atan2` at the origin returns NaN, because the function jumps there.
-  - `log` with base ±0 returns a NaN base derivative.
+  - `log` with base ±0 returns a base derivative of −sign(ln x)·∞, and 0 at x = 1 (changed in the Task 8 fixes).
   - All three are documented in `dual/mod.rs`.
 - **Libm accuracy assumptions in tests.** The f64 derivative bounds in `dual_functions.rs` assume each libm call is within 2 ulps, which has only been checked on macOS. If CI on glibc or the Windows CRT fails, measure that platform's libm and adjust the per-platform bound with a written justification.
 - **`Dual<DoubleDouble>` sin speed.** The derivative needs DD cos, so `Dual<Dd>` sin costs about 2× DD sin. It benefits directly from the DD sin_cos speedups above.

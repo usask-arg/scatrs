@@ -15,15 +15,15 @@ These items came out of the Phase 0 reviews and were deliberately deferred. Each
   - **Current cost:** about 28 ns·n² on an M4 Pro (n = 1000 takes 32 ms, n = 5000 takes 0.72 s, n = 20000 takes 11 s). Mie at x = 2·10⁴ needs about 4·10⁴ nodes, about 45 s.
   - **Cap:** `MAX_GAUSS_LEGENDRE_POINTS` = 2¹⁷, a controller decision in Task 9. Raise it when the O(n) method lands.
   - **Speed-ups measured in the Task 9 review, without changing the algorithm:**
-    1. **Drop the polish step.** The remaining error after |Δx| ≤ 2⁻⁹⁰ is ≤ 2⁻¹⁴² at 2²⁰. Replace the final Pₙ′ evaluation with the ODE correction P′(x−δ) ≈ P′(x)(1 − 2xδ/(1−x²)), stopping at |Δx| ≤ 2⁻⁶⁰/n. This needs 2.0–2.2× fewer evaluations, with f64 output bit-identical on 31 random n ≤ 6000.
+    1. **Drop the polish step.** The remaining error after |Δx| ≤ 2⁻⁹⁰ is ≤ 2⁻¹⁴², even at n = 2²⁰. This was measured before the cap was lowered to 2¹⁷. Replace the final Pₙ′ evaluation with the ODE correction P′(x−δ) ≈ P′(x)(1 − 2xδ/(1−x²)), stopping at |Δx| ≤ 2⁻⁶⁰/n. This needs 2.0–2.2× fewer evaluations, with f64 output bit-identical on 31 random n ≤ 6000.
     2. **Interleave K roots in lockstep.** K = 2 gives 1.9×; K = 4 or 8 gives 2.7× (saturated). Results are bitwise identical per root.
     - Combined, about 5×: n = 4·10⁴ goes from about 45 s to about 8 s.
   - **Real fix: Bogaert (2014),** an iteration-free O(n) method that works in θ. It is about ε-accurate and also removes the DD weight loss near ±1, about log₂(n²/10) bits. Cross-check it against the DD rule and Arb.
   - **Caching (Phase 1 design note):** a rule exact to degree D is exact for every lower degree, so an ensemble needs only the rule at its largest n_q. Round n_q up to buckets if caching. A hidden global cache conflicts with §4.5, so use a cache owned by the caller or an `Arc`.
-- **CI for `#[ignore]` tests.** These tests (e.g. GL at n = 20000) must run on a schedule in Task 13, or the claims they back are never re-checked.
+- **CI for `#[ignore]` tests:** done. The weekly `scheduled.yml` `ignored-tests` job runs them.
 - **x86_64 builds without FMA.**
   - **Problem:** `f64::mul_add` becomes a libm call, which makes every DD operation about 10× slower in default wheels.
-  - **Fix:** select Dekker's split `two_prod` when `cfg(not(target_feature = "fma"))`, and consider shipping x86-64-v3 wheels as well. Decide this before Task 13's wheels are published. A non-FMA build also has to change `mul_dd` and `mul_f64`, which use FMA in their non-exact steps. Those operations then need the non-FMA error bounds from Joldes, Muller & Popescu (2017), not just a different `two_prod`. FMA and non-FMA builds will then give bitwise different results. The spec allows this, since it only requires determinism across thread counts.
+  - **Fix:** select Dekker's split `two_prod` when `cfg(not(target_feature = "fma"))`, and consider shipping x86-64-v3 wheels as well. Decide this before the first public release (CONTRIBUTING says the same). A non-FMA build also has to change `mul_dd` and `mul_f64`, which use FMA in their non-exact steps. Those operations then need the non-FMA error bounds from Joldes, Muller & Popescu (2017), not just a different `two_prod`. FMA and non-FMA builds will then give bitwise different results. The spec allows this, since it only requires determinism across thread counts.
 - **`mul_pow2` zero inputs:** these deliberately take the cold `renormalize_tiny` path, which turns a −0 low word into +0. Do not optimise this away.
 - **`DoubleDouble::rem`** allocates a `Vec` on every call. The expansion length bound is unproven; 6 components is the most observed. Switch to a stack buffer if a bound can be proved.
 
@@ -103,7 +103,7 @@ These items came out of the Phase 0 reviews and were deliberately deferred. Each
   | DD sin | about 2× |
 
 - **Apple fused sincos.** On Apple targets, `Dual::sin`/`cos` return the fused `__sincos_stret` values. Any f64 kernel computing both sin and cos of an argument gets the same values, so value-only and Jacobian calls agree bitwise. A lone `f64::sin` can differ by 1 ulp in about 1 in 13,000 arguments. glibc and MSVC are unaffected. This was a controller decision in Task 8.
-- **Cross-platform CI is essential.** The Task 8 review found a Linux-only failure: macOS passed only because Apple's `pow` happened to cancel a test-reference error. Run the full test suite on Linux and Windows in CI before trusting libm-dependent bounds (Task 13).
+- **Cross-platform CI is essential.** The Task 8 review found a Linux-only failure: macOS passed only because Apple's `pow` happened to cancel a test-reference error. The CI added in Task 13 runs the full test suite on Linux, macOS and Windows. The first real run, especially Windows, is still pending.
 - **`Dual<Dd>::log` cost.** The value must come bitwise from `T::log`, so it computes DD `ln` twice, about 2× DD `log`.
 
 ## Wigner d-functions (Phase 1)
@@ -122,3 +122,50 @@ These items came out of the Phase 0 reviews and were deliberately deferred. Each
 
 ## Platform notes
 - On aarch64, `f64::max`/`f64::min` return NaN for a signaling NaN, contrary to Rust's documentation. `DoubleDouble` follows the documented rule. No DD operation produces a signaling NaN.
+
+## Spec amendments and decisions to carry into Phase 1 (from the final phase 0 review)
+- **Validated-domain rule (spec §4.5), controller decision.**
+  - The `OutsideValidatedDomain` / `allow_unvalidated` rule applies to the **scattering outputs**: Mie, layered spheres and T-matrix, whose validated domains come from the accuracy maps (§8.2).
+  - Special functions (`gauss_legendre`, `wigner_d`) are building blocks. They document their tested ranges in their rustdoc rather than refusing inputs.
+  - Phase 1 designs the `allow_unvalidated` mechanism together with the first accuracy map, and its exit criterion ("declared validated domain enforced in CI") applies to the Mie outputs.
+- **Spec §9.3 lags the implementation:**
+  - the exception hierarchy also has `InvalidInputError(ScatrsError, ValueError)`;
+  - zero-copy input now uses `Bound<PyArray…>` + `try_readonly()`, not `PyReadonlyArray` parameters (see "Python binding patterns" above).
+- **Other documented deviations from the spec or plan:**
+  - Reinsch difference forms in Wigner;
+  - the 2¹⁷ GL cap;
+  - the 2²⁸ cap on Python `wigner_d` output;
+  - strict `is_zero` for `Dual`;
+  - Apple's fused sincos;
+  - DD trig is NaN beyond 2⁵⁰;
+  - reference format v2 (with `lo2`).
+
+## Phase 1 plan must include (from the final phase 0 review)
+- **Before the Mie kernels:**
+  - scatrs-owned complex helpers validated against Arb (Smith/Baudin division, Kahan csqrt, ln near 1, stable hypot);
+  - a green first CI run, with Windows libm results checked.
+- **Infrastructure deferred from phase 0:**
+  - rayon with a caller-supplied thread pool;
+  - criterion and instruction-count benchmarks, plus the CI gate (§12.1);
+  - cargo-fuzz targets;
+  - Riccati–Bessel and log-derivative functions;
+  - the `allow_unvalidated` mechanism;
+  - a Mie Arb generator plus the series-tail bound needed for "certified" labels;
+  - testing musllinux wheels.
+- **Data budget:**
+  - phase 0 uses 7.8 of 20 MB (`dd_arith.jsonl` alone is 3.3 MB);
+  - add a size test in `reference/tests`;
+  - consider trimming `dd_arith`.
+- **Docs and rustdoc:**
+  - a `RUSTDOCFLAGS=-D warnings cargo doc -p scatrs --no-deps` CI step;
+  - `# Examples` doctests for `gauss_legendre`, `wigner_d`, `DoubleDouble` and `Dual`;
+  - fix the broken intra-doc link at `dd/traits.rs:2`, which only shows with `--document-private-items`.
+- **Docs-consistency test:** extend it to check manifest-driven record counts and data size, MSRV 1.85, Python 3.11, numpy 1.26, the GL timing figures, and the Wigner ranges and costs.
+- **API shape before publishing the crate:**
+  - `GaussLegendre<T>` has public fields and no `#[non_exhaustive]`;
+  - offer caller-supplied-buffer variants (§4.5);
+  - settle both together with the rule-caching design.
+- **Cross-platform golden digests** of GL rule bits (f64 and DD, a few n) and some Wigner outputs, so 3-OS CI verifies the claimed bitwise identity.
+- **Packaging nits:**
+  - declare `packaging` in the `test` extra;
+  - the `xarray` extra is unused until the high-level API arrives.

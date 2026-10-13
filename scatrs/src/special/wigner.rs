@@ -8,11 +8,9 @@
 //! ([`start_value`]) does not flush later, normal values to zero.
 //!
 //! Method selection: a difference form wherever |x| ≥ 0.9, and for m = ±n on the side of the
-//! pole where |d| → 1 (x ≥ 0 for m = n, x < 0 for m = −n); the three-term form elsewhere, where
-//! its results are bitwise those of the implementation plan's code. The plan used the
-//! three-term form everywhere; the difference forms are a change of method, approved by the
-//! controller after the Task 10 review, because the three-term form loses accuracy like l² next
-//! to the poles.
+//! pole where |d| → 1 (x ≥ 0 for m = n, x < 0 for m = −n); the three-term form elsewhere.
+//! The three-term form alone loses accuracy like l² next to the poles (measured up to
+//! 266·(l+1) ulps at l = 2000 for (0, 0)), which is why the difference forms are used there.
 
 use crate::scalar::Real;
 use crate::{Error, Result};

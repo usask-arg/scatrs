@@ -1,6 +1,6 @@
 """Special functions and quadrature rules (thin wrappers over the Rust core).
 
-Arguments are converted here (see :mod:`scatrs._args`), their values are checked by the Rust
+Arguments are converted here (see ``scatrs._args``), their values are checked by the Rust
 core, and the computation runs in Rust with the GIL released. See :mod:`scatrs.errors` for
 which exception each kind of bad argument raises.
 """

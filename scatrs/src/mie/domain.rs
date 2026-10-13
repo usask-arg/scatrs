@@ -50,21 +50,29 @@ pub enum MieOutput {
 /// of the exact value for the exact inputs, in the measure of its [`MieOutput`]
 /// ([`tolerance`](Self::tolerance)). Here
 ///
-/// * cond is the output's relative condition number with respect to x and m in that measure:
-///   (x·|∂y/∂x| + |m|·|∇ₘy|)/s, where s is the denominator of the measure, |∇ₘy| is
-///   √((∂y/∂Re m)² + (∂y/∂Im m)²) (= |dy/dm| for the holomorphic aₙ, bₙ, S₁, S₂), and for
-///   the measures over an array the numerator is the largest over the array. It is large near
-///   the sharp resonances of weakly absorbing spheres, where no algorithm can do better, since
-///   rounding x and m to `f64` already perturbs the outputs by cond·2⁻⁵³.
-/// * κ′(x, m) is [`condition_factor`](Self::condition_factor) for the values, and that times
-///   max(1, |m|/|m − 1|) for the derivatives. It covers the errors that cond does not: the
-///   cancellation in the series (in Q_back, the alternating sum is up to x times smaller than
-///   its terms) and the orders' separate losses near m = 1.
+/// * cond is the output's relative condition number with respect to x and m in that measure,
+///   with s the denominator of the measure (for the measures over an array, the numerator is
+///   the largest over the array):
+///   * for the holomorphic aₙ, bₙ, S₁, S₂ and their derivatives, (x·|∂y/∂x| + |m|·|dy/dm|)/s;
+///   * for the real efficiencies, g and their Jacobian, componentwise:
+///     (x·|∂y/∂x| + |Re m|·|∂y/∂(Re m)| + |Im m|·|∂y/∂(Im m)|)/s.
+///
+///   Rounding x and m to `f64` (each part of m to within 2⁻⁵³ of itself) already perturbs the
+///   output by up to about cond·2⁻⁵³, so no algorithm can avoid it; it is large near the sharp
+///   resonances of weakly absorbing spheres.
+/// * κ′(x, m) is an a-priori factor for the errors that cond does not cover: the cancellation
+///   in the series (in Q_back, the alternating sum is up to x times smaller than its terms),
+///   and the separate losses of each order near m = 1, where aₙ, bₙ ∝ m − 1. It is
+///   [`condition_factor`](Self::condition_factor) κ for the values, κ·max(1, |m|/|m − 1|) for
+///   the efficiency Jacobian (the derivatives of g lose a second factor |m|/|m − 1| near
+///   m = 1), and 1 + |m|x for the derivatives of the coefficients and amplitudes, which do not
+///   vanish at m = 1.
 /// * C is the output's constant ([`constant`](Self::constant)).
 ///
-/// The constants are measured, at least 4 times the worst case found: at every Arb reference
-/// value in the domain, and against double-double on a dense grid (the accuracy map in the
-/// documentation). Tests enforce both in CI.
+/// Neither term alone is a bound: the accuracy map in the documentation shows outputs that
+/// need each. The constants are measured, at least 4 times the worst case found: at every Arb
+/// reference value in the domain, and against double-double on a dense grid (the accuracy
+/// map). Tests enforce both in CI.
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct ValidatedDomain {
@@ -102,18 +110,16 @@ impl ValidatedDomain {
     }
 
     /// The declared bound on the error of `output` at (x, m): C·(κ′ + `condition`)·2⁻⁵², in
-    /// the measure of [`MieOutput`] (see the type documentation for κ′ and the condition
-    /// number). With `condition` = 0 this is the a-priori part alone, which the accuracy map
-    /// shows to suffice away from sharp resonances.
+    /// the measure of [`MieOutput`], where `condition` is the output's condition number (see
+    /// the type documentation for it and for κ′).
     pub fn tolerance(&self, output: MieOutput, x: f64, m: Complex<f64>, condition: f64) -> f64 {
-        let derivative = matches!(
-            output,
-            MieOutput::CoefficientDerivatives
-                | MieOutput::EfficiencyJacobian
-                | MieOutput::AmplitudeDerivatives
-        );
-        let extra = if derivative { near_one(m) } else { 1.0 };
-        let prior = Self::condition_factor(x, m) * extra;
+        let prior = match output {
+            MieOutput::CoefficientDerivatives | MieOutput::AmplitudeDerivatives => {
+                1.0 + m.norm() * x
+            }
+            MieOutput::EfficiencyJacobian => Self::condition_factor(x, m) * near_one(m),
+            _ => Self::condition_factor(x, m),
+        };
         Self::constant(output) * (prior + condition) * f64::EPSILON
     }
 
@@ -122,10 +128,9 @@ impl ValidatedDomain {
     /// | output | C |
     /// |---|---|
     /// | coefficients, efficiencies, g | 16 |
-    /// | derivatives of S₁, S₂ | 32 |
-    /// | S₁, S₂ | 64 |
-    /// | efficiency Jacobian | 128 |
-    /// | coefficient derivatives | 256 |
+    /// | S₁, S₂ and their derivatives | 64 |
+    /// | efficiency Jacobian | 256 |
+    /// | coefficient derivatives | 512 |
     pub fn constant(output: MieOutput) -> f64 {
         match output {
             MieOutput::Coefficients
@@ -134,10 +139,9 @@ impl ValidatedDomain {
             | MieOutput::Absorption
             | MieOutput::Backscattering
             | MieOutput::Asymmetry => 16.0,
-            MieOutput::AmplitudeDerivatives => 32.0,
-            MieOutput::Amplitudes => 64.0,
-            MieOutput::EfficiencyJacobian => 128.0,
-            MieOutput::CoefficientDerivatives => 256.0,
+            MieOutput::Amplitudes | MieOutput::AmplitudeDerivatives => 64.0,
+            MieOutput::EfficiencyJacobian => 256.0,
+            MieOutput::CoefficientDerivatives => 512.0,
         }
     }
 }

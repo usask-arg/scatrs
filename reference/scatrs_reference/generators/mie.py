@@ -41,10 +41,10 @@ and S₂, with respect to x and m).
 
 Labels. Coefficient records are finite computations, so certified. A series record of values
 is certified when n_ref is large enough for the tail bound of `tail_bounds` (proved in the
-theory chapter, "Series tail bound"): n_ref ≥ |m|x and n_ref ≥ 1.5x. The bound is then added
-to each value's error. Otherwise, when that would take more than ``CERTIFY_MAX_ORDER`` terms,
-the series is summed to ⌈x + 18x^(1/3) + 32⌉ terms and labelled high-precision. The series of
-derivatives have no tail bound yet: they are high-precision.
+theory chapter, "Series tail bound"): 2n_ref + 3 ≥ 2|m|x and n_ref ≥ 1.5x − ½. The bound is
+then added to each value's error. Otherwise, when that would take more than
+``CERTIFY_MAX_ORDER`` terms, the series is summed to ⌈x + 18x^(1/3) + 32⌉ terms and labelled
+high-precision. The series of derivatives have no tail bound yet: they are high-precision.
 """
 
 from __future__ import annotations

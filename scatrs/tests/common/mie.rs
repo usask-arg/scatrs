@@ -153,7 +153,13 @@ fn efficiency_sizes(d: &Outputs<Dd>, x: f64) -> [f64; 5] {
 /// cosines are those of the amplitudes), over the coefficient orders `orders`.
 pub fn value_measures(x: f64, m: Complex<f64>, d: &Outputs<Dd>, orders: &[usize]) -> ValueMeasures {
     let abs_m = m.norm();
+    // Holomorphic outputs (coefficients, amplitudes): |m|·|dy/dm|, which rounding m bounds up
+    // to a factor √2. Real outputs: componentwise, since rounding m perturbs Re m by at most
+    // u·|Re m| and Im m by at most u·|Im m| (a real m stays real).
     let cond = |dx: f64, dm: f64, scale: f64| (x * dx.abs() + abs_m * dm) / scale;
+    let cond_real = |dx: f64, dr: f64, di: f64, scale: f64| {
+        (x * dx.abs() + m.re.abs() * dr.abs() + m.im.abs() * di.abs()) / scale
+    };
     let coefficients = [
         array_measure(orders, &d.a, x, abs_m, &|k| cnorm(d.d[0][k]), &|k| {
             cnorm(d.d[1][k])
@@ -171,7 +177,7 @@ pub fn value_measures(x: f64, m: Complex<f64>, d: &Outputs<Dd>, orders: &[usize]
         );
         Measure {
             scale: sizes[k],
-            condition: cond(jx, jr.hypot(ji), sizes[k]),
+            condition: cond_real(jx, jr, ji, sizes[k]),
         }
     });
     let s_rms = x * q_of(&d.q, 1).hi().sqrt() / 2.0;
@@ -194,9 +200,14 @@ pub fn value_measures(x: f64, m: Complex<f64>, d: &Outputs<Dd>, orders: &[usize]
 }
 
 /// The measures of the derivatives at (x, m), from the double-double solution `d` there and
-/// central differences of double-double derivatives (steps 2⁻³⁰ x and 2⁻³⁰ |m|, one-sided in
-/// Im m at Im m = 0; their truncation errors, about 2⁻⁶⁰ relative, are far below what the
-/// measures resolve), over the coefficient orders `orders` and the cosines `mu`.
+/// central differences of double-double derivatives, over the coefficient orders `orders` and
+/// the cosines `mu`.
+///
+/// The steps are 2⁻³⁰ x and 2⁻³⁰ |m|, one-sided in Im m at Im m = 0. Their relative truncation
+/// error is about (2⁻³⁰ |m|x)²/6 (10⁻⁸ at |m|x = 3·10⁵; first order, about 10⁻⁴, for the
+/// one-sided difference, which only real outputs use and multiply by Im m = 0), and near a
+/// resonance narrower than the step the quotient is no derivative at all. That is enough for
+/// a condition number, which only has to be right to within a small factor.
 pub fn derivative_measures(
     x: f64,
     m: Complex<f64>,
@@ -249,7 +260,7 @@ pub fn derivative_measures(
             let di = gi(q_of(&pi.jac[p], k), q_of(&ni.jac[p], k));
             Measure {
                 scale,
-                condition: (x * dx.abs() + abs_m * dr.hypot(di)) / scale,
+                condition: (x * dx.abs() + m.re.abs() * dr.abs() + m.im.abs() * di.abs()) / scale,
             }
         })
     });

@@ -3,16 +3,21 @@
 //! Every reference point is inside the validated domain, so every error must be within its
 //! declared tolerance, `VALIDATED_DOMAIN.tolerance(output, x, m, condition)`, with the scale and
 //! condition number of the error measure from `common::mie`. Each test prints the worst
-//! C = error/((κ′ + cond)·2⁻⁵²) it measures, against the declared constant.
+//! C = error/((κ′ + cond)·2⁻⁵²) it measures, against the declared constant. `DoubleDouble`,
+//! which stands in for the exact values in the accuracy map, must be within the same
+//! tolerances times 16·2⁻⁵² (`DOUBLE_DOUBLE_SLACK`).
 
 mod common;
 
-use common::mie::{EFFICIENCY_NAMES, Measure, derivative_measures, reference, value_measures};
+use common::mie::{
+    EFFICIENCY_NAMES, Measure, derivative_measures, q_of, reference, value_measures,
+};
 use common::{Record, load};
 use num_complex::Complex;
 use scatrs::mie::{
     AmplitudeBuffers, Mie, MieOptions, MieOutput, VALIDATED_DOMAIN, ValidatedDomain, default_n_max,
 };
+use scatrs::scalar::DoubleDouble as Dd;
 
 /// The measures of the efficiencies, in the order of `EFFICIENCY_NAMES`.
 const EFFICIENCY_OUTPUTS: [MieOutput; 5] = [
@@ -31,18 +36,46 @@ fn refractive_index(r: &Record) -> Complex<f64> {
     Complex::new(r.input_f64("m_re"), r.input_f64("m_im"))
 }
 
-/// |got − v| for the reference value i of `name`.
-fn error(got: f64, r: &Record, name: &str, i: usize) -> f64 {
-    r.output(name).dd_error(i, got, 0.0)
+/// A computed value as the unevaluated sum hi + lo.
+trait Parts: Copy {
+    fn parts(self) -> (f64, f64);
 }
 
-fn complex_error(got: Complex<f64>, r: &Record, stem: &str, i: usize) -> f64 {
+impl Parts for f64 {
+    fn parts(self) -> (f64, f64) {
+        (self, 0.0)
+    }
+}
+
+impl Parts for Dd {
+    fn parts(self) -> (f64, f64) {
+        (self.hi(), self.lo())
+    }
+}
+
+/// |got − v| for the reference value i of `name`.
+fn error<T: Parts>(got: T, r: &Record, name: &str, i: usize) -> f64 {
+    let (hi, lo) = got.parts();
+    r.output(name).dd_error(i, hi, lo)
+}
+
+fn complex_error<T: Parts>(got: Complex<T>, r: &Record, stem: &str, i: usize) -> f64 {
     error(got.re, r, &format!("{stem}_re"), i).hypot(error(got.im, r, &format!("{stem}_im"), i))
 }
+
+/// `DoubleDouble` stands in for the exact values in the accuracy map, so it must be accurate
+/// far beyond `f64`, not within the same constants: it may reach 16 times them, in units of
+/// (κ′ + cond)·2⁻¹⁰⁴ (measured: up to 1.5 times, in the amplitude derivatives at x = 2·10⁴).
+/// Its error then moves a C of the map by at most 2⁻⁴⁸ of the declared constant.
+const DOUBLE_DOUBLE_SLACK: f64 = 16.0;
 
 /// The largest measured C of one output, and where.
 struct Worst {
     what: String,
+    /// C is measured in units of (κ′ + cond)·2⁻⁵²·`unit`: 1 for `f64`, 2⁻⁵² for `DoubleDouble`.
+    unit: f64,
+    /// The largest C allowed, as a multiple of the declared constant.
+    slack: f64,
     c: f64,
     case: String,
 }
@@ -51,13 +84,25 @@ impl Worst {
     fn new(what: &str) -> Self {
         Self {
             what: what.to_owned(),
+            unit: 1.0,
+            slack: 1.0,
+            c: 0.0,
+            case: String::new(),
+        }
+    }
+
+    fn double_double(what: &str) -> Self {
+        Self {
+            what: format!("DoubleDouble {what}"),
+            unit: f64::EPSILON,
+            slack: DOUBLE_DOUBLE_SLACK,
             c: 0.0,
             case: String::new(),
         }
     }
 
     /// Checks the error `err` of `output` at the case of `r` against the declared tolerance in
-    /// the output's measure, and records its C.
+    /// the output's measure, times `unit`·`slack`, and records its C.
     fn check(&mut self, output: MieOutput, err: f64, measure: Measure, r: &Record, detail: &str) {
         let (x, m) = (size_parameter(r), refractive_index(r));
         assert!(
@@ -65,9 +110,16 @@ impl Worst {
             "{} is outside the domain",
             r.case
         );
-        let tol = VALIDATED_DOMAIN.tolerance(output, x, m, measure.condition);
+        let tol =
+            VALIDATED_DOMAIN.tolerance(output, x, m, measure.condition) * self.unit * self.slack;
+        assert!(
+            measure.scale > 0.0 && tol.is_finite(),
+            "{} {} {detail}: degenerate measure {measure:?}, tolerance {tol:e}",
+            self.what,
+            r.case
+        );
         let rel = err / measure.scale;
-        let c = rel / tol * ValidatedDomain::constant(output);
+        let c = rel / tol * self.slack * ValidatedDomain::constant(output);
         if c > self.c {
             self.c = c;
             self.case = format!("{} {detail}", r.case);
@@ -86,7 +138,7 @@ impl Drop for Worst {
     fn drop(&mut self) {
         if !std::thread::panicking() {
             eprintln!(
-                "{:<26} worst C = {:8.3} at {}",
+                "{:<40} worst C = {:8.3} at {}",
                 self.what, self.c, self.case
             );
         }
@@ -94,10 +146,12 @@ impl Drop for Worst {
 }
 
 fn records(file: &str, kind: &str) -> Vec<Record> {
-    load(file)
+    let records: Vec<Record> = load(file)
         .into_iter()
         .filter(|r| r.case.ends_with(kind))
-        .collect()
+        .collect();
+    assert!(!records.is_empty(), "no {kind} records in {file}");
+    records
 }
 
 /// The stored orders of a coefficient record (1-based).
@@ -112,7 +166,7 @@ fn options(r: &Record) -> MieOptions {
 }
 
 /// max over the stored orders of |error|, for one array.
-fn array_error(r: &Record, stem: &str, got: &[Complex<f64>]) -> f64 {
+fn array_error<T: Parts>(r: &Record, stem: &str, got: &[Complex<T>]) -> f64 {
     orders(r)
         .iter()
         .enumerate()
@@ -273,30 +327,101 @@ fn derivatives_match_arb() {
     }
 }
 
-/// `DoubleDouble` stands in for the exact values in the accuracy map, so it must be accurate
-/// far beyond `f64`: the efficiencies within 16·(κ + cond)·2⁻¹⁰⁴ in their measures.
+/// Every `DoubleDouble` value within 16·C·(κ′ + cond)·2⁻¹⁰⁴ (see `DOUBLE_DOUBLE_SLACK`).
 #[test]
-fn double_double_matches_arb() {
-    let u2 = 2f64.powi(-104);
-    let mut worst = 0.0f64;
-    let mut at = String::new();
-    for r in records("mie.jsonl", ",series") {
+fn double_double_values_match_arb() {
+    let mut worst = Worst::double_double("a_n, b_n");
+    for r in records("mie.jsonl", ",coefficients") {
         let (x, m) = (size_parameter(&r), refractive_index(&r));
         let d = reference(x, m, &[]);
-        let measures = value_measures(x, m, &d, &[1]);
-        let kappa = ValidatedDomain::condition_factor(x, m);
-        let got = [d.q.q_ext, d.q.q_sca, d.q.q_abs, d.q.q_back, d.q.g];
-        for k in [0, 1, 3, 4] {
-            let measure = measures.efficiencies[k];
-            let name = EFFICIENCY_NAMES[k];
-            let err = r.output(name).dd_error(0, got[k].hi(), got[k].lo());
-            let c = err / measure.scale / ((kappa + measure.condition) * u2);
-            if c > worst {
-                worst = c;
-                at = format!("{} {name}", r.case);
-            }
-            assert!(c <= 16.0, "{} {name}: C = {c:.2}", r.case);
+        let measures = value_measures(x, m, &d, &orders(&r));
+        for (k, (stem, got)) in [("a", &d.a), ("b", &d.b)].into_iter().enumerate() {
+            let err = array_error(&r, stem, got);
+            let measure = measures.coefficients[k];
+            worst.check(MieOutput::Coefficients, err, measure, &r, stem);
         }
     }
-    eprintln!("DoubleDouble efficiencies  worst C = {worst:8.3} at {at}");
+    let mut worst_q = EFFICIENCY_NAMES.map(Worst::double_double);
+    let mut worst_s = Worst::double_double("S_1, S_2");
+    for r in records("mie.jsonl", ",series") {
+        let (x, m) = (size_parameter(&r), refractive_index(&r));
+        let mu = r.input_f64s("mu");
+        let d = reference(x, m, &mu);
+        let measures = value_measures(x, m, &d, &[1]);
+        for (k, name) in EFFICIENCY_NAMES.into_iter().enumerate() {
+            let got = q_of(&d.q, k);
+            if k == 2 && m.im == 0.0 {
+                assert_eq!(
+                    got.parts(),
+                    (0.0, 0.0),
+                    "{}: Q_abs must be exactly 0",
+                    r.case
+                );
+                continue;
+            }
+            let err = error(got, &r, name, 0);
+            let measure = measures.efficiencies[k];
+            worst_q[k].check(EFFICIENCY_OUTPUTS[k], err, measure, &r, name);
+        }
+        for (j, cosine) in mu.iter().enumerate() {
+            for (i, stem) in ["s1", "s2"].into_iter().enumerate() {
+                let detail = format!("{stem} at mu = {cosine}");
+                let err = complex_error(d.s[i][j], &r, stem, j);
+                let measure = measures.amplitudes[j][i];
+                worst_s.check(MieOutput::Amplitudes, err, measure, &r, &detail);
+            }
+        }
+    }
+}
+
+/// As [`double_double_values_match_arb`], for the derivatives.
+#[test]
+fn double_double_derivatives_match_arb() {
+    let mut worst_c = Worst::double_double("coefficient derivatives");
+    let mut worst_j = Worst::double_double("efficiency Jacobian");
+    let mut worst_s = Worst::double_double("amplitude derivatives");
+    let coefficient_records = records("mie_derivatives.jsonl", ",coefficients");
+    for r in records("mie_derivatives.jsonl", ",series") {
+        let (x, m) = (size_parameter(&r), refractive_index(&r));
+        let case = r.case.trim_end_matches(",series");
+        let c = coefficient_records
+            .iter()
+            .find(|c| c.case.trim_end_matches(",coefficients") == case)
+            .expect("a coefficient record per case");
+        let mu = r.input_f64s("mu");
+        let d = reference(x, m, &mu);
+        let measures = derivative_measures(x, m, &mu, &d, &orders(c));
+        for (k, stem) in ["da_dx", "da_dm", "db_dx", "db_dm"].into_iter().enumerate() {
+            let err = array_error(c, stem, &d.d[k]);
+            let measure = measures.coefficients[k];
+            worst_c.check(MieOutput::CoefficientDerivatives, err, measure, c, stem);
+        }
+        for (p, key) in ["dx", "dm_re", "dm_im"].into_iter().enumerate() {
+            for (k, stem) in EFFICIENCY_NAMES.into_iter().enumerate() {
+                let (name, got) = (format!("{stem}_{key}"), q_of(&d.jac[p], k));
+                if k == 2 && m.im == 0.0 && p < 2 {
+                    assert_eq!(
+                        got.parts(),
+                        (0.0, 0.0),
+                        "{}: {name} must be exactly 0",
+                        r.case
+                    );
+                    continue;
+                }
+                let err = error(got, &r, &name, 0);
+                let measure = measures.jacobian[p][k];
+                worst_j.check(MieOutput::EfficiencyJacobian, err, measure, &r, &name);
+            }
+        }
+        for (p, key) in ["dx", "dm"].into_iter().enumerate() {
+            for (i, stem) in ["s1", "s2"].into_iter().enumerate() {
+                let name = format!("{stem}_{key}");
+                let err = (0..mu.len())
+                    .map(|j| complex_error(d.s[2 + 2 * p + i][j], &r, &name, j))
+                    .fold(0.0, f64::max);
+                let measure = measures.amplitudes[p][i];
+                worst_s.check(MieOutput::AmplitudeDerivatives, err, measure, &r, &name);
+            }
+        }
+    }
 }

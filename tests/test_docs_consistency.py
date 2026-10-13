@@ -128,10 +128,42 @@ def test_mie_constants_match_the_accuracy_map() -> None:
     data = json.loads((ROOT / "docs/validation/data/mie-accuracy-map.json").read_text())
     for column, variant in columns.items():
         assert data["declared"][column] == constants[variant], column
-        assert max(max(row) for row in data["c"][column]) <= constants[variant], column
-    theory = read(MIE_THEORY)
-    for value in sorted({int(c) for c in constants.values()}):
-        assert str(value) in theory
+        # The documented margin: every constant at least 4 times the worst C of the map.
+        assert 4 * max(max(row) for row in data["c"][column]) <= constants[variant], column
+
+
+# The `MieOutput` variants that share a constant, as the theory chapter and the rustdoc table of
+# `ValidatedDomain::constant` name them.
+MIE_CONSTANT_GROUPS = [
+    (
+        ("Coefficients", "Extinction", "Scattering", "Absorption", "Backscattering", "Asymmetry"),
+        "the coefficients, efficiencies and $g$",
+        "coefficients, efficiencies, g",
+    ),
+    (
+        ("Amplitudes", "AmplitudeDerivatives"),
+        "$S_1$, $S_2$ and their derivatives",
+        "S₁, S₂ and their derivatives",
+    ),
+    (("EfficiencyJacobian",), "the efficiency Jacobian", "efficiency Jacobian"),
+    (("CoefficientDerivatives",), "the coefficient derivatives", "coefficient derivatives"),
+]
+
+
+def test_mie_constants_are_stated_in_the_theory_and_the_rustdoc() -> None:
+    constants = _declared_mie_constants()
+    assert {v for variants, _, _ in MIE_CONSTANT_GROUPS for v in variants} == set(constants)
+    phrases, rows = [], []
+    for variants, in_theory, in_table in MIE_CONSTANT_GROUPS:
+        values = {constants[v] for v in variants}
+        assert len(values) == 1, f"{variants} no longer share a constant"
+        value = int(values.pop())
+        phrases.append(f"{value} for {in_theory}")
+        rows.append(f"/// | {in_table} | {value} |")
+    assert normalise("; ".join(phrases)) in read(MIE_THEORY)
+    source = (ROOT / DOMAIN_RS).read_text(encoding="utf-8")
+    missing = [row for row in rows if row not in source]
+    assert not missing, f"rows missing from the table of ValidatedDomain::constant: {missing}"
 
 
 def test_reference_suite_page_matches_the_manifest() -> None:

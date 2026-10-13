@@ -1,10 +1,11 @@
 //! The accuracy map of the Mie outputs: `f64` against `DoubleDouble` on a dense grid over the
 //! validated domain, every output within its declared tolerance.
 //!
-//! The grid: x = d·10^e for the mantissas `MANTISSAS` and e = −6, …, 4, up to 2·10⁴, 104 values (decimal
-//! values, so the same doubles on every platform: a libm-dependent grid could land next to a
-//! sharp resonance on one platform only), against the refractive indices `INDICES`, with the
-//! amplitudes at `cosines()`. `DoubleDouble` is within a few (κ + cond)·2⁻¹⁰⁴ of Arb
+//! The grid: x = d·10^e for the mantissas `MANTISSAS` and e = −6, …, 4, up to 2·10⁴, 104
+//! values (decimal values, so the same doubles on every platform: a libm-dependent grid could
+//! land next to a sharp resonance on one platform only), against the refractive indices
+//! `INDICES`, with the amplitudes at `cosines()`. `DoubleDouble` is within 16 times the
+//! declared constants, in units of (κ′ + cond)·2⁻¹⁰⁴, of Arb on every output
 //! (tests/mie_reference.rs), so it stands in for the exact values.
 //!
 //! Each error is reported as C = error/((κ′ + cond)·2⁻⁵²), the constant its tolerance would
@@ -113,10 +114,17 @@ fn point(x: f64, m: Complex<f64>, mu: &[f64]) -> [f64; 10] {
     let dm = derivative_measures(x, m, mu, &d, &orders);
     let c = |output: MieOutput, err: f64, measure: Measure| {
         let tol = VALIDATED_DOMAIN.tolerance(output, x, m, measure.condition);
+        assert!(
+            measure.scale > 0.0 && tol.is_finite(),
+            "{output:?} at x = {x:e}, m = {m}: degenerate measure {measure:?}, tolerance {tol:e}"
+        );
         err / measure.scale / tol * ValidatedDomain::constant(output)
     };
     let mut out = [0.0f64; 10];
-    let mut put = |k: usize, value: f64| out[k] = out[k].max(value);
+    // f64::max would drop a NaN: count it as a failure instead.
+    let mut put = |k: usize, value: f64| {
+        out[k] = out[k].max(if value.is_nan() { f64::INFINITY } else { value });
+    };
     put(
         0,
         c(
@@ -211,7 +219,10 @@ fn to_json(xs: &[f64], results: &[[f64; 10]]) -> String {
         let rows = (0..xs.len())
             .map(|i| {
                 let row = (0..INDICES.len())
-                    .map(|j| format!("{:.3e}", results[i * INDICES.len() + j][o]))
+                    .map(|j| match results[i * INDICES.len() + j][o] {
+                        c if c.is_finite() => format!("{c:.3e}"),
+                        _ => "null".to_owned(),
+                    })
                     .collect();
                 format!("[{}]", list(row))
             })
@@ -225,6 +236,7 @@ fn to_json(xs: &[f64], results: &[[f64; 10]]) -> String {
 #[test]
 fn accuracy_map_is_within_the_declared_tolerances() {
     let xs = size_parameters();
+    assert_eq!(xs.len(), 104, "size parameters");
     let mu = cosines();
     let points: Vec<(f64, Complex<f64>)> = xs
         .iter()
@@ -253,7 +265,9 @@ fn accuracy_map_is_within_the_declared_tolerances() {
             .map(|w| w.join().expect("worker"))
             .collect()
     });
-    for (k, c) in done.into_iter().flatten() {
+    let done: Vec<(usize, [f64; 10])> = done.into_iter().flatten().collect();
+    assert_eq!(done.len(), points.len(), "every point computed");
+    for (k, c) in done {
         results[k] = c;
     }
     if let Ok(path) = std::env::var("SCATRS_ACCURACY_MAP") {

@@ -73,7 +73,8 @@ $$u_k = \frac{1}{c_k - u_{k+1}}, \qquad c_k = \frac{2k+1}{\rho}, \qquad
 D_n(\rho) = \frac{n+1}{\rho} - u_{n+1}(\rho).$$
 
 **Lemma 1 (enclosure).** If $\lvert c_j\rvert \ge 2$ for all $j > k$, then
-$\lvert u_j\rvert \le 1$ for all $j > k$, and $\lvert u_k\rvert \le 1/(\lvert c_k\rvert - 1)$.
+$\lvert u_j\rvert \le 1$ for all $j > k$, and if also $\lvert c_k\rvert > 1$, then
+$\lvert u_k\rvert \le 1/(\lvert c_k\rvert - 1)$.
 
 *Proof.* The map $T_j(u) = 1/(c_j - u)$ sends the closed unit disk into itself when
 $\lvert c_j\rvert \ge 2$, since $\lvert c_j - u\rvert \ge \lvert c_j\rvert - 1 \ge 1$. $\psi$ is
@@ -92,7 +93,9 @@ level before the first stored order. There is no continued fraction to converge,
 convergence test and no failure mode. An exactly zero denominator (at an exact zero of
 $\psi_{k-1}$, a pole of $D_{k-1}$) is replaced by a rounding-level value, as in Lentz's
 method. For real $m$ the real recurrence is used: twice as fast, and for $m = 1$ it reproduces
-$u_k(x)$ bit for bit, so $a_n = b_n = 0$ exactly.
+$u_k(x)$ bit for bit, so $N_a = N_b = 0$ (below) and $a_n = b_n = 0$ exactly at the orders
+computed from ratios, $n > \lfloor x\rfloor$ (all orders for $x < 1$). The orders
+$n \le \lfloor x\rfloor$ come from $\psi_n$ and $\chi_n$ and are only rounding-level.
 
 ## Riccati–Bessel functions: a hybrid scheme
 
@@ -201,23 +204,32 @@ of the exact value for the exact inputs, in the error measure of its output
 (`MieOutput`; for example $\lvert\text{error}\rvert/\max(\lvert S\rvert, S_\text{rms})$ for
 the amplitudes, with $S_\text{rms} = x\sqrt{Q_\text{sca}}/2$). The two condition terms are:
 
-- **cond**, the output's relative condition number with respect to $x$ and $m$:
-  $(x\lvert\partial y/\partial x\rvert + \lvert m\rvert\,\lvert\nabla_m y\rvert)/s$, with $s$
-  the denominator of the measure. Rounding $x$ and $m$ to `f64` already perturbs the output
-  by about $\mathrm{cond}\cdot2^{-53}$, so no algorithm can avoid it. It is large near the
-  sharp resonances of weakly absorbing spheres.
-- **κ′**, an a-priori factor: $\kappa(x, m) = (1 + \lvert m\rvert x)
-  \max(1, \lvert m\rvert/\lvert m - 1\rvert)$ for the values, times
-  $\max(1, \lvert m\rvert/\lvert m - 1\rvert)$ again for the derivatives. It covers what cond
-  does not: the cancellation in the series (the alternating sum of $Q_\text{back}$ can be $x$
-  times smaller than its terms) and the separate losses of each order near $m = 1$, where
-  $a_n, b_n \propto m - 1$.
+- **cond**, the output's relative condition number with respect to $x$ and $m$, with $s$ the
+  denominator of the measure: $(x\lvert\partial y/\partial x\rvert + \lvert m\rvert\,
+  \lvert dy/dm\rvert)/s$ for the holomorphic $a_n$, $b_n$, $S_1$, $S_2$ and their derivatives,
+  and componentwise, $(x\lvert\partial y/\partial x\rvert + \lvert\mathrm{Re}\,m\rvert\,
+  \lvert\partial y/\partial\,\mathrm{Re}\,m\rvert + \lvert\mathrm{Im}\,m\rvert\,
+  \lvert\partial y/\partial\,\mathrm{Im}\,m\rvert)/s$, for the real efficiencies, $g$ and
+  their Jacobian. Rounding $x$ and $m$ to `f64` (each part of $m$ to within $2^{-53}$ of
+  itself, so a real $m$ stays real) already perturbs the output by up to about
+  $\mathrm{cond}\cdot2^{-53}$, so no algorithm can avoid it. It is large near the sharp
+  resonances of weakly absorbing spheres. A normwise cond for the real outputs would be
+  vacuous: $\partial Q_\text{ext}/\partial\,\mathrm{Im}\,m$ is huge when the absorption is
+  small, but rounding cannot change $\mathrm{Im}\,m$ by more than $2^{-53}\lvert\mathrm{Im}\,
+  m\rvert$.
+- **κ′**, an a-priori factor for what cond does not cover: the cancellation in the series (the
+  alternating sum of $Q_\text{back}$ can be far smaller than its terms) and the separate losses
+  of each order near $m = 1$, where $a_n, b_n \propto m - 1$. It is $\kappa(x, m) =
+  (1 + \lvert m\rvert x)\max(1, \lvert m\rvert/\lvert m - 1\rvert)$ for the values;
+  $\kappa\max(1, \lvert m\rvert/\lvert m - 1\rvert)$ for the efficiency Jacobian, whose
+  derivatives of $g$ lose a second such factor near $m = 1$; and $1 + \lvert m\rvert x$ for the
+  derivatives of the coefficients and amplitudes, which do not vanish at $m = 1$.
 
 The constants C are measured, with a margin of at least 4 over the worst case found at every
 Arb reference point and on a dense double-double grid: 16 for the coefficients, efficiencies
-and $g$; 64 for $S_1$, $S_2$; 32 for their derivatives; 128 for the efficiency Jacobian; 256
-for the coefficient derivatives. See {doc}`/validation/accuracy` for the map, and for why a
-model with κ alone (or cond alone) fails.
+and $g$; 64 for $S_1$, $S_2$ and their derivatives; 256 for the efficiency Jacobian; 512 for
+the coefficient derivatives. See {doc}`/validation/accuracy` for the map, and for why
+neither term alone is enough.
 
 ## Reference values
 
@@ -228,7 +240,8 @@ arithmetic, at the exact double inputs, without Arb's Bessel functions (which lo
 their bits at orders in the thousands). It uses the recurrences above, made rigorous:
 
 - $u_k(\rho)$ is seeded by Lemma 1, with the ball $\lvert u\rvert \le 1$, at
-  $k_0 \ge 2\lvert\rho\rvert$; every step from there shrinks the uncertainty at least ninefold.
+  $k_0 \ge 2\lvert\rho\rvert$; every step with $k \ge 2\lvert\rho\rvert$ shrinks the
+  uncertainty at least ninefold.
 - Complex recurrences use **disk arithmetic** (`scatrs_reference/disk.py`): Arb's complex
   balls are rectangles, which a recurrence that multiplies by numbers of modulus near 1
   rotates and Arb must enclose in larger rectangles — 1.5 times larger per step in the Mie
@@ -245,8 +258,8 @@ $6\cdot10^4$) they are summed to $\lceil x + 18x^{1/3} + 32\rceil$ terms and lab
 
 ### Series tail bound
 
-**Proposition 3.** Let $N \ge \lvert m\rvert x$ and $N \ge 1.5x - \tfrac12$, and suppose
-$\lvert R_N\rvert \le 1$ (checked in the computation). With
+**Proposition 3.** Let $2N + 3 \ge 2\lvert m\rvert x$ and $N \ge 1.5x - \tfrac12$, and
+suppose $\lvert R_N\rvert \le 1$ (checked in the computation). With
 
 $$U_z = \frac{1}{(2N+3)/\lvert mx\rvert - 1}, \quad U_x = \frac{1}{(2N+3)/x - 1}, \quad
 \bar R = \frac{1}{(2N+1)/x - 1}, \quad q = U_x\bar R,$$
@@ -276,9 +289,12 @@ $\lvert N_b\rvert \le U_x + \lvert m\rvert U_z$ and $\lvert B_n - R_n\rvert \ge
 Each series tail is then a sum of a polynomial weight times a geometric sequence, bounded by
 its first term over $1 - q\rho$, where $\rho$ is the weight's ratio at $N + 1$ (the weights
 are products of factors $an + b$, whose ratios decrease). For $S_1$, $S_2$ the weights use
-$\lvert\pi_n\rvert \le n(n+1)/2$ and $\lvert\tau_n\rvert \le n^2(n+1)^2/4$: from
-$P_n' = \sum_{k} (2k+1)P_k$ over $k = n-1, n-3, \ldots$ and $\lvert P_k\rvert \le 1$,
-$\lvert P_n'\rvert \le n(n+1)/2$ and $\lvert P_n''\rvert \le (n-1)n^2(n+1)/4$, and
-$\tau_n = \mu\pi_n - (1 - \mu^2)P_n''$. The bound is added to each value's error; the
-generator's tests check that it dominates the next terms and that a longer sum lies inside
-the certified ball.
+$\lvert\pi_n\rvert \le n(n+1)/2$ and the crude $\lvert\tau_n\rvert \le n^2(n+1)^2/4$
+(polynomial factors cost little against $q^{\,n-N}$). From $P_n' = \sum_k (2k+1)P_k$ over
+$k = n-1, n-3, \ldots$, whose weights sum to $n(n+1)/2$, and $\lvert P_k\rvert \le 1$:
+$\lvert P_n'\rvert \le n(n+1)/2$. The same sum for $P_n'' = \sum_k (2k+1)P_k'$, with
+$\lvert P_k'\rvert \le (n-1)n/2$ for $k \le n - 1$, gives $\lvert P_n''\rvert \le
+(n-1)n^2(n+1)/4$; and $\tau_n = \mu\pi_n - (1 - \mu^2)P_n''$, so
+$\lvert\tau_n\rvert \le n(n+1)/2 + (n-1)n^2(n+1)/4 \le n^2(n+1)^2/4$. The bound is added to
+each value's error; the generator's tests check that it dominates the next terms and that a
+longer sum lies inside the certified ball.

@@ -49,6 +49,9 @@ HG_EXAMPLE = "docs/examples/henyey-greenstein.md"
 REFERENCE_SUITE = "docs/validation/reference-suite.md"
 DOMAIN_RS = "scatrs/src/mie/domain.rs"
 MIE_THEORY = "docs/theory/mie.md"
+MIE_RS = "scatrs/src/mie/mod.rs"
+MIE_PY = "python/scatrs/mie.py"
+MIE_BINDINGS_RS = "scatrs-py/src/mie.rs"
 INSTALLATION = "docs/installation.md"
 CONTRIBUTING = "CONTRIBUTING.md"
 
@@ -69,6 +72,12 @@ CONTRACTS = [
     ("Dual<f64> derivative accuracy", "5.1u", [DUAL_RS, SCALARS]),
     # The executed examples check against the same contract.
     ("Wigner f64 bound in the examples", "16(l+1)eps", [WIGNER_EXAMPLE, HG_EXAMPLE]),
+    ("Mie f64 truncation", "x+6x^(1/3)+3", [MIE_RS, MIE_PY, MIE_THEORY, LIMITATIONS]),
+    ("Mie double-double truncation", "x+12x^(1/3)+6", [MIE_RS, MIE_THEORY]),
+    ("Mie order cap", "2^20", [MIE_RS, MIE_PY, LIMITATIONS]),
+    ("Mie output cap", "2^27", [MIE_BINDINGS_RS, MIE_PY, LIMITATIONS]),
+    ("Mie tolerance", "+cond)2^-52", [DOMAIN_RS, MIE_THEORY]),
+    ("Mie validated x range", "10^-6≤x≤2", [MIE_THEORY, LIMITATIONS]),
     ("MSRV", "1.85", [INSTALLATION, CONTRIBUTING]),
     ("Python floor", "3.11", [INSTALLATION, CONTRIBUTING]),
     ("numpy floor", "1.26", [INSTALLATION, CONTRIBUTING]),
@@ -86,6 +95,11 @@ def test_limits_in_code_match_the_documented_values() -> None:
     assert re.search(r"pub const MAX_GAUSS_LEGENDRE_POINTS: usize = 1 << 17;", gl)
     bindings = (ROOT / BINDINGS_RS).read_text(encoding="utf-8")
     assert re.search(r"pub const MAX_WIGNER_D_VALUES: usize = 1 << 28;", bindings)
+    mie = (ROOT / MIE_RS).read_text(encoding="utf-8")
+    assert re.search(r"pub const MAX_MIE_ORDER: usize = 1 << 20;", mie)
+    assert re.search(r"terms\(x, 6\.0, 3\.0\)", mie) and re.search(r"terms\(x, 12\.0, 6\.0\)", mie)
+    mie_bindings = (ROOT / MIE_BINDINGS_RS).read_text(encoding="utf-8")
+    assert re.search(r"pub const MAX_MIE_VALUES: usize = 1 << 27;", mie_bindings)
 
 
 def test_version_floors_match_the_build_files() -> None:

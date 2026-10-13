@@ -169,3 +169,35 @@ These items came out of the Phase 0 reviews and were deliberately deferred. Each
 - **Packaging nits:**
   - declare `packaging` in the `test` extra;
   - the `xarray` extra is unused until the high-level API arrives.
+
+## Phase 1a (homogeneous-sphere Mie): decisions and deferrals
+
+Resolved from the lists above: the complex reciprocal (Smith; complex division, `csqrt` and
+`ln` near 1 wait for a consumer), Riccati–Bessel and log-derivative functions (inside
+`scatrs::mie`), the `allow_unvalidated` mechanism with the first accuracy map, the Mie Arb
+generator with a proven tail bound, the data-budget test, rustdoc in CI, the four doctests,
+the `dd/traits.rs` link, the docs-consistency extensions and `packaging` in the `test` extra.
+
+Decisions (spec `docs/specs/2026-10-13-phase-1-mie-design.md`, section 12):
+- Truncation ⌈x + 6x^(1/3) + 3⌉ (f64) and ⌈x + 12x^(1/3) + 6⌉ (DoubleDouble), measured.
+- Dₙ(mx) by a contracting downward recurrence: no Lentz continued fraction, no `NotConverged`.
+- Q_ext = Q_sca + Q_abs, with Q_abs from the per-term identity.
+- Tolerance C·(κ′ + cond)·2⁻⁵², enforced by `mie_reference.rs` and `mie_accuracy_map.rs`.
+- The reference generator avoids Arb's Bessel functions and uses disk arithmetic.
+
+Phase 1b must include (besides spec section 9):
+- **Performance.** The Jacobian costs 1.8× the values at large x: profile the per-order
+  derivative work (three complex reciprocals per order in the ratio region). Measure Mie on
+  x86_64 with and without FMA (the f64 kernel uses no `mul_add`, but `DoubleDouble` maps do).
+- **Derivative series tail bound.** Certify the series of derivatives, for example with
+  Cauchy's estimate in m (a disk of m in the tail bound of Proposition 3).
+- **Larger certified cases.** Series records with |m|x > 6·10⁴ are high-precision (9 of 306);
+  a faster generator (fewer Python-level operations per order) would certify them.
+- **Accuracy-map cost.** The map takes about 200 CPU-seconds in the test profile; if CI time
+  matters, sample derivative conditions on every second point.
+- **∂Q_abs/∂x and ∂Q_abs/∂(Re m)** of weakly absorbing spheres are accurate only relative to
+  Q_ext (relative error up to 4·10⁻⁹ at k = 10⁻⁸ near a resonance): investigate a formulation
+  accurate relative to Q_abs.
+- **First real CI run.** The Mie accuracy map and reference tests run on Windows for the first
+  time there; libm sin/cos differences change last digits only, but check the printed worst
+  constants.

@@ -1,6 +1,6 @@
 # Conventions
 
-## In phase 0
+## General
 
 **Wigner d-functions.** scatrs uses the convention of Mishchenko, Travis & Lacis (2002),
 *Scattering, Absorption, and Emission of Light by Small Particles*, Appendix B. It is the
@@ -29,8 +29,9 @@ kind of failure:
 | `NotConverged { achieved, requested }` | {class}`~scatrs.errors.NotConvergedError` (also `ArithmeticError`) | an iteration missed the accuracy it promises |
 | `OutsideValidatedDomain` | {class}`~scatrs.errors.OutsideValidatedDomainError` (also `ValueError`) | valid inputs outside the domain where accuracy has been validated |
 
-All three derive from {class}`~scatrs.errors.ScatrsError`. No phase 0 function returns
-`OutsideValidatedDomain` yet. Python raises the standard exceptions where Python itself would:
+All three derive from {class}`~scatrs.errors.ScatrsError`. The Mie functions return
+`OutsideValidatedDomain` for valid inputs outside their validated domain, unless the caller
+allows it (`allow_unvalidated`). Python raises the standard exceptions where Python itself would:
 `TypeError` for a wrong argument type, for example. See {mod}`scatrs.errors`.
 
 Kernels such as `gauss_legendre` and `wigner_d` check their inputs and return an error rather
@@ -56,7 +57,7 @@ exception (see below). The conventions that affect results are:
 {doc}`theory/scalar-types` gives the reasons and the main rules; the rustdoc of `Dual` lists
 them all.
 
-**Determinism.** Each phase 0 kernel runs on one thread, and a given build gives the same bits
+**Determinism.** Each kernel runs on one thread, and a given build gives the same bits
 for the same inputs every time. Gauss–Legendre rules are designed to be bitwise identical
 across platforms too, because they use no platform maths library. Some results do use the
 platform's library and can differ between platforms in the last bits, within their accuracy
@@ -67,34 +68,28 @@ bounds:
   those computed from them, such as `powf`, `asin` and `acos`;
 - `Dual<f64, N>` `sin` and `cos` on Apple targets.
 
-## Planned for the scattering kernels
+## Scattering
 
-The design specification fixes these conventions for the scattering kernels. No phase 0 code
-uses them yet.
+These conventions apply to the Mie functions now, and to the layered-sphere and T-matrix
+functions to come.
 
 - **Refractive index.** $m = n + ik$, where $\operatorname{Im} m \ge 0$ means absorbing (the
-  Bohren–Huffman and Mishchenko convention). Negative $\operatorname{Im} m$ is rejected with
-  `InvalidInput`; it is never silently flipped.
+  Bohren–Huffman and Mishchenko convention, time dependence $e^{-i\omega t}$). Negative
+  $\operatorname{Im} m$ is rejected with `InvalidInput`; it is never silently flipped. Codes
+  using $e^{+i\omega t}$, such as Wiscombe's MIEV0, report the complex conjugates of the
+  coefficients and amplitudes.
+- **Size parameter.** $x = 2\pi r/\lambda$, with $\lambda$ the wavelength in the medium.
+  Derivatives are with respect to $x$; multiply by $2\pi/\lambda$ for the radius.
 - **Lengths.** Radii and wavelength may be in any unit, provided both use the same one. Cross
-  sections are returned in that unit squared.
-- **Phase-matrix normalization.** $\tfrac12 \int_{-1}^{1} F_{11}(\mu)\,d\mu = 1$.
-- **Greek coefficients.** $F_{11}(\Theta) = \sum_l \alpha_{1,l} P_l(\cos\Theta)$, with
-  $\alpha_{1,0} = 1$ and $\alpha_{1,1} = 3g$. The other elements follow Hovenier, van der Mee
-  & Domke (2004):
-  - $\alpha_2 \pm \alpha_3$ expand against $d^l_{2,\pm2}$;
-  - $\alpha_4$ expands against $P_l$;
-  - $\beta_1$ and $\beta_2$ expand against $d^l_{0,2}$.
-- **Random orientation.** The phase matrix has six independent elements: $F_{11}$, $F_{12}$,
-  $F_{22}$, $F_{33}$, $F_{34}$ and $F_{44}$. This assumes the ensemble is macroscopically
-  isotropic and mirror-symmetric.
-- **Fixed orientation.** Euler angles $(\alpha, \beta, \gamma)$ use the z-y-z convention.
-  Incidence and scattering directions $(\theta, \varphi)$ are in the laboratory frame. Both
-  follow Mishchenko.
-- **Shapes.**
-  - The spheroid aspect ratio $\varepsilon$ is the equatorial semi-axis divided by the polar
-    one: $\varepsilon > 1$ is oblate.
-  - The cylinder aspect ratio is the diameter divided by the length.
-  - A Chebyshev particle is $r(\theta) = r_0(1 + \varepsilon\cos n\theta)$, with integer
-    $n \ge 2$ and $\lvert\varepsilon\rvert < 1$.
-- **Size of non-spherical particles.** The radius of the sphere with the same volume, or the
-  same surface area, as the user selects.
+  sections are returned in that unit squared (the efficiencies are cross sections divided by
+  $\pi r^2$).
+- **Coefficients.** $a_n$, $b_n$ for $n = 1, \ldots, N$ (Bohren & Huffman 1983, Eq. 4.53),
+  stored at index $n - 1$.
+- **Amplitudes.** $S_1(\mu)$ and $S_2(\mu)$ at $\mu = \cos\Theta$ (Bohren & Huffman 1983,
+  Eq. 4.74).
+- **Phase-matrix normalization.** $\tfrac12 \int_{-1}^{1} F_{11}(\mu)\,d\mu = 1$, with
+  $F_{11} = (\lvert S_1\rvert^2 + \lvert S_2\rvert^2)/(x^2 Q_\text{sca}/2)$.
+- **Derivatives with respect to m.** The coefficients and amplitudes are holomorphic in $m$:
+  their derivative $d/dm$ equals $\partial/\partial(\operatorname{Re} m)$, and
+  $\partial/\partial(\operatorname{Im} m) = i\,d/dm$. Real outputs give
+  $\partial/\partial(\operatorname{Re} m)$ and $\partial/\partial(\operatorname{Im} m)$.

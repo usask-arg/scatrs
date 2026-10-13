@@ -46,6 +46,17 @@ there. Without the reference data, the unit tests that read it skip their checks
 message; `SCATRS_REQUIRE_REFERENCE_DATA=1`, which CI sets everywhere else, makes a missing file
 an error.
 
+`scatrs/tests/mie_accuracy_map.rs`, the dense accuracy map of the Mie outputs, takes about
+20 s with all cores (it is part of `cargo test`). After a change to the Mie kernel or the
+declared tolerances, regenerate the map the documentation plots, and commit it:
+
+```bash
+SCATRS_ACCURACY_MAP=$PWD/docs/validation/data/mie-accuracy-map.json \
+    cargo test -p scatrs --release --test mie_accuracy_map -- --nocapture
+```
+
+Wall-clock benchmarks of the Mie kernel: `cargo bench -p scatrs --bench mie`.
+
 The slow `#[ignore]` tests take minutes, so CI runs them weekly rather than on every change:
 
 ```bash
@@ -88,6 +99,10 @@ pinned). Regenerate them with
 `uv run --directory reference python -m scatrs_reference generate [--only NAME]`
 and commit the data together with the manifest. Never edit the data by hand. Tolerances in
 tests are never loosened without a written justification in the test.
+
+The Mie generators (`mie`, `mie_derivatives`) run their cases in parallel, one process per
+CPU; `SCATRS_REFERENCE_WORKERS=1` runs them in one process. The records do not depend on the
+number of processes.
 
 Regeneration gives the same bytes on every platform, because generators draw their inputs
 without the platform's maths library, whose results differ between platforms. Use

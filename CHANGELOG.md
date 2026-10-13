@@ -12,3 +12,9 @@ All notable changes are documented here. The format follows
 - Arb reference-value generator and certified reference data.
 - Python package `scatrs` with `special.gauss_legendre` and `special.wigner_d`.
 - Documentation site, CI on Linux/macOS/Windows, wheel release workflow.
+- Mie scattering by homogeneous spheres (`scatrs::mie`, Python `scatrs.mie`): coefficients,
+  efficiencies, asymmetry parameter and amplitudes, with closed-form derivatives with respect
+  to the size parameter and the refractive index; absorption without cancellation; a declared
+  accuracy over a validated domain, enforced in CI against Arb references and a dense
+  double-double accuracy map.
+- Arb reference data for Mie scattering, certified with a proven series-tail bound.

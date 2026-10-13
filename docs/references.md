@@ -1,5 +1,25 @@
 # References
 
+**Mie scattering**
+
+- C. F. Bohren and D. R. Huffman, *Absorption and Scattering of Light by Small Particles*,
+  Wiley (1983), Chapter 4. The conventions, the series and the recurrences of $\pi_n$ and
+  $\tau_n$.
+- W. J. Wiscombe, *Mie Scattering Calculations: Advances in Technique and Fast,
+  Vector-Speed Computer Codes*, NCAR Technical Note NCAR/TN-140+STR (1979, revised 1996), and
+  "Improved Mie scattering algorithms", *Applied Optics* 19 (1980), 1505–1509. The MIEV0
+  baseline, its truncation rule and its published test cases.
+- W. Gautschi, "Computational aspects of three-term recurrence relations", *SIAM Review* 9
+  (1967), 24–82. Minimal solutions and Pincherle's theorem, behind the enclosure of the
+  logarithmic derivatives.
+- W. J. Lentz, "Generating Bessel functions in Mie scattering calculations using continued
+  fractions", *Applied Optics* 15 (1976), 668–671. The continued fraction for $D_n$.
+- R. L. Smith, "Algorithm 116: Complex division", *Communications of the ACM* 5 (1962), 435.
+  The complex reciprocal.
+- I. Gargantini and P. Henrici, "Circular arithmetic and the determination of polynomial
+  zeros", *Numerische Mathematik* 18 (1972), 305–320. Disk arithmetic, used by the reference
+  generator.
+
 **Quadrature**
 
 - F. G. Tricomi, "Sugli zeri dei polinomi sferici ed ultrasferici", *Annali di Matematica Pura

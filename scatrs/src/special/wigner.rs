@@ -6,6 +6,13 @@
 //! any m, n ([`GeneralDifference`]). All three go through [`run`], which carries a separate
 //! binary exponent while the values are below 2⁻⁹⁰⁰, so that an underflowing start value
 //! ([`start_value`]) does not flush later, normal values to zero.
+//!
+//! Method selection: a difference form wherever |x| ≥ 0.9, and for m = ±n on the side of the
+//! pole where |d| → 1 (x ≥ 0 for m = n, x ≤ 0 for m = −n); the three-term form elsewhere, where
+//! its results are bitwise those of the implementation plan's code. The plan used the
+//! three-term form everywhere; the difference forms are a change of method, approved by the
+//! controller after the Task 10 review, because the three-term form loses accuracy like l² next
+//! to the poles.
 
 use crate::scalar::Real;
 use crate::{Error, Result};
@@ -78,9 +85,12 @@ const GENERAL_DIFFERENCE_FROM: f64 = 0.9;
 /// pairs at small lθ) found at most 0.74(l + 1)·2⁻⁵² and 0.0034(l + 1)·2⁻⁹⁷. All integer
 /// coefficients are exact in double-double for degrees and orders below about 9·10⁷ (2^26.5).
 ///
-/// Values below the normal range are not flushed to zero. Where the start value underflows,
-/// the values that are normal `f64`s have the bound above relative to their size (measured:
-/// 0.6(l + 1)·2⁻⁵²), and smaller ones are rounded once to a subnormal or zero.
+/// While |d^l| grows with l, before its first turning point, the error is also within the bound
+/// relative to |d^l| (measured: up to 1.05(l + 1)·2⁻⁵², at the start value of (1313, 1313) at
+/// x = 0.2087); in the oscillatory region beyond, near zeros of d^l, only the absolute bound
+/// holds. Values below the normal range are not flushed to zero: where the start value
+/// underflows, the recurrence runs on scaled values, so the values that are normal keep that
+/// relative accuracy, and smaller ones are rounded once to a subnormal or zero.
 /// (`DoubleDouble` has full precision only above 2⁻⁹⁶⁹.)
 ///
 /// # Derivatives
@@ -99,25 +109,30 @@ const GENERAL_DIFFERENCE_FROM: f64 = 0.9;
 ///
 /// # Cost
 ///
-/// O(max(|m|, |n|) + `out.len()`): about max(|m|, |n|) square roots and divisions for the start
-/// value, then per degree one division and two square roots (three-term form), one division
+/// O(max(|m|, |n|) + `out.len()`): |m − n| square roots and divisions and
+/// max(|m − n|, |m + n|) ≤ 2·max(|m|, |n|) multiplications for the start value, then per degree one division and two square roots (three-term form), one division
 /// and no square root (m = ±n difference form), or two divisions and one square root (general
 /// difference form). Measured on an Apple M4 Pro over the nodes of the 64-point Gauss–Legendre
-/// rule, up to l = 2000, per degree: in `f64` 2.7 ns for (0, 0), 3.2 ns for (2, ±2) and 3.8 ns
+/// rule, up to l = 2000, per degree: in `f64` 2.6 ns for (0, 0), 3.1 ns for (2, ±2) and 3.7 ns
 /// for (0, 2) and other m ≠ ±n; in `DoubleDouble` 30, 38 and 45 ns.
 ///
 /// # Errors
 ///
 /// [`Error::InvalidInput`] if `x` (for a `Dual`, its value) is NaN or outside [−1, 1], even when
-/// `out` is empty. Any `m` and `n` are accepted, `i32::MIN` included.
+/// `out` is empty; `out` is then left unchanged. Any `m` and `n` are accepted, `i32::MIN`
+/// included.
 pub fn wigner_d<T: Real>(m: i32, n: i32, x: T, out: &mut [T]) -> Result<()> {
     check_x(x)?;
-    out.fill(T::zero());
     let (m, n) = (i64::from(m), i64::from(n));
     let l_min = match usize::try_from(m.unsigned_abs().max(n.unsigned_abs())) {
         Ok(l_min) if l_min < out.len() => l_min,
-        _ => return Ok(()),
+        _ => {
+            out.fill(T::zero());
+            return Ok(());
+        }
     };
+    // Every entry from l_min on is written by the recurrence.
+    out[..l_min].fill(T::zero());
     // d^l_{mn}(x) = (−1)^{l+m} d^l_{m,−n}(−x) maps the pole x = −1 onto x = 1.
     let reflect = x < T::zero() && (m == -n || -x >= T::from_f64(GENERAL_DIFFERENCE_FROM));
     let (n, x) = if reflect { (-n, -x) } else { (n, x) };
@@ -158,6 +173,8 @@ pub fn wigner_d_vec<T: Real>(m: i32, n: i32, l_max: usize, x: T) -> Result<Vec<T
     let len = l_max.checked_add(1).ok_or_else(too_large)?;
     let mut out = Vec::new();
     out.try_reserve_exact(len).map_err(|_| too_large())?;
+    // Initialised once (safe code cannot hand uninitialised memory to `wigner_d`), which then
+    // writes each entry once more.
     out.resize(len, T::zero());
     wigner_d(m, n, x, &mut out)?;
     Ok(out)

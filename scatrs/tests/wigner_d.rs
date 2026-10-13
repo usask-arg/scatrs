@@ -389,6 +389,57 @@ fn extreme_orders() {
     }
 }
 
+/// `wigner_d` writes every entry of `out`, whatever it held: a buffer filled with NaN and one
+/// filled with zeros give bitwise the same result, on every path (three-term form, both
+/// difference forms, reflection, scaled start values, the poles, l = 0 and lengths at or below
+/// max(|m|, |n|)), equal to `wigner_d_vec`'s. An invalid x leaves `out` unchanged.
+#[test]
+fn reused_buffers_are_fully_overwritten() {
+    let cases = [
+        (0, 0, 0.3),
+        (0, 0, -0.95),
+        (2, 2, 0.5),
+        (2, 2, -0.5),
+        (2, 2, -0.95),
+        (2, -2, 0.5),
+        (2, -2, -0.5),
+        (0, 2, 0.3),
+        (0, 2, 0.95),
+        (0, 2, -0.95),
+        (3, -7, 1.0),
+        (3, -7, -1.0),
+        (5, 5, 1.0),
+        (-4, 4, -1.0),
+        (0, 150, 0.99998843),
+        (1100, 1100, 0.0),
+        (0, 1200, 0.85),
+        (1500, -1500, -0.2),
+    ];
+    for (m, n, x) in cases {
+        for len in [0, 1, 2, 3, 7, 150, 151, 1101, 1300, 1600] {
+            let mut stale = vec![f64::NAN; len];
+            let mut zeroed = vec![0.0; len];
+            wigner_d(m, n, x, &mut stale).unwrap();
+            wigner_d(m, n, x, &mut zeroed).unwrap();
+            let bits = |v: &[f64]| v.iter().map(|x| x.to_bits()).collect::<Vec<_>>();
+            assert_eq!(bits(&stale), bits(&zeroed), "m={m} n={n} x={x} len={len}");
+            if len > 0 {
+                let fresh = wigner_d_vec(m, n, len - 1, x).unwrap();
+                assert_eq!(bits(&stale), bits(&fresh), "m={m} n={n} x={x} len={len}");
+            }
+            let mut stale_dd = vec![Dd::new(f64::NAN, 0.0); len];
+            wigner_d(m, n, Dd::from_f64(x), &mut stale_dd).unwrap();
+            assert!(
+                stale_dd.iter().all(|v| v.hi().is_finite()),
+                "m={m} n={n} x={x} len={len}"
+            );
+        }
+    }
+    let mut out = [7.0; 5];
+    assert!(wigner_d(0, 0, 2.0, &mut out).is_err());
+    assert_eq!(out, [7.0; 5]);
+}
+
 /// `wigner_d_vec` reports a length it cannot allocate instead of panicking or aborting.
 #[test]
 fn enormous_l_max_is_an_error() {

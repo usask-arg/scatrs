@@ -104,5 +104,12 @@ These items came out of the Phase 0 reviews and were deliberately deferred. Each
 - **Python bindings should bound `l_max`.** On systems that overcommit memory, a huge `l_max` can get the process killed instead of returning an error.
 - **The manifest `precision_bits` understates generator precision** for `wigner_d`: 800 is the starting value, and it adapts up to 2¹⁶. Consider recording per-record precision.
 
+## Python binding patterns (from the Task 11 review; apply in Phase 1)
+- **Never use `PyReadonlyArray`/`PyReadwriteArray` as `#[pyfunction]` parameter types.** Their extractor unwraps the borrow check and panics, raising `PanicException`, a `BaseException`. Take `Bound<PyArray…>` and call `try_readonly()`/`try_readwrite()`, mapping failure to `BufferError`. This becomes essential once kernels take `out=` arguments, because `f(x, out=x)` would otherwise panic.
+- **Python converts types and shapes; Rust validates values.** Shared helpers live in `python/scatrs/_args.py`.
+- **Broadcasting in multi-input kernels.** Don't copy the `np.require(C)` + `as_slice` pattern, because it materialises broadcast copies. Use `np.broadcast_shapes` plus `PyReadonlyArrayDyn::as_array()`, which handles strides including zero strides. rust-numpy's safe `as_array()` doesn't check alignment (only `as_slice` does), so the extension must check `is_aligned()` itself.
+- **Thread safety.** With the GIL released, another thread can mutate the input arrays. Document this rather than copying: copying doesn't close the hole, and the spec requires zero-copy. Pass a fresh view to the extension, because `resize(refcheck=False)` on the borrowed object can abort through rust-numpy's borrow tracking.
+- **Per-call overhead,** M4 Pro, from the Task 11 review: the extension costs about 170 ns per call and the wrapper about 1.2 µs, dominated by `np.require`, the integer checks and the reshapes.
+
 ## Platform notes
 - On aarch64, `f64::max`/`f64::min` return NaN for a signaling NaN, contrary to Rust's documentation. `DoubleDouble` follows the documented rule. No DD operation produces a signaling NaN.

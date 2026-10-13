@@ -23,10 +23,11 @@ What exists today:
   a rigorous error bound. The tests check the accuracy of `DoubleDouble` and of the special
   functions against them. See {doc}`validation/reference-suite`.
 
-Every accuracy figure in these pages says what backs it: a proof or error analysis, a bound
-that the tests enforce (against the reference values or other high-precision results), or a
-measurement. {doc}`limitations` lists what is known
-not to work yet.
+Every accuracy figure in these pages says what backs it. In short, the double-double basic
+operations have proved bounds; the bounds of the double-double functions, Gauss–Legendre and
+the Wigner d-functions are tested against Arb (and the Wigner ones are measured, not derived);
+other figures are measurements. Python exposes only `f64` results in phase 0. See
+{ref}`what-backs-the-numbers` and the rest of {doc}`limitations`.
 
 ```{toctree}
 :maxdepth: 2
@@ -36,6 +37,7 @@ installation
 conventions
 examples/quadrature
 examples/wigner-d
+examples/henyey-greenstein
 ```
 
 ```{toctree}
@@ -59,4 +61,5 @@ limitations
 :caption: Reference
 
 api
+references
 ```

@@ -2009,7 +2009,7 @@ requires-dist = [
     { name = "numpy", specifier = ">=1.26" },
     { name = "numpydoc", marker = "extra == 'docs'", specifier = ">=1.8" },
     { name = "pytest", marker = "extra == 'test'", specifier = ">=8" },
-    { name = "sphinx", marker = "extra == 'docs'", specifier = ">=8" },
+    { name = "sphinx", marker = "extra == 'docs'", specifier = ">=9" },
     { name = "xarray", marker = "extra == 'xarray'", specifier = ">=2024.7" },
 ]
 provides-extras = ["docs", "test", "xarray"]

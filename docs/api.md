@@ -1,8 +1,9 @@
 # API reference
 
-This is the Python API. The Rust API reference will be on [docs.rs](https://docs.rs/scatrs)
-once the crate is published; see {doc}`installation` to build it locally. Both APIs follow the
-{doc}`conventions`.
+This is the Python API. In phase 0 it returns `float64` results only: double-double values
+and derivatives are available from Rust. The Rust API reference will be on
+[docs.rs](https://docs.rs/scatrs) once the crate is published; see {doc}`installation` to
+build it locally. Both APIs follow the {doc}`conventions`.
 
 ## `scatrs`
 
@@ -10,7 +11,7 @@ once the crate is published; see {doc}`installation` to build it locally. Both A
 .. automodule:: scatrs
    :no-members:
 
-.. py:data:: scatrs.__version__
+.. py:data:: __version__
    :type: str
 
    The package version, which is the version of the Rust workspace.

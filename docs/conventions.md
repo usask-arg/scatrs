@@ -3,8 +3,8 @@
 ## In phase 0
 
 **Wigner d-functions.** scatrs uses the convention of Mishchenko, Travis & Lacis (2002),
-*Scattering, Absorption, and Emission of Light by Small Particles*, Appendix B. It equals the
-common $d^j_{m'm}(\beta)$ with $m' = m$. For example
+*Scattering, Absorption, and Emission of Light by Small Particles*, Appendix B. It is the
+common $d^j_{m'm}(\beta)$ with $(m', m)$ renamed $(m, n)$. For example
 
 $$d^1_{01}(\theta) = \frac{\sin\theta}{\sqrt2}, \qquad
 d^1_{10}(\theta) = -\frac{\sin\theta}{\sqrt2}, \qquad
@@ -58,8 +58,9 @@ them all.
 
 **Determinism.** Each phase 0 kernel runs on one thread, and a given build gives the same bits
 for the same inputs every time. Gauss–Legendre rules are designed to be bitwise identical
-across platforms too, because they use no platform maths library. Some results do use the platform's library and
-can differ between platforms in the last bits, within their accuracy bounds:
+across platforms too, because they use no platform maths library. Some results do use the
+platform's library and can differ between platforms in the last bits, within their accuracy
+bounds:
 
 - `f64` elementary functions such as `exp` and `sin`, including those inside `Dual<f64, N>`;
 - the double-double functions that start from an `f64` result (`ln`, `cbrt` and `atan2`), and

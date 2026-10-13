@@ -8,6 +8,8 @@ running the tests does not need Arb.
 
 ## Record format
 
+<!-- synced with reference/scatrs_reference/records.py docstrings -->
+
 Each line of a data file is one record, a JSON object with these keys:
 
 | Key | Contents |
@@ -55,6 +57,8 @@ The `high-precision` label is for later phases: for example, values of a scatter
 whose truncation does not yet have a rigorous tail bound.
 
 ## Files
+
+<!-- synced with reference/data/manifest.json and the generator docstrings -->
 
 `reference/data/manifest.json` lists every data file. Each entry gives:
 

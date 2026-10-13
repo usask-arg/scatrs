@@ -9,21 +9,18 @@ therefore gives:
 - extended-precision derivatives, with `Dual<DoubleDouble, N>`;
 - second derivatives, with nested duals `Dual<Dual<T, M>, N>`.
 
-For example:
+The example `scatrs/examples/scalar_types.rs` (run it with
+`cargo run --example scalar_types`) evaluates one generic kernel, $\int_{-1}^{1} e^{ax}\,dx$
+by Gauss–Legendre quadrature, with each type:
 
-```rust
-use scatrs::scalar::{DoubleDouble, Dual};
-use scatrs::special::{gauss_legendre, wigner_d_vec};
-
-fn main() -> scatrs::Result<()> {
-    let rule = gauss_legendre::<f64>(64)?; // f64 nodes and weights
-    let rule_dd = gauss_legendre::<DoubleDouble>(64)?; // the same rule to about 32 digits
-    let [x] = Dual::<f64, 1>::variables([0.3]); // x = 0.3, seeded with dx/dx = 1
-    let d = wigner_d_vec(2, -2, 100, x)?; // d^l_{2,-2}(x) and its derivative in x
-    println!("{} {:?} {} {}", rule.nodes[0], rule_dd.nodes[0], d[50].re(), d[50].eps()[0]);
-    Ok(())
-}
+```{literalinclude} ../../scatrs/examples/scalar_types.rs
+:language: rust
 ```
+
+`Dual::variables` seeds independent variables: each gets derivative 1 in its own direction. For
+a second derivative, nest two duals and seed both levels in the same direction. The value then
+sits at `.re().re()`, the first derivative at both `.re().eps()[0]` and `.eps()[0].re()`, and
+the second derivative at `.eps()[0].eps()[0]`.
 
 This page summarises the contracts that the rustdoc states for each type. Until the crate is
 published on [docs.rs](https://docs.rs/scatrs) (it is not yet), read the full rustdoc with
@@ -33,9 +30,12 @@ Throughout, $u = 2^{-53}$ (the unit roundoff of `f64`) and $u^2 = 2^{-106}$.
 
 ## The `Real` trait
 
-`Real` requires `num_traits::Float` and `FloatConst`, the compound assignment operators, and
-arithmetic with an `f64` on the right (`x * 2.0`, not `2.0 * x`). Because it requires `Float`,
-`num_complex::Complex<T>` works for every `T: Real`. It adds three methods:
+<!-- synced with scatrs/src/scalar/mod.rs rustdoc -->
+
+`Real` requires `num_traits::Float` and `FloatConst`, `Debug + Send + Sync + 'static`, the
+compound assignment operators, and arithmetic with an `f64` on the right (`x * 2.0`, not
+`2.0 * x`). Because it requires `Float`, `num_complex::Complex<T>` works for every `T: Real`.
+It adds three methods:
 
 | Method | Meaning |
 |---|---|
@@ -64,6 +64,26 @@ arithmetic with an `f64` on the right (`x * 2.0`, not `2.0 * x`). Because it req
   wherever `sin_cos` does, which is always the case for `DoubleDouble`. For `f64` on Apple
   targets they can differ by an ulp; see [below](dual-sin-cos).
 
+### Writing a generic kernel
+
+A checklist, following from the notes above and the rules below:
+
+- Write constants as `T::from_f64(0.5)`, or with `FloatConst` (`T::PI()`), and combine `T`
+  with `f64` with the `f64` on the right. A constant that needs more than a double takes
+  `T::from_f64_pair(hi, lo)`.
+- Branch on comparisons of values (`x < T::zero()`), not on `is_zero` or `is_one`, unless the
+  derivatives should decide.
+- Do not round-trip through `f64` (`approx_f64`, `to_f64`, `NumCast`) inside the computation.
+  That drops the double-double precision and the derivatives. Use `approx_f64` only for
+  decisions, such as choosing a branch or a number of terms.
+- Do not use `mul_add` as an error-free fused multiply-add.
+- Write `abs` or `hypot`, not the square root of a square (see [strong zeros](strong-zeros)).
+- Check inputs and return `Error::InvalidInput` rather than relying on NaN. Angles, for
+  example, must stay within $\lvert x\rvert \le 2^{50}$ for the double-double trigonometric
+  functions.
+- Test with `f64`, `DoubleDouble` and `Dual`. The scatrs tests compare `Dual` derivatives with
+  double-double finite differences, and `DoubleDouble` values with the Arb reference.
+
 (double-double)=
 ## `DoubleDouble`
 
@@ -85,6 +105,8 @@ A `DoubleDouble` is the unevaluated sum `hi + lo` of two `f64`s, normalised so t
   functions, are the certified splits stored in the reference file `constants.jsonl`.
 
 ### Accuracy
+
+<!-- synced with scatrs/src/scalar/dd/mod.rs, elementary.rs, trig.rs and parse.rs rustdoc -->
 
 These are the bounds stated in the rustdoc of each operation. They hold for results of
 magnitude at least $2^{-969}$. Unless stated otherwise they are relative, and $2^{-100}$ is
@@ -123,8 +145,14 @@ are:
 - $2.0u^2$ for `+`, $1.4u^2$ for `-`, $3.5u^2$ for `*` and $4.3u^2$ for `/`;
 - $1.0u^2$ for `+ f64` and `* f64`, and $2.0u^2$ for `/ f64`.
 
-For each function tested against Arb, the worst measured error was at most 0.11 of its bound
-when these pages were written.
+For the functions tested against Arb, the output of the accuracy tests
+(`cargo test -p scatrs --release -- --nocapture`, in `tests/dd_elementary.rs` and
+`tests/dd_trig.rs`) gave these worst errors when these pages were written:
+
+- at most 0.11 of the bounds in the table, the largest being 0.102 for the `powi` edge cases
+  (0.047 for `tan`, the largest of the trigonometric functions);
+- 0.43 and 0.54 of the tighter bound with an absolute floor for `sin` and `cos` next to
+  multiples of $\pi/2$ (described below), at the edge cases.
 
 Further details from the rustdoc:
 
@@ -135,9 +163,10 @@ Further details from the rustdoc:
   failure.
 - **Absolute floor near multiples of $\pi/2$.** Next to a nonzero multiple $k\pi/2$ the argument
   reduction leaves an absolute error floor. It is at most $\lvert k\rvert\cdot2^{-161}$ for
-  `f64` arguments and $\lvert k\rvert\cdot2^{-158}$ for double-double ones. Relative accuracy
-  of $2^{-100}$ holds wherever $\lvert x - k\pi/2\rvert \ge \lvert k\rvert\cdot2^{-60}$ (`f64`
-  arguments) or $\lvert k\rvert\cdot2^{-57}$ (double-double arguments). Some doubles lie
+  `f64` arguments and $\lvert k\rvert\cdot2^{-158}$ for double-double ones. The tests check
+  that the error is within $2^{-100}\lvert f\rvert$ plus that floor, so the relative error is
+  at most $1.5\cdot2^{-100}$ wherever $\lvert x - k\pi/2\rvert \ge \lvert k\rvert\cdot2^{-60}$
+  (`f64` arguments) or $\lvert k\rvert\cdot2^{-57}$ (double-double arguments). Some doubles lie
   closer to such multiples than that. At three of them the measured relative errors are
   $2^{-100}$ at $x = 45.553093477052$ (the closest of all below $2^{50}$), $2^{-81}$ at
   $x = 14461176.67027838$ and $2^{-61}$ at $x = 410195257422896.8$.
@@ -148,6 +177,8 @@ Further details from the rustdoc:
   those starting values. Their own last bits, though, may differ between platforms.
 
 ### Use as `num_traits::Float`
+
+<!-- synced with scatrs/src/scalar/dd/mod.rs rustdoc -->
 
 `DoubleDouble` implements `Float`, `FloatConst`, `NumCast`, `ToPrimitive` and `Real`, so
 generic kernels and `Complex<DoubleDouble>` work. Arithmetic and the elementary functions are
@@ -178,12 +209,14 @@ leading word. Where `DoubleDouble` differs from `f64`:
 
 `f64::mul_add` is one instruction where FMA is enabled. On x86_64 builds without the `fma`
 target feature, which is the default, it is a much slower software call; see
-{doc}`../installation`. Indicative timings from development: `exp` takes about 200 ns and
-`sin` about 170 ns, against 2.3 ns for an `f64` `sin`. Faster table-driven versions are
-planned.
+{doc}`../installation`. Indicative timings measured during code review (not committed):
+`exp` takes about 200 ns and `sin` about 170 ns, against 2.3 ns for an `f64` `sin`. Faster
+table-driven versions are planned.
 
 (dual)=
 ## `Dual<T, N>`
+
+<!-- synced with scatrs/src/scalar/dual/mod.rs rustdoc -->
 
 A `Dual<T, N>` is a value with `N` first-order directional derivatives,
 $\text{re} + \sum_i \text{eps}_i\,\varepsilon_i$. `Dual::variables([...])` seeds independent
@@ -249,7 +282,9 @@ In arithmetic with finite operands, a derivative is NaN only in two cases:
 - the value is NaN too (`0 / 0`, `x % 0`);
 - two terms of its formula overflow with opposite signs ($\infty - \infty$).
 
-Otherwise IEEE 754 rules apply: `x / 0` has derivative $x'/0 = \pm\infty$, for example. The sign
+Otherwise IEEE 754 rules apply: `x / 0` has derivative $x'/0 = \pm\infty$, for example, and a
+nonzero derivative times an infinite value is infinite. The strong-zero rule applies to zero
+derivatives only: an infinite or NaN derivative times a zero value is NaN, as in `T`. The sign
 of a zero derivative is unspecified, and carries no information.
 
 ```{caution}
@@ -336,7 +371,8 @@ check the values for special cases first. These checks are branches, so unlike t
 over `f64`, a loop over many `Dual`s is not vectorised across elements. Division needs two
 divisions: `a/b` for the value and `1/b` for the derivatives.
 
-Indicative throughput of `Dual<f64, N>` relative to plain `f64`, measured on an Apple M4:
+Indicative throughput of `Dual<f64, N>` relative to plain `f64`, measured during code review
+on an Apple M4 (not committed):
 
 | Function | Cost |
 |---|---|

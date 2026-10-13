@@ -19,6 +19,8 @@ $$w_k = \frac{2}{(1 - x_k^2)\,P_n'(x_k)^2}.$$
 
 ### Method
 
+<!-- synced with scatrs/src/special/gauss_legendre.rs rustdoc -->
+
 `gauss_legendre::<T>(n)` finds the $\lfloor n/2 \rfloor$ positive roots by Newton iteration in
 double-double arithmetic, and mirrors them. For odd $n$ the middle node is 0.
 
@@ -44,18 +46,23 @@ double-double arithmetic, and mirrors them. For odd $n$ the middle node is 0.
     `DoubleDouble`.
 
 Nodes ascend and the rule is exactly symmetric. The rule uses only IEEE 754 operations and
-fused multiply-adds, with no platform maths library, so its bits do not depend on the platform.
+fused multiply-adds, with no platform maths library, so its bits are designed not to depend on
+the platform. The tests have run on macOS so far; CI on Linux and Windows is pending.
 
 ### Why double-double
 
-A node error $\delta$ changes the weight by a relative $2\lvert x\rvert\delta/(1 - x^2)$. At
-the extreme nodes $1 - x^2 \approx 5.8/n^2$, so a node accurate to `f64` precision gives
-weights that are off by about $n^2$ ulps next to $\pm1$. That is exactly where the Mie
-forward-scattering peak sits. Computed in double-double and rounded once, the `f64` weights
-are instead within about half an ulp. The {doc}`quadrature example <../examples/quadrature>`
-measures both against Arb.
+Next to $\pm1$ the weights are ill-conditioned in the nodes. A node error $\delta$ changes the
+weight by a relative $2\lvert x\rvert\delta/(1 - x^2)$, and at the extreme nodes
+$1 - x^2 \approx 5.8/n^2$. That is about $n^2/6$ units of $2^{-52}$ per ulp of node error. So
+a weight computed from an `f64` node can be off by up to that much, even when the node is
+correctly rounded: about $7\cdot10^4$ units at $n = 1000$. Next to $+1$ is where the Mie
+forward-scattering peak sits. Computed in double-double and rounded once, the `f64` weights are
+instead within about half an ulp. The {doc}`quadrature example <../examples/quadrature>`
+measures this against Arb.
 
 ### Accuracy
+
+<!-- synced with scatrs/src/special/gauss_legendre.rs rustdoc -->
 
 The tests check the bounds below against Arb for every node of the full reference rules
 ($n$ = 1, 2, 3, 4, 5, 8, 16, 33, 64, 100, 128, 257, 500 and 1000). They also check them for
@@ -81,9 +88,12 @@ check to $n \le 3000$. None of these checks has found a rule that fails to conve
 
 ### Cost and the cap
 
+<!-- synced with scatrs/src/special/gauss_legendre.rs rustdoc -->
+
 The method is $O(n^2)$ in time and $O(n)$ in memory. Each root takes four to seven
 evaluations of the recurrence, about four on average for $n \ge 5000$. On an Apple M4 Pro
-this comes to about $28\,\text{ns}\cdot n^2$ for large $n$:
+this comes to about $28\,\text{ns}\cdot n^2$ for large $n$. These timings were measured
+during development; the repository has no benchmarks yet.
 
 | $n$ | 100 | 1000 | 5000 | 20 000 | $2^{17}$ (cap) |
 |---|---|---|---|---|---|
@@ -110,9 +120,12 @@ lower degree.
 
 ### Convention
 
+<!-- synced with scatrs/src/special/wigner.rs rustdoc -->
+
 The functions $d^l_{mn}(\theta)$ follow Mishchenko, Travis & Lacis (2002), *Scattering,
-Absorption, and Emission of Light by Small Particles*, Appendix B (MTL). They equal the common
-$d^j_{m'm}(\beta)$ with $m' = m$; for example $d^1_{01}(\theta) = \sin\theta/\sqrt2$. They are
+Absorption, and Emission of Light by Small Particles*, Appendix B (MTL). They are the common
+$d^j_{m'm}(\beta)$ with $(m', m)$ renamed $(m, n)$; for example
+$d^1_{01}(\theta) = \sin\theta/\sqrt2$. They are
 evaluated at $x = \cos\theta$ for every degree from 0 to $l_\text{max}$, and are zero for
 $l < l_0 = \max(\lvert m\rvert, \lvert n\rvert)$.
 
@@ -172,8 +185,10 @@ without cancellation. The rounding of $B_s$ and $C_s$ perturbs only the small $\
   The numerator comes from integers, and $u_{s+1} = v_s + 2(s+1)$.
 
 The integer coefficients are formed in the working type. They are exact in double-double for
-degrees and orders below about $9\cdot10^7$ ($2^{26.5}$). In `f64` they would round from
-$s \approx 2\cdot10^5$ on, too coarse for double-double results.
+degrees $s$ below about $9\cdot10^7$ ($2^{26.5}$) and for $\lvert m - n\rvert$ below $2^{26.5}$,
+so for $\lvert m\rvert, \lvert n\rvert$ below about $4.7\cdot10^7$ when the orders have
+opposite signs. In `f64` they would round from $s \approx 2\cdot10^5$ on, too coarse for
+double-double results.
 
 The reflection $d^l_{mn}(x) = (-1)^{l+m}\,d^l_{m,-n}(-x)$ maps the pole $x = -1$ onto $x = 1$.
 The method is chosen as follows:
@@ -185,10 +200,8 @@ The method is chosen as follows:
 | everywhere else | three-term recurrence |
 
 So $P_l$ ($m = n = 0$) always takes the difference form. The general difference form starts
-at $\lvert x\rvert = 0.9$ because below that the three-term form is as accurate, in sweeps up
-to $l = 4000$, and faster in double-double. In the three-term region the results are bitwise
-those of the original implementation plan. The plan used the three-term form everywhere;
-the difference forms replaced it near the poles after review.
+at $\lvert x\rvert = 0.9$ because below that the three-term form is as accurate and faster in
+double-double (in sweeps up to $l = 4000$, measured during code review, not committed).
 
 ### Start values below the floating-point range
 
@@ -203,6 +216,8 @@ subnormal or to zero, never flushed early. The reference suite has seven such ca
 covering all three forms and the reflection.
 
 ### Accuracy
+
+<!-- synced with scatrs/src/special/wigner.rs rustdoc -->
 
 The absolute error against Arb, at the exact `x`, is within:
 
@@ -220,26 +235,32 @@ for:
   $1 - 3\cdot2^{-53}$, $\pm0.9999999$, $-0.5$, $0$, $0.3$ and $\cos(\pi/6)$;
 - sampled degrees up to $l = 2000$ of $(0, 0)$, $(2, \pm2)$, $(0, 2)$, $(50, -37)$,
   $(-37, -50)$ and $(7, 150)$;
-- degrees up to $l = 4000$ next to the poles, for $(35, 34)$ at $x = \cos(4.2\cdot10^{-4})$
-  and $(0, 0)$ at $x = -1 + 2^{-53}$;
-- degrees up to $l = 2.5\cdot10^5$ of $(0, 0)$ and $(0, 2)$, at seven values of $x$ that cover
-  all three forms.
+- sampled degrees up to $l = 4000$ next to the poles, for $(35, 34)$ at
+  $x = \cos(4.2\cdot10^{-4})$ and $(0, 0)$ at $x = -1 + 2^{-53}$;
+- sampled degrees up to $l$ = 1000–3000 of the seven cases whose start value lies below the
+  floating-point range (see above);
+- sampled degrees up to $l = 2.5\cdot10^5$ of $(0, 0)$ and $(0, 2)$, at seven values of $x$
+  that cover all three forms.
 
-An adversarial review probe also tested about 4500 Arb cases, with
-$\lvert m\rvert, \lvert n\rvert \le 1000$ and $l \le 5000$. It covered turning points, the
-switch at $\lvert x\rvert = 0.9$, and near-diagonal pairs at small $l\theta$. The worst errors
-it found were $0.74(l+1)\cdot2^{-52}$ and $0.0034(l+1)\cdot2^{-97}$. For general $(m, n)$
-the tests sample degrees up to $l = 2000$, and up to $l = 4000$ in only a few cases (the pair
-above, and the start values below the floating-point range). Review probes reached $l$ =
-5000–20 000.
+For general $(m, n)$ the tests therefore reach $l = 2000$, $l = 3000$ in two of the underflow
+cases, and $l = 4000$ only in the two cases next to the poles.
+
+Measured during code review (not committed, so not reproducible from the repository): an
+adversarial probe of about 4500 Arb cases, with $\lvert m\rvert, \lvert n\rvert \le 1000$ and
+$l \le 5000$, covered turning points, the switch at $\lvert x\rvert = 0.9$, and near-diagonal
+pairs at small $l\theta$. The worst errors it found were $0.74(l+1)\cdot2^{-52}$ and
+$0.0034(l+1)\cdot2^{-97}$. Other probes of general $(m, n)$ reached $l$ = 5000–20 000.
 ```
 
 **Relative accuracy.** While $\lvert d^l\rvert$ grows with $l$, before its first turning
 point, the error is also within the bound relative to $\lvert d^l\rvert$. The largest measured
-is $1.05(l+1)\cdot2^{-52}$, at the start value of $(1313, 1313)$ at $x = 0.2087$. Beyond that
+during code review (not committed) is $1.05(l+1)\cdot2^{-52}$, at the start value of
+$(1313, 1313)$ at $x = 0.2087$. Beyond that
 point, in the oscillatory region near the zeros of $d^l$, only the absolute bound holds.
 
 ### Derivatives
+
+<!-- synced with scatrs/src/special/wigner.rs rustdoc -->
 
 With $x$ a `Dual`, the derivatives are those of the computed values, and the values are
 bitwise those of the underlying type.
@@ -271,6 +292,8 @@ $\lvert x\rvert < 1$ derivatives of every order are those of the computed values
 
 ### Cost
 
+<!-- synced with scatrs/src/special/wigner.rs rustdoc -->
+
 The start value costs $O(\max(\lvert m\rvert, \lvert n\rvert))$. Once $\sin(\theta/2)$ and
 $\cos(\theta/2)$ are known, it takes $\lvert m - n\rvert$ divisions and square roots, and
 $2\lvert m - n\rvert + \lvert m + n\rvert$ multiplications, at most
@@ -283,8 +306,8 @@ further degree then costs:
 | difference form, $m = \pm n$ | 1 | 0 |
 | general difference form | 2 | 1 |
 
-Measured on an Apple M4 Pro over the nodes of the 64-point Gauss–Legendre rule, up to
-$l = 2000$, the time per degree is:
+Measured during development on an Apple M4 Pro, over the nodes of the 64-point
+Gauss–Legendre rule up to $l = 2000$, the time per degree is:
 
 | Orders | `f64` | `DoubleDouble` |
 |---|---|---|

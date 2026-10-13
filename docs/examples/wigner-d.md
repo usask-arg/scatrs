@@ -75,8 +75,8 @@ $$d^l_{mn}(x) = (-1)^{m-n}\,d^l_{nm}(x) = d^l_{-n,-m}(x), \qquad
 d^l_{mn}(-x) = (-1)^{l+m}\,d^l_{m,-n}(x).$$
 
 scatrs computes each side separately. For $x < 0$ it uses the last identity itself in some
-cases (near $x = -1$, and for $m = -n$), to reflect the computation onto $x > 0$. Each side is within the contract, so they must agree to within
-twice the bound:
+cases (near $x = -1$, and for $m = -n$), to reflect the computation onto $x > 0$. Each side is
+within the contract, so they must agree to within twice the bound:
 
 ```{code-cell} python
 l_max = 30
@@ -96,7 +96,13 @@ assert worst <= 1
 
 ## Unitarity
 
-For each $m$ and $l$, $\sum_{n=-l}^{l} \bigl(d^l_{mn}\bigr)^2 = 1$:
+For each $m$ and $l$, $\sum_{n=-l}^{l} \bigl(d^l_{mn}\bigr)^2 = 1$. The tolerance follows
+from the contract. With each computed value $d + e$ within $\lvert e\rvert \le
+16(l+1)\epsilon$, the sum of squares changes by
+$\sum (2de + e^2) \le 2\cdot16(l+1)\epsilon\sum\lvert d\rvert$ (plus a negligible
+$\sum e^2$). By Cauchy–Schwarz, $\sum\lvert d\rvert \le \sqrt{2l+1}$, since
+$\sum d^2 = 1$. Squaring and summing the $2l + 1$ nonzero terms rounds by at most another
+$(2l+1)\epsilon$. So the sum is within $\bigl(32(l+1)\sqrt{2l+1} + 2l + 1\bigr)\epsilon$ of 1:
 
 ```{code-cell} python
 l_max = 25
@@ -138,9 +144,15 @@ Next to $x = \pm1$ the textbook three-term recurrence loses accuracy like $l^2$,
 switches to a difference form there (see {ref}`wigner-d`). The reference suite holds $P_l$ at
 $x = -1 + 2^{-53}$ for 11 degrees up to $l = 4000$, computed with Arb. The cell bounds the
 error of scatrs rigorously, with rational arithmetic. It does the same for a plain `f64`
-evaluation of Bonnet's
-recurrence $(l+1)P_{l+1} = (2l+1)\,x\,P_l - l\,P_{l-1}$, which is the three-term recurrence
-for $m = n = 0$.
+evaluation of Bonnet's recurrence $(l+1)P_{l+1} = (2l+1)\,x\,P_l - l\,P_{l-1}$, which is the
+three-term recurrence for $m = n = 0$.
+
+The errors of scatrs here are far below the bound because these values happen to lie very
+close to doubles. With $\delta = 2^{-53}$,
+$P_l(-1 + \delta) = (-1)^l\bigl(1 - \tfrac{l(l+1)}{2}\delta + O(l^4\delta^2)\bigr)$. The first
+two terms form a double exactly, as $l(l+1)$ is even, and the rest is below $2\cdot10^{-19}$
+for $l \le 4000$. So the double nearest each true value is within $2\cdot10^{-19}$ of it, and
+returning that double gives an error that small. The plain recurrence misses it by far more.
 
 ```{code-cell} python
 data = next(

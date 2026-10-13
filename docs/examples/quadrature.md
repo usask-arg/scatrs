@@ -71,10 +71,12 @@ assert abs(math.fsum(w) - 2) <= 3 * eps
 ## Accuracy against Arb
 
 The {doc}`reference suite <../validation/reference-suite>` stores the 1000-point rule computed
-with Arb. Each value is stored as three doubles `hi + lo + lo2`, with a rigorous bound `err` on
-the remainder. With rational arithmetic, $\lvert g - (\text{hi} + \text{lo} + \text{lo2})\rvert
-+ \text{err}$ is then a rigorous and nearly tight bound on the error of each `f64` value $g$. The contract is an absolute error of at most $2^{-52}$ for nodes and a
-relative error of at most $2^{-52}$ for weights.
+with Arb. Each value $v$ is stored as three doubles `hi + lo + lo2`, with a rigorous bound `err`
+on the remainder. For an `f64` value $g$, the cell computes
+$\lvert g - (\text{hi} + \text{lo} + \text{lo2})\rvert + \text{err}$ with rational
+arithmetic. That is a rigorous and nearly tight bound on $\lvert g - v\rvert$. The contract is
+an absolute error of at most $2^{-52}$ for nodes and a relative error of at most $2^{-52}$ for
+weights.
 
 For comparison, the cell also measures {func}`numpy.polynomial.legendre.leggauss`, which works
 in `f64` throughout.
@@ -89,15 +91,19 @@ with open(data / "gauss_legendre.jsonl") as f:
     record = next(r for r in map(json.loads, f) if r["case"] == "n=1000")
 
 
+def reference(values, i):
+    """hi + lo + lo2 of reference value i, as an exact fraction."""
+    return Fraction(values["hi"][i]) + Fraction(values["lo"][i]) + Fraction(values["lo2"][i])
+
+
 def errors(got, values):
     """|got - v| for each reference value v, as a rigorous upper bound, in units of 2**-52."""
-    out = []
-    for g, hi, lo, lo2, err in zip(
-        got, values["hi"], values["lo"], values["lo2"], values["err"], strict=True
-    ):
-        v = Fraction(hi) + Fraction(lo) + Fraction(lo2)
-        out.append(float((abs(Fraction(g) - v) + Fraction(err)) * 2**52))
-    return np.array(out)
+    return np.array(
+        [
+            float((abs(Fraction(g) - reference(values, i)) + Fraction(values["err"][i])) * 2**52)
+            for i, g in enumerate(got)
+        ]
+    )
 
 
 ref_nodes, ref_weights = record["outputs"]["nodes"], record["outputs"]["weights"]
@@ -114,11 +120,40 @@ for name, (xs, ws) in {"scatrs": (x, w), f"numpy {np.__version__}": (xn, wn)}.it
         assert node_err.max() <= 1 and weight_err.max() <= 1
 ```
 
-The weights next to $\pm1$ are where an `f64` computation loses accuracy. There
-$1 - x^2 \approx 5.8/n^2$ amplifies the error of the node, and that is where the Mie
-forward-scattering peak is integrated. scatrs computes the rule in double-double arithmetic
-and rounds it once, so its `f64` weights stay within half an ulp. See
-{ref}`gauss-legendre`.
+Next to $\pm1$ the weights are ill-conditioned in the nodes. A node error $\delta$ changes the
+weight by a relative $2\lvert x\rvert\delta/(1 - x^2)$, and $1 - x^2 \approx 5.8/n^2$ at the
+extreme nodes. That is about $n^2/6$ units of $2^{-52}$ per ulp of node error. So a weight
+computed from an `f64` node loses up to that much, even from the correctly rounded node: about
+$7\cdot10^4$ units at $n = 1000$. scatrs avoids this by computing
+the rule in double-double arithmetic and rounding it once. This matters next to $+1$, where
+the Mie forward-scattering peak is integrated.
+
+numpy's error, about $37n^2$ units, is much larger, and the difference is algorithmic.
+`leggauss` computes the weights as $2/\bigl(n\,P_{n-1}(x)\,P_n'(x)\bigr)$, up to a final
+normalisation. That equals the weight only at an exact root, and it is far more sensitive to
+the node. The next cell evaluates both formulas exactly, in rational arithmetic, at the
+correctly rounded node nearest $+1$:
+
+```{code-cell} python
+n = 1000
+xq = Fraction(ref_nodes["hi"][-1])  # the double nearest to the node
+p_prev, p = Fraction(1), xq  # P_{n-1} and P_n by Bonnet's recurrence, exactly
+for j in range(2, n + 1):
+    p_prev, p = p, ((2 * j - 1) * xq * p - (j - 1) * p_prev) / j
+dp = n * (p_prev - xq * p) / (1 - xq**2)  # P_n'(x)
+exact = reference(ref_weights, n - 1)
+formulas = {
+    "2 / ((1 - x^2) P_n'(x)^2)": 2 / ((1 - xq**2) * dp**2),
+    "2 / (n P_(n-1)(x) P_n'(x))": Fraction(2, n) / (p_prev * dp),
+}
+error = {name: float(abs(v - exact) / exact * 2**52) for name, v in formulas.items()}
+for name, e in error.items():
+    print(f"{name:>27}: weight error {e:.3g} units of 2**-52")
+textbook, leggauss_form = error.values()
+assert textbook <= n**2 / 6 < leggauss_form
+```
+
+See {ref}`gauss-legendre` for the method.
 
 ## Invalid input
 

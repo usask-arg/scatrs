@@ -6,18 +6,30 @@ Neither wheels nor the Rust crate are published yet, so scatrs is built from sou
 
 - A Rust toolchain, 1.85 or later. The repository's `rust-toolchain.toml` selects the stable
   channel with rustfmt and clippy, so [rustup](https://rustup.rs) installs the right one.
-- [uv](https://docs.astral.sh/uv/), which manages the Python environment.
+- [uv](https://docs.astral.sh/uv/), which manages the Python environment, or pip.
 - Python 3.11 or later. The extension is built for the stable ABI (abi3), so one build serves
   every Python from 3.11 on. The only runtime dependency is numpy 1.26 or later.
 
 ## Python package
 
+With uv:
+
 ```bash
 git clone https://github.com/usask-arg/scatrs
 cd scatrs
-uv sync                                  # environment with the development tools
-uv run maturin develop --uv --release    # build the extension into it
+uv sync         # environment with the development tools; builds the extension (release)
 uv run pytest
+```
+
+uv installs scatrs in editable mode and rebuilds the extension whenever the Rust sources
+change, so `uv run` always uses the current code. (`uv run maturin develop --uv --release`
+also works, but is not needed.)
+
+With pip, in a virtual environment:
+
+```bash
+python -m pip install ".[test]"   # builds the extension in release mode
+python -m pytest
 ```
 
 Then:
@@ -32,9 +44,10 @@ nodes, weights = scatrs.special.gauss_legendre(16)
 Double-double arithmetic, which {func}`~scatrs.special.gauss_legendre` uses internally, relies
 on fused multiply-add (FMA). On x86_64 the default target has no FMA, so each FMA becomes a
 software call and double-double code runs about ten times slower. Where the CPU has FMA,
-build with `RUSTFLAGS="-C target-cpu=native"` (or `-C target-feature=+fma`). This changes
-the speed, not the results: `f64::mul_add` is correctly rounded with or without hardware FMA.
-aarch64 targets, Apple silicon included, always have FMA.
+build with `RUSTFLAGS="-C target-cpu=native"` (or `-C target-feature=+fma`), for example
+`RUSTFLAGS="-C target-cpu=native" uv sync --reinstall-package scatrs`. This changes the speed,
+not the results: `f64::mul_add` is correctly rounded with or without hardware FMA. aarch64
+targets, Apple silicon included, always have FMA.
 ```
 
 ## Rust crate
@@ -59,13 +72,16 @@ behaviour. These pages summarise it.
 
 ## Building this documentation
 
-autodoc imports the installed package and the examples run it, so build the extension first.
-The examples also read the reference data in `reference/data`, so build from a checkout:
+autodoc imports the installed package and the examples run it; `uv run` builds and installs
+it first. The examples also read the reference data in `reference/data`, so build from a
+checkout:
 
 ```bash
-uv run --extra docs maturin develop --uv --release
 uv run --extra docs sphinx-build -W --keep-going -b html docs docs/_build/html
 ```
+
+Every build re-runs the examples and re-reads the API docstrings, even when their sources have
+not changed.
 
 Every warning fails the build, and every cross-reference must resolve (nitpicky mode). The
 links to the Python and numpy documentation come from inventories that intersphinx downloads.
@@ -74,7 +90,8 @@ also work offline. Otherwise, without network access, the download fails and so 
 build. Set `SCATRS_DOCS_OFFLINE=1` to skip the download:
 
 ```bash
-SCATRS_DOCS_OFFLINE=1 uv run --extra docs sphinx-build -W --keep-going -b html docs docs/_build/html
+SCATRS_DOCS_OFFLINE=1 uv run --extra docs \
+    sphinx-build -W --keep-going -b html docs docs/_build/html
 ```
 
 Offline, references to Python and numpy objects appear as plain text. References within

@@ -72,16 +72,18 @@ These items came out of the Phase 0 reviews and were deliberately deferred. Each
 - **Libm accuracy assumptions in tests.** The f64 derivative bounds in `dual_functions.rs` assume each libm call is within 2 ulps, which has only been checked on macOS. If CI on glibc or the Windows CRT fails, measure that platform's libm and adjust the per-platform bound with a written justification.
 - **`Dual<DoubleDouble>` sin speed.** The derivative needs DD cos, so `Dual<Dd>` sin costs about 2× DD sin. It benefits directly from the DD sin_cos speedups above.
 
-- **Indicative `Dual<T, 4>` costs, throughput relative to plain T.** Measured in the Task 8 review on an M4; replace these with the phase 1 criterion benchmarks.
+- **Indicative `Dual<f64, N>` costs, throughput relative to plain f64.** Measured on an M4 after the Task 8 sin/cos revert (2a35d9e). Replace these with the phase 1 criterion benchmarks.
 
   | Function | Cost |
   |---|---|
-  | f64 sin | 1.2–1.9× (the baseline is noisy) |
-  | f64 exp | 1.15× |
-  | f64 sqrt | 4.3× (plain f64 sqrt vectorises across elements) |
-  | DD sin | 2.0× |
-  | tanh, \|x\| > 0.55 | 2.5× |
+  | sin and cos | 1.6–1.8× (one fused libm call) |
+  | `Complex::exp` | 1.2× (N=1), 1.8× (N=4) |
+  | exp | about 1.15× |
+  | sqrt | about 4.4× (plain f64 sqrt vectorises across elements) |
+  | tanh, \|x\| > 0.55 | about 2× |
+  | DD sin | about 2× |
 
+- **Apple fused sincos.** On Apple targets, `Dual::sin`/`cos` return the fused `__sincos_stret` values. Any f64 kernel computing both sin and cos of an argument gets the same values, so value-only and Jacobian calls agree bitwise. A lone `f64::sin` can differ by 1 ulp in about 1 in 13,000 arguments. glibc and MSVC are unaffected. This was a controller decision in Task 8.
 - **Cross-platform CI is essential.** The Task 8 review found a Linux-only failure: macOS passed only because Apple's `pow` happened to cancel a test-reference error. Run the full test suite on Linux and Windows in CI before trusting libm-dependent bounds (Task 13).
 - **`Dual<Dd>::log` cost.** The value must come bitwise from `T::log`, so it computes DD `ln` twice, about 2× DD `log`.
 

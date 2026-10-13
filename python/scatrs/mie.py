@@ -10,7 +10,7 @@ Each function runs entirely in Rust, with the GIL released, over all elements in
 ``derivatives`` is ``True`` (all of ``"x"``, ``"m_real"``, ``"m_imag"``) or a sequence of those
 names; the result's ``d`` method (for example :meth:`MieEfficiencies.d`) then returns the
 derivative with respect to one of them, in the same structure. Derivatives cost little: all
-three together take 1.3 to 2 times as long as the values alone.
+three together take 1.2 to 2.2 times as long as the values alone.
 
 Results are frozen dataclasses of read-only arrays (copy an array to modify it); they compare
 by identity.
@@ -258,7 +258,7 @@ _SHARED_DOC = """
         ``"m_imag"`` (``True`` for all three); read them with the result's ``d`` method.
     allow_unvalidated : bool, optional
         Compute outside the validated domain (``1e-6 <= x <= 2e4``, ``0 < Re m <= 10``,
-        ``0 <= Im m <= 10``) instead of raising
+        ``0 <= Im m <= 10``, ``|m| >= 0.1``) instead of raising
         :class:`~scatrs.errors.OutsideValidatedDomainError`.
 
     Raises
@@ -272,8 +272,8 @@ _SHARED_DOC = """
         For valid inputs outside the validated domain, unless ``allow_unvalidated``.
     TypeError
         For non-numeric ``x`` or ``m`` (complex ``x``), a non-integer ``n_max`` (``float``
-        and ``bool`` values are rejected), or ``derivatives`` that is neither a bool nor a
-        sequence of names.
+        and ``bool`` values are rejected), ``derivatives`` that is neither a bool nor a
+        sequence of names, or a non-bool ``allow_unvalidated``.
     ValueError
         For an unknown parameter name, or (from numpy) shapes that do not broadcast.
     BufferError
@@ -301,7 +301,7 @@ def efficiencies(
     params = _parameters(derivatives)
     xb, mb, shape = _inputs(x, m)
     values, jacobian = _scatrs.mie_efficiencies(
-        xb, mb, _n_max(n_max), bool(params), bool(allow_unvalidated)
+        xb, mb, _n_max(n_max), bool(params), _args.flag(allow_unvalidated, "allow_unvalidated")
     )
     values, jacobian = _frozen(values), _frozen(jacobian)
     fields = [v.reshape(shape) for v in values]
@@ -329,7 +329,7 @@ def coefficients(
     params = _parameters(derivatives)
     xb, mb, shape = _inputs(x, m)
     terms, a, b, d = _scatrs.mie_coefficients(
-        xb, mb, _n_max(n_max), bool(params), bool(allow_unvalidated)
+        xb, mb, _n_max(n_max), bool(params), _args.flag(allow_unvalidated, "allow_unvalidated")
     )
     a, b, d = _frozen(a), _frozen(b), _frozen(d)
     width = a.shape[1]
@@ -362,7 +362,12 @@ def amplitudes(
     xb, mb, shape = _inputs(x, m)
     mus = _args.real_array(mu, "mu")
     s, d = _scatrs.mie_amplitudes(
-        xb, mb, mus.reshape(mus.shape), _n_max(n_max), bool(params), bool(allow_unvalidated)
+        xb,
+        mb,
+        mus.reshape(mus.shape),
+        _n_max(n_max),
+        bool(params),
+        _args.flag(allow_unvalidated, "allow_unvalidated"),
     )
     s, d = _frozen(s), _frozen(d)
     out = (*shape, *mus.shape)

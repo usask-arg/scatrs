@@ -65,9 +65,9 @@ pub enum MieOutput {
 ///   and the separate losses of each order near m = 1, where aₙ, bₙ ∝ m − 1. It is
 ///   [`condition_factor`](Self::condition_factor) κ for the values, κ·max(1, |m|/|m − 1|) for
 ///   the efficiency Jacobian (the derivatives of g lose a second factor |m|/|m − 1| near
-///   m = 1), and 1 + |m|x for the derivatives of the coefficients and amplitudes, which lose
-///   nothing near m = 1: m − 1 enters the x-derivatives as an exact factor of m² − 1, and the
-///   m-derivatives have no factor that cancels.
+///   m = 1), and 1 + max(1, |m|)·x for the derivatives of the coefficients and amplitudes,
+///   which lose nothing near m = 1: m − 1 enters the x-derivatives as an exact factor of
+///   m² − 1, and the m-derivatives have no factor that cancels.
 /// * C is the output's constant ([`constant`](Self::constant)).
 ///
 /// Neither term alone is a bound: the accuracy map in the documentation shows outputs that
@@ -85,14 +85,18 @@ pub struct ValidatedDomain {
     pub m_re_max: f64,
     /// The largest validated Im m (the smallest is 0).
     pub m_im_max: f64,
+    /// The smallest validated |m|. Below it, Q_abs and the Jacobian of nearly real m lose
+    /// accuracy to cancellation in Im(m·Dₙ(mx)).
+    pub abs_m_min: f64,
 }
 
-/// The validated domain: x ∈ [10⁻⁶, 2·10⁴], 0 < Re m ≤ 10, 0 ≤ Im m ≤ 10.
+/// The validated domain: x ∈ [10⁻⁶, 2·10⁴], 0 < Re m ≤ 10, 0 ≤ Im m ≤ 10, |m| ≥ 0.1.
 pub const VALIDATED_DOMAIN: ValidatedDomain = ValidatedDomain {
     x_min: 1e-6,
     x_max: 2e4,
     m_re_max: 10.0,
     m_im_max: 10.0,
+    abs_m_min: 0.1,
 };
 
 impl ValidatedDomain {
@@ -102,12 +106,14 @@ impl ValidatedDomain {
             && m.re > 0.0
             && m.re <= self.m_re_max
             && (0.0..=self.m_im_max).contains(&m.im)
+            && m.norm() >= self.abs_m_min
     }
 
-    /// κ(x, m) = (1 + |m|x)·max(1, |m|/|m − 1|): infinite for m = 1, where the coefficients
-    /// vanish.
+    /// κ(x, m) = (1 + max(1, |m|)·x)·max(1, |m|/|m − 1|): infinite for m = 1, where the
+    /// coefficients vanish. The phase of the series grows like |m|x inside the sphere and like
+    /// x outside it (and the number of terms like x), hence max(1, |m|)·x.
     pub fn condition_factor(x: f64, m: Complex<f64>) -> f64 {
-        (1.0 + m.norm() * x) * near_one(m)
+        (1.0 + m.norm().max(1.0) * x) * near_one(m)
     }
 
     /// The declared bound on the error of `output` at (x, m): C·(κ′ + `condition`)·2⁻⁵², in
@@ -116,7 +122,7 @@ impl ValidatedDomain {
     pub fn tolerance(&self, output: MieOutput, x: f64, m: Complex<f64>, condition: f64) -> f64 {
         let prior = match output {
             MieOutput::CoefficientDerivatives | MieOutput::AmplitudeDerivatives => {
-                1.0 + m.norm() * x
+                1.0 + m.norm().max(1.0) * x
             }
             MieOutput::EfficiencyJacobian => Self::condition_factor(x, m) * near_one(m),
             _ => Self::condition_factor(x, m),
@@ -129,7 +135,8 @@ impl ValidatedDomain {
     /// | output | C |
     /// |---|---|
     /// | coefficients, efficiencies, g | 16 |
-    /// | S₁, S₂ and their derivatives | 64 |
+    /// | S₁, S₂ | 128 |
+    /// | derivatives of S₁, S₂ | 64 |
     /// | efficiency Jacobian | 256 |
     /// | coefficient derivatives | 512 |
     pub fn constant(output: MieOutput) -> f64 {
@@ -140,7 +147,8 @@ impl ValidatedDomain {
             | MieOutput::Absorption
             | MieOutput::Backscattering
             | MieOutput::Asymmetry => 16.0,
-            MieOutput::Amplitudes | MieOutput::AmplitudeDerivatives => 64.0,
+            MieOutput::Amplitudes => 128.0,
+            MieOutput::AmplitudeDerivatives => 64.0,
             MieOutput::EfficiencyJacobian => 256.0,
             MieOutput::CoefficientDerivatives => 512.0,
         }
@@ -156,8 +164,8 @@ impl fmt::Display for ValidatedDomain {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "x in [{:e}, {:e}], 0 < Re m <= {}, 0 <= Im m <= {}",
-            self.x_min, self.x_max, self.m_re_max, self.m_im_max
+            "x in [{:e}, {:e}], 0 < Re m <= {}, 0 <= Im m <= {}, |m| >= {}",
+            self.x_min, self.x_max, self.m_re_max, self.m_im_max, self.abs_m_min
         )
     }
 }

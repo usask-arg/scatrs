@@ -13,7 +13,9 @@
   (1967), 24–82. Minimal solutions and Pincherle's theorem, behind the enclosure of the
   logarithmic derivatives.
 - W. J. Lentz, "Generating Bessel functions in Mie scattering calculations using continued
-  fractions", *Applied Optics* 15 (1976), 668–671. The continued fraction for $D_n$.
+  fractions", *Applied Optics* 15 (1976), 668–671. The continued fraction for $D_n$, which
+  scatrs replaces by a contracting downward recurrence, and its guard against a zero
+  denominator, which scatrs keeps.
 - R. L. Smith, "Algorithm 116: Complex division", *Communications of the ACM* 5 (1962), 435.
   The complex reciprocal.
 - I. Gargantini and P. Henrici, "Circular arithmetic and the determination of polynomial
@@ -45,7 +47,7 @@
   behind the difference forms that scatrs uses next to the poles.
 - J. W. Hovenier, C. van der Mee and H. Domke, *Transfer of Polarized Light in Planetary
   Atmospheres: Basic Concepts and Practical Methods*, Kluwer Academic Publishers (2004). The
-  convention for the Greek coefficients.
+  convention for the Greek coefficients, which arrive in phase 1b.
 - L. G. Henyey and J. L. Greenstein, "Diffuse radiation in the Galaxy", *Astrophysical
   Journal* 93 (1941), 70–83. The Henyey–Greenstein phase function.
 

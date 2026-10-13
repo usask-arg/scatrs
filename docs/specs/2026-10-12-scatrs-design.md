@@ -152,6 +152,9 @@ A hand-derived implementation (in the style of Spurr et al. 2012) can replace an
 
 ### 5.1 Homogeneous spheres
 
+Amended by the phase 1 design (`docs/specs/2026-10-13-phase-1-mie-design.md`, sections 11
+and 12): no Lentz continued fraction and no small-particle expansion.
+
 - **Baseline:** Wiscombe's MIEV0 scheme.
   - Truncation: N = x + 4.05 x^⅓ + 2.
   - Dₙ(mx) by downward recurrence, seeded with a Lentz continued fraction. Upward recurrence is used where Wiscombe's criterion allows it.

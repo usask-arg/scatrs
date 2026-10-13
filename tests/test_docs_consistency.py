@@ -25,17 +25,34 @@ _SUPERSCRIPTS = str.maketrans("⁰¹²³⁴⁵⁶⁷⁸⁹⁻", "0123456789-")
 
 
 def normalise(text: str) -> str:
-    """One spelling for 2⁻⁵², 2^{-52} and 2**-52; for ·, \\cdot and *; and no spacing."""
+    """One spelling for 2⁻⁵², 2^{-52} and 2**-52; for ·, \\cdot and *; for ≤, ≥, | and their LaTeX;
+    and no spacing."""
     text = re.sub(r"[⁰¹²³⁴⁵⁶⁷⁸⁹⁻]+", lambda m: "^" + m.group().translate(_SUPERSCRIPTS), text)
     text = text.replace("**", "^")
-    for latex in (r"\,", r"\cdot", r"\text", r"\mathrm", r"\left", r"\right"):
+    for latex in (r"\,", r"\cdot", r"\text", r"\mathrm", r"\operatorname", r"\left", r"\right"):
         text = text.replace(latex, "")
-    text = text.replace(r"\le", "≤")
+    text = text.replace(r"\le", "≤").replace(r"\ge", "≥")
+    text = text.replace(r"\lvert", "|").replace(r"\rvert", "|")
     return re.sub(r"[\s{}$`*·\\]", "", text)
 
 
 def read(path: str) -> str:
     return normalise((ROOT / path).read_text(encoding="utf-8"))
+
+
+def states(page: str, text: str) -> bool:
+    """Whether the normalised ``page`` contains ``text``, not followed by more digits when it ends
+    in one: "2^20" is not stated by "2^200", nor "x+6x^(1/3)+3" by "...+30". (Normalising
+    removes spaces, so a digit may legitimately precede ``text``.)"""
+    after = r"(?!\.?\d)" if text[-1].isdigit() else ""
+    return re.search(re.escape(text) + after, page) is not None
+
+
+def states_version(page: str, version: str) -> bool:
+    """Whether the normalised ``page`` states ``version`` as a whole version number, possibly
+    followed by ".0" parts ("1.85.0" states 1.85; "11.85" and "1.85.1" do not)."""
+    pattern = r"(?<![\d.])" + re.escape(version) + r"(?:\.0)*(?![.\d])"
+    return re.search(pattern, page) is not None
 
 
 GL_RS = "scatrs/src/special/gauss_legendre.rs"
@@ -84,13 +101,19 @@ CONTRACTS = [
     ("Mie order cap", "2^20", [MIE_RS, MIE_PY, LIMITATIONS]),
     ("Mie output cap", "2^27", [MIE_BINDINGS_RS, MIE_PY, LIMITATIONS]),
     ("Mie tolerance", "+cond)2^-52", [DOMAIN_RS, MIE_THEORY]),
-    ("Mie validated x range", "10^-6≤x≤2", [MIE_THEORY, LIMITATIONS]),
+    ("Mie validated domain", "10^-6≤x≤210^4,0<Rem≤10,0≤Imm≤10,|m|≥0.1", [MIE_THEORY, LIMITATIONS]),
+    ("Mie validated domain", "x∈[10^-6,210^4],0<Rem≤10,0≤Imm≤10,|m|≥0.1", [DOMAIN_RS]),
+    ("Mie validated domain", "1e-6<=x<=2e4,0<Rem<=10,0<=Imm<=10,|m|>=0.1", [MIE_PY]),
+    ("Mie accepted x", "xin[10^-30,10^6]", [LIMITATIONS]),
+    ("Mie accepted |m|", "|m|in[10^-6,10^3]", [LIMITATIONS]),
+    ("Mie accepted x", "xoutside[1e-30,1e6]", [MIE_PY]),
+    ("Mie accepted |m|", "|m|outside[1e-6,1e3]", [MIE_PY]),
 ]
 
 
 @pytest.mark.parametrize(("what", "text", "files"), CONTRACTS)
 def test_contract_is_stated_everywhere(what: str, text: str, files: list[str]) -> None:
-    missing = [f for f in files if text not in read(f)]
+    missing = [f for f in files if not states(read(f), text)]
     assert not missing, f"{what} ({text!r}) is not stated in {missing}"
 
 
@@ -104,6 +127,19 @@ def test_limits_in_code_match_the_documented_values() -> None:
     assert re.search(r"terms\(x, 6\.0, 3\.0\)", mie) and re.search(r"terms\(x, 12\.0, 6\.0\)", mie)
     mie_bindings = (ROOT / MIE_BINDINGS_RS).read_text(encoding="utf-8")
     assert re.search(r"pub const MAX_MIE_VALUES: usize = 1 << 27;", mie_bindings)
+    for limit in (
+        r"MIN_SIZE_PARAMETER: f64 = 1e-30;",
+        r"MAX_SIZE_PARAMETER: f64 = 1e6;",
+        r"MIN_REFRACTIVE_INDEX: f64 = 1e-6;",
+        r"MAX_REFRACTIVE_INDEX: f64 = 1e3;",
+    ):
+        assert f"pub const {limit}" in mie, limit
+    domain = (ROOT / DOMAIN_RS).read_text(encoding="utf-8")
+    assert re.search(
+        r"VALIDATED_DOMAIN: ValidatedDomain = ValidatedDomain \{\s*x_min: 1e-6,\s*x_max: 2e4,"
+        r"\s*m_re_max: 10\.0,\s*m_im_max: 10\.0,\s*abs_m_min: 0\.1,\s*\};",
+        domain,
+    ), "VALIDATED_DOMAIN differs from the documented domain"
 
 
 def _version_floors() -> dict[str, str]:
@@ -124,7 +160,7 @@ def _version_floors() -> dict[str, str]:
 @pytest.mark.parametrize("what", ["MSRV", "Python floor", "numpy floor"])
 def test_version_floors_are_stated_everywhere(what: str) -> None:
     floor = _version_floors()[what]
-    missing = [f for f in (INSTALLATION, CONTRIBUTING) if floor not in read(f)]
+    missing = [f for f in (INSTALLATION, CONTRIBUTING) if not states_version(read(f), floor)]
     assert not missing, f"{what} {floor} (from the build files) is not stated in {missing}"
 
 
@@ -172,11 +208,8 @@ MIE_CONSTANT_GROUPS = [
         "the coefficients, efficiencies and $g$",
         "coefficients, efficiencies, g",
     ),
-    (
-        ("Amplitudes", "AmplitudeDerivatives"),
-        "$S_1$, $S_2$ and their derivatives",
-        "S₁, S₂ and their derivatives",
-    ),
+    (("Amplitudes",), "$S_1$, $S_2$", "S₁, S₂"),
+    (("AmplitudeDerivatives",), "their derivatives", "derivatives of S₁, S₂"),
     (("EfficiencyJacobian",), "the efficiency Jacobian", "efficiency Jacobian"),
     (("CoefficientDerivatives",), "the coefficient derivatives", "coefficient derivatives"),
 ]

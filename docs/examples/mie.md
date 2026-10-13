@@ -65,10 +65,10 @@ assert abs(direct[1e-10] / linear - 1) < 1e-9
 
 ## The phase function
 
-$F_{11} = (\lvert S_1\rvert^2 + \lvert S_2\rvert^2)/2$, normalized so that
-$\tfrac12\int_{-1}^1 F_{11}\,d\mu = 1$ once divided by $x^2 Q_\text{sca}/4$. $F_{11}$ is a
-polynomial of degree $2N$ in $\mu$, so a Gauss–Legendre rule with $N + 1$ points integrates it
-exactly.
+The phase function $F_{11}$ is $(\lvert S_1\rvert^2 + \lvert S_2\rvert^2)/2$ divided by
+$x^2 Q_\text{sca}/4$, which normalizes it so that $\tfrac12\int_{-1}^1 F_{11}\,d\mu = 1$
+({doc}`/conventions`). It is a polynomial of degree $2N$ in $\mu$, so a Gauss–Legendre rule
+with $N + 1$ points integrates it exactly.
 
 ```{code-cell} python
 from scatrs.special import gauss_legendre
@@ -88,7 +88,7 @@ assert abs(0.5 * np.sum(w * f11 * mu) - q.g) < 1e-13
 ## Derivatives
 
 `derivatives=True` returns the derivatives with respect to the size parameter and the real
-and imaginary parts of the refractive index, in closed form, for 1.3 to 2 times the cost of
+and imaginary parts of the refractive index, in closed form, for 1.2 to 2.2 times the cost of
 the values. Here they are checked against central differences.
 
 ```{code-cell} python

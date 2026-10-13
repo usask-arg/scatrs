@@ -355,7 +355,7 @@ These are certified only where the generator sums to N_ref ≥ n₀(x, m) and a 
 - **§9.3:** add `InvalidInputError`, and replace `PyReadonlyArray` parameters with `Bound<PyArray…>` + `try_readonly()`.
 - **§13:** phase 1 is split into 1a and 1b, with the exit criteria of section 1.
 
-## 12. Decisions made while planning (2026-10-13)
+## 12. Decisions made while planning and executing (2026-10-13)
 
 The plan's code was prototyped and measured before the plan was written. These results changed
 the design above, or settle what it left open:
@@ -371,19 +371,26 @@ the design above, or settle what it left open:
   a small strongly absorbing sphere needs 98). A tolerance from the output's own condition
   number alone fails where the series cancel: metallic backscattering needs C ≈ 6·10⁵. The
   declared tolerance is C·(κ′ + cond)·2⁻⁵², with cond the relative condition number of the
-  output in its error measure; every output then stays within a small C (≤ 10 for values,
+  output in its error measure; every output then stays within a small C (≤ 19 for values,
   ≤ 70 for derivatives). Amended during execution (Task 5 review): cond is componentwise in
   Re m and Im m for the real outputs (a normwise cond made the tolerances of Q_ext and Q_abs
   vacuous at small Im m) and normwise for the holomorphic ones; κ′ is κ for the values,
-  κ·max(1, |m|/|m − 1|) for the efficiency Jacobian and 1 + |m|x for the coefficient and
-  amplitude derivatives. Declared constants: 16 (coefficients, efficiencies, g), 64 (S₁, S₂
-  and their derivatives), 256 (efficiency Jacobian), 512 (coefficient derivatives).
+  κ·max(1, |m|/|m − 1|) for the efficiency Jacobian and 1 + max(1, |m|)·x for the coefficient
+  and amplitude derivatives. Amended again in the final review, which found the declared
+  domain false for |m| ≲ 0.2 (up to 10⁷ times the tolerance, confirmed against Arb), where
+  no test sampled: κ = (1 + max(1, |m|)·x)·max(1, |m|/|m − 1|), since the phase of the
+  series grows like x outside the sphere, and the domain requires |m| ≥ 0.1 (below it, Q_abs
+  and the Jacobian of nearly real m lose accuracy to cancellation in Im(m·Dₙ(mx))). Declared
+  constants: 16 (coefficients, efficiencies, g), 128 (S₁, S₂), 64 (their derivatives), 256
+  (efficiency Jacobian), 512 (coefficient derivatives).
   `DoubleDouble` is checked against Arb on every output, within 16 times the declared
-  constants in units of 2⁻¹⁰⁴ (section 5 expected it to be far better than that relative to
-  f64; at x = 2·10⁴ its amplitude derivatives are not, a phase 1b follow-up).
+  constants in units of 2⁻¹⁰⁴, which keeps its own error below 2⁻⁴⁸ of the declared constants
+  in the map. Section 5 expected more: at x = 2·10⁴ its amplitude derivatives reach 1.4 times
+  the declared constant in those units (a phase 1b follow-up).
 - **The accuracy map is a CI test** (`scatrs/tests/mie_accuracy_map.rs`, about 20 s with all
-  cores), not only a scheduled sweep: f64 against DoubleDouble on 104 × 24 points, with
-  decimal-valued size parameters so the grid is the same on every platform.
+  cores), not only a scheduled sweep: f64 against DoubleDouble on 104 × 28 points (four
+  refractive indices below |m| = 1 added in the final review), with decimal-valued size
+  parameters so the grid is the same on every platform.
 - **Reference generator** (section 6). Arb's Bessel functions are unusable at large orders (5 of
   320 bits at order 2000), so the generator uses only the recurrences, seeded by the
   unit-disk enclosure, with disk arithmetic for complex recurrences (Arb's rectangular balls
@@ -396,12 +403,14 @@ the design above, or settle what it left open:
   resonance; `Dual` gives the same values, so it is the conditioning of the computed f64
   path). ∂Q_abs/∂(Im m) stays accurate relative to itself.
 - **Measured cost** (Apple M4 Pro): 0.55 µs at x = 0.1, 36 µs at x = 1000, 0.34 ms at
-  x = 10⁴ (m = 1.5 + 0.01i); the full Jacobian costs 1.3–1.8× the values there (target ≤ 2×).
+  x = 10⁴ (m = 1.5 + 0.01i); the full Jacobian costs 1.2–1.8× the values there (target ≤ 2×).
   Amended during execution (Task 7 review): at real m the values take the real recurrence and
-  cost about 25% less, so the Jacobian reaches 2.0× from x = 1000 on, at the limit of the
-  target (a phase 1b item). The benchmarks do not compare alternative algorithms, so they do
-  not by themselves justify the downward Dₙ and the hybrid ψ scheme (section 8); the accuracy
-  measurements do.
+  cost about 25% less (less still at smaller m), while the derivative work stays the same, so
+  for non-absorbing spheres with m ≲ 1.4 the Jacobian misses the target: 2.0× at m = 1.5,
+  2.1× at m = 1, 2.2× at m = 0.75 for x ≥ 1000. Fusing the four sums of the Jacobian into one
+  pass, with shared weights, did not reduce it (measured). The benchmarks do not compare
+  alternative algorithms, so they do not by themselves justify the downward Dₙ and the hybrid
+  ψ scheme (section 8); the accuracy measurements do.
 - **Python amplitude shape** is S + mu.shape (any shape of mu), and `derivatives` accepts
   `True`, `False` or a sequence of names.
 - **Rust API names** follow the plan: output buffers are `AmplitudeBuffers { s1, s2 }` for the
@@ -416,3 +425,11 @@ the design above, or settle what it left open:
   of terms without solving; the binding sizes the coefficients with it. Results are frozen
   dataclasses of read-only arrays; `default_n_max` raises `InvalidInputError` for x outside
   the accepted range.
+- **Other deviations from sections 2–7**, found in the final review: the `Dual` oracle checks 10
+  points against a κ-relative bound (64·κ·max(1, |m|/|m − 1|)·ε), not 10⁻¹² across the
+  reference grid (section 7); no dedicated test of the ψ/ratio switch point (the map covers it);
+  the accuracy page does not show MIEV0 as a baseline (section 2.4); one Wiscombe test case,
+  not all (section 7); 40 random reference cases, not about 50 (section 6.5); coefficient
+  records store at most 11 orders (section 6.6); the Rust `EfficiencyJacobian` fields are
+  `m_re` and `m_im` where Python says `m_real` and `m_imag` (align them before publishing the
+  crate).

@@ -176,7 +176,9 @@ Resolved from the lists above: the complex reciprocal (Smith; complex division, 
 `ln` near 1 wait for a consumer), Riccati–Bessel and log-derivative functions (inside
 `scatrs::mie`), the `allow_unvalidated` mechanism with the first accuracy map, the Mie Arb
 generator with a proven tail bound, the data-budget test, rustdoc in CI, the four doctests,
-the `dd/traits.rs` link, the docs-consistency extensions and `packaging` in the `test` extra.
+the `dd/traits.rs` link, the docs-consistency extensions (record counts, data size, version
+floors, Gauss–Legendre timings, the Wigner cost; the Wigner ranges are still open) and
+`packaging` in the `test` extra.
 
 Decisions (spec `docs/specs/2026-10-13-phase-1-mie-design.md`, section 12):
 - Truncation ⌈x + 6x^(1/3) + 3⌉ (f64) and ⌈x + 12x^(1/3) + 6⌉ (DoubleDouble), measured.
@@ -184,25 +186,32 @@ Decisions (spec `docs/specs/2026-10-13-phase-1-mie-design.md`, section 12):
 - Q_ext = Q_sca + Q_abs, with Q_abs from the per-term identity.
 - Tolerance C·(κ′ + cond)·2⁻⁵², enforced by `mie_reference.rs` and `mie_accuracy_map.rs`:
   cond componentwise in Re m and Im m for the real outputs (a normwise cond made their
-  tolerances vacuous at small Im m) and normwise for the holomorphic ones; κ′ = κ for the
-  values, κ·max(1, |m|/|m − 1|) for the efficiency Jacobian, 1 + |m|x for the coefficient and
-  amplitude derivatives; C = 16, 64, 256, 512. `DoubleDouble`, the map's stand-in for exact
-  values, is checked against Arb on every output, within 16 times the declared constants in
-  units of 2⁻¹⁰⁴.
+  tolerances vacuous at small Im m) and normwise for the holomorphic ones; κ′ = κ =
+  (1 + max(1, |m|)·x)·max(1, |m|/|m − 1|) for the values, κ·max(1, |m|/|m − 1|) for the
+  efficiency Jacobian, 1 + max(1, |m|)·x for the coefficient and amplitude derivatives;
+  C = 16, 128 (S₁, S₂), 64 (their derivatives), 256, 512. `DoubleDouble`, the map's stand-in
+  for exact values, is checked against Arb on every output, within 16 times the declared
+  constants in units of 2⁻¹⁰⁴.
+- The validated domain requires |m| ≥ 0.1: the final review found the declared accuracy false
+  below about 0.2, where no test sampled; the map now includes four indices with |m| < 1.
 - The Python layer bounds every output (`MAX_MIE_VALUES`) before allocating, because
   broadcasting makes outputs far larger than inputs; `scatrs::mie::n_terms` validates and
   sizes without solving.
 - The reference generator avoids Arb's Bessel functions and uses disk arithmetic.
 
 Phase 1b must include (besides spec section 9):
-- **Performance.** The Jacobian costs 1.8× the values at large x for complex m, and 2.0× for
-  real m (whose values take the cheaper real recurrence), at the limit of the 2× target:
-  profile the per-order derivative work (three complex reciprocals per order in the ratio
-  region), and consider merging the three `derivative_sums` passes and `value_sums` into one;
-  make the real-m case a gate of the instruction-count benchmark. The amplitudes cost about
-  4 ns per angle and term, bound by the latency of the πₙ recurrence, which divides twice per
-  angle and term: reciprocals per n shared across angles should help. Measure Mie on x86_64
-  with and without FMA (the f64 kernel uses no `mul_add`, but `DoubleDouble` maps do).
+- **Performance: the Jacobian misses its target for real m ≲ 1.4.** It costs 1.8× the values
+  at large x for complex m, but 2.0× at real m = 1.5, 2.1× at m = 1 and 2.2× at m = 0.75: the
+  real values take a cheaper recurrence and a shorter Dₙ(mx) recurrence, while the derivative
+  work stays the same. At x = 10⁴ that work splits roughly into 110 µs of per-order derivative
+  terms in the kernel and 150 µs of sums (the value sums and three derivative sums).
+  Fusing the four sums into one pass with shared weights did not reduce it (measured, results
+  bitwise identical), so the cost is in the arithmetic: derive the Im m sums from the Re m
+  pass (d/d(Im m) = i·d/dm), and trim the per-order terms. Make real m ≈ 0.75 a gate of the
+  instruction-count benchmark. The amplitudes cost about 4 ns per angle and term, bound by the
+  latency of the πₙ recurrence, which divides twice per angle and term: reciprocals per n
+  shared across angles should help. Measure Mie on x86_64 with and without FMA (the f64
+  kernel uses no `mul_add`, but `DoubleDouble` maps do).
 - **Derivative series tail bound.** Certify the series of derivatives, for example with
   Cauchy's estimate in m (a disk of m in the tail bound of Proposition 3).
 - **Larger certified cases.** Series records with |m|x > 6·10⁴ are high-precision (9 of 306);
@@ -220,12 +229,20 @@ Phase 1b must include (besides spec section 9):
   units of 2⁻⁵². Not truncation (300 more terms change nothing), not `DoubleDouble` sin/cos
   (within 0.1·2⁻¹⁰⁴ of Arb), and dS/dm at the same point has C = 0.01: find the cause in the
   angular recurrences or the x-derivative terms.
-- **Tighter tolerances near m = 1.** κ multiplies 1 + |m|x by |m|/|m − 1|, which leaves the
-  values' tolerance loose near m = 1 at large x (7·10⁻⁷ relative at m = 1.0001,
-  x = 1.6·10⁴, where the map's C is 10⁻⁵ to 10⁻⁸). An additive κ′ = (1 + |m|x) +
-  |m|/|m − 1| (squared for the Jacobian) passes the map with C ≤ 3.4 for the coefficients
-  and g, 41.7 for the Jacobian and 16.9 for the amplitudes (constant 128 for the margin);
-  check it against Arb before adopting it.
+- **Smaller |m|.** Below |m| = 0.1 the values of Q_abs and the Jacobian of nearly real m lose
+  accuracy because Im(m·Dₙ(mx)) is taken from a nearly real product (`md.im` in the kernel;
+  relative error 3·10⁻⁴ at n = 1 for m = 10⁻⁴(1 + i)). Im(m·Dₙ) = −Im(m·uₙ₊₁(mx)) exactly, since
+  m·(n + 1)/(mx) is real: with that, validate to a lower floor (the values still fail below
+  about |m| = 0.05).
+- **Freshness of the committed map.** Nothing checks that `mie-accuracy-map.json` matches the
+  kernel; compare its worst C per output in the Linux CI job.
+- **Tighter tolerances near m = 1.** κ multiplies 1 + max(1, |m|)·x by |m|/|m − 1|, which
+  leaves the values' tolerance loose near m = 1 at large x (5.7·10⁻⁷ relative at m = 1.0001,
+  x = 1.6·10⁴, where the map's C ranges from 4·10⁻¹¹ for Q_back to 9·10⁻⁵ for the
+  amplitudes). An additive κ′ = (1 + |m|x) + |m|/|m − 1| (squared for the Jacobian) passed
+  the map (before the indices below |m| = 1 were added) with C ≤ 3.4 for the coefficients and
+  g, 41.7 for the Jacobian and 16.9 for the amplitudes; check it against Arb before adopting
+  it.
 
 Recorded in review, lower priority:
 - **m = 1 with x ≥ 1.** The orders n ≤ ⌊x⌋ come from ψₙ and χₙ, so the coefficients are

@@ -66,7 +66,10 @@ bounds:
 - `f64` elementary functions such as `exp` and `sin`, including those inside `Dual<f64, N>`;
 - the double-double functions that start from an `f64` result (`ln`, `cbrt` and `atan2`), and
   those computed from them, such as `powf`, `asin` and `acos`;
-- `Dual<f64, N>` `sin` and `cos` on Apple targets.
+- `Dual<f64, N>` `sin` and `cos` on Apple targets;
+- the Mie outputs, which use `f64` `sin` and `cos`. The default number of terms uses `cbrt`, so
+  where $x + 6x^{1/3} + 3$ is an integer (at $x = 8$, for example) a platform whose `cbrt` is
+  not correctly rounded can use one term more or fewer.
 
 ## Scattering
 
@@ -80,9 +83,10 @@ functions to come.
   coefficients and amplitudes.
 - **Size parameter.** $x = 2\pi r/\lambda$, with $\lambda$ the wavelength in the medium.
   Derivatives are with respect to $x$; multiply by $2\pi/\lambda$ for the radius.
-- **Lengths.** Radii and wavelength may be in any unit, provided both use the same one. Cross
-  sections are returned in that unit squared (the efficiencies are cross sections divided by
-  $\pi r^2$).
+- **Lengths.** For the functions that will take radii and wavelengths (layered spheres, the
+  T-matrix): any unit, provided both use the same one, with cross sections in that unit
+  squared. The Mie functions take the size parameter and return efficiencies, cross sections
+  divided by $\pi r^2$.
 - **Coefficients.** $a_n$, $b_n$ for $n = 1, \ldots, N$ (Bohren & Huffman 1983, Eq. 4.53),
   stored at index $n - 1$.
 - **Amplitudes.** $S_1(\mu)$ and $S_2(\mu)$ at $\mu = \cos\Theta$ (Bohren & Huffman 1983,

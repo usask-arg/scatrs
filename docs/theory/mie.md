@@ -49,10 +49,11 @@ recurrences of Bohren & Huffman (Eq. 4.47).
 <!-- synced with scatrs/src/mie/mod.rs rustdoc -->
 
 `f64` keeps `ceil(x + 6 x**(1/3) + 3)` terms (`default_n_max`), and `DoubleDouble`
-`ceil(x + 12 x**(1/3) + 6)`. Wiscombe's $\lceil x + 4.05x^{1/3} + 2\rceil$ (MIEV0, and
-Bohren & Huffman's BHMIE) left truncation errors up to about $10^{-10}$ in $Q_\text{ext}$ and
-$10^{-6}$ in $Q_\text{back}$ against the Arb references; the constants above were chosen from
-the same measurements so that truncation errors are below rounding errors in each type.
+`ceil(x + 12 x**(1/3) + 6)`. Wiscombe's $\lceil x + 4.05x^{1/3} + 2\rceil$ (MIEV0's rule for
+$8 < x < 4200$; Bohren & Huffman's BHMIE uses $x + 4x^{1/3} + 2$), applied at every $x$,
+left truncation errors up to about $10^{-10}$ in $Q_\text{ext}$ and $10^{-6}$ in
+$Q_\text{back}$ against the Arb references; the constants above were chosen from the same
+measurements so that truncation errors are below rounding errors in each type.
 
 Beyond $n \approx x$ the terms decay like $\exp\bigl(-\tfrac23(2t)^{3/2}\bigr)$ with
 $n = x + t\,x^{1/3}$ — except at the whispering-gallery resonances of spheres with
@@ -196,7 +197,7 @@ errors of the two routes.
 <!-- synced with scatrs/src/mie/domain.rs rustdoc -->
 
 Inside the validated domain ($10^{-6} \le x \le 2\cdot10^4$, $0 < \mathrm{Re}\,m \le 10$,
-$0 \le \mathrm{Im}\,m \le 10$) every `f64` output is within
+$0 \le \mathrm{Im}\,m \le 10$, $\lvert m\rvert \ge 0.1$) every `f64` output is within
 
 $$C\,(\kappa' + \mathrm{cond})\,2^{-52}$$
 
@@ -220,17 +221,19 @@ the amplitudes, with $S_\text{rms} = x\sqrt{Q_\text{sca}}/2$). The two condition
 - **κ′**, an a-priori factor for what cond does not cover: the cancellation in the series (the
   alternating sum of $Q_\text{back}$ can be far smaller than its terms) and the separate losses
   of each order near $m = 1$, where $a_n, b_n \propto m - 1$. It is $\kappa(x, m) =
-  (1 + \lvert m\rvert x)\max(1, \lvert m\rvert/\lvert m - 1\rvert)$ for the values;
-  $\kappa\max(1, \lvert m\rvert/\lvert m - 1\rvert)$ for the efficiency Jacobian, whose
-  derivatives of $g$ lose a second such factor near $m = 1$; and $1 + \lvert m\rvert x$ for the
-  derivatives of the coefficients and amplitudes, which lose nothing near $m = 1$: $m - 1$
-  enters the $x$-derivatives as an exact factor of $m^2 - 1 = (m - 1)(m + 1)$, and the
-  $m$-derivatives have no factor that cancels.
+  (1 + \max(1, \lvert m\rvert)\,x)\max(1, \lvert m\rvert/\lvert m - 1\rvert)$ for the
+  values (the phase of the series grows like $\lvert m\rvert x$ inside the sphere and like
+  $x$ outside it, and the number of terms like $x$); $\kappa\max(1, \lvert m\rvert/\lvert
+  m - 1\rvert)$ for the efficiency Jacobian, whose derivatives of $g$ lose a second such factor
+  near $m = 1$; and $1 + \max(1, \lvert m\rvert)\,x$ for the derivatives of the coefficients
+  and amplitudes, which lose nothing near $m = 1$: $m - 1$ enters the $x$-derivatives as an
+  exact factor of $m^2 - 1 = (m - 1)(m + 1)$, and the $m$-derivatives have no factor that
+  cancels.
 
 The constants C are measured, with a margin of at least 4 over the worst case found at every
 Arb reference point and on a dense double-double grid: 16 for the coefficients, efficiencies
-and $g$; 64 for $S_1$, $S_2$ and their derivatives; 256 for the efficiency Jacobian; 512 for
-the coefficient derivatives. See {doc}`/validation/accuracy` for the map, and for why
+and $g$; 128 for $S_1$, $S_2$; 64 for their derivatives; 256 for the efficiency Jacobian; 512
+for the coefficient derivatives. See {doc}`/validation/accuracy` for the map, and for why
 neither term alone is enough.
 
 ## Reference values
@@ -315,6 +318,8 @@ runs:
   grows with $\lvert m\rvert$, to about 130 ns at $\lvert m\rvert = 10$;
 - at real $m$, about 25% less: the values take a real recurrence;
 - with the full $(x, \mathrm{Re}\,m, \mathrm{Im}\,m)$ Jacobian, the same derivative work in
-  both cases: 1.3 to 1.8 times the values at $m = 1.5 + 0.01i$, and 1.4 to 2.0 times at
-  $m = 1.5$ (2.0 from $x = 1000$ on, at the limit of the target of twice the values);
+  both cases: 1.2 to 1.8 times the values at $m = 1.5 + 0.01i$, and 1.4 to 2.0 times at
+  $m = 1.5$. The values cost less still at smaller real $m$, so for non-absorbing spheres with
+  $m \lesssim 1.4$ the Jacobian costs more than the target of twice the values: up to 2.2
+  times at $m = 0.75$, $x \ge 1000$;
 - amplitudes at 100 angles add about 4 ns per angle and term.

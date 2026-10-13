@@ -100,9 +100,13 @@ pub const MAX_REFRACTIVE_INDEX: f64 = 1e3;
 
 /// The default number of terms for `f64`: N = ⌈x + 6x^(1/3) + 3⌉.
 ///
-/// Wiscombe's ⌈x + 4.05x^(1/3) + 2⌉ (MIEV0) leaves truncation errors up to about 10⁻¹⁰ in
-/// Q_ext and 10⁻⁶ in Q_back (measured against Arb). This rule was chosen from the same
-/// measurements so that truncation errors are below rounding errors in `f64`.
+/// For x outside the accepted range the result is meaningless (0 for negative x, `usize::MAX`
+/// for NaN); [`n_terms`] checks the inputs too.
+///
+/// Wiscombe's ⌈x + 4.05x^(1/3) + 2⌉ (MIEV0's rule for 8 < x < 4200), applied at every x,
+/// leaves truncation errors up to about 10⁻¹⁰ in Q_ext and 10⁻⁶ in Q_back (measured against
+/// Arb). This rule was chosen from the same measurements so that truncation errors are below
+/// rounding errors in `f64`.
 pub fn default_n_max(x: f64) -> usize {
     terms(x, 6.0, 3.0)
 }

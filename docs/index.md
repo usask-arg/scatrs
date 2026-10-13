@@ -23,9 +23,10 @@ What exists today:
 - **The Python package `scatrs`.** {mod}`scatrs.mie`, {func}`scatrs.special.gauss_legendre`
   and {func}`scatrs.special.wigner_d`, and the exceptions in {mod}`scatrs.errors`. See
   {doc}`api`.
-- **The reference suite.** Values computed independently with Arb ball arithmetic, each with
-  a rigorous error bound. The tests check the accuracy of `DoubleDouble` and of the special
-  functions against them. See {doc}`validation/reference-suite`.
+- **The reference suite.** Values computed independently with Arb ball arithmetic: certified,
+  with a rigorous error bound, or labelled high-precision where a bound is not proved (some Mie
+  series). The tests check the accuracy of `DoubleDouble`, the special functions and the Mie
+  outputs against them. See {doc}`validation/reference-suite`.
 
 Every accuracy figure in these pages says what backs it. In short, the double-double basic
 operations have proved bounds; the bounds of the double-double functions, Gauss–Legendre and

@@ -146,6 +146,10 @@ def test_derivative_subsets():
     for bad in (None, 1, 1.0, b"x"):
         with pytest.raises(TypeError, match="derivatives must be a bool or a sequence"):
             mie.efficiencies(5.0, 1.5, derivatives=bad)
+    for bad in (None, 1, "no"):
+        with pytest.raises(TypeError, match="allow_unvalidated must be a bool"):
+            mie.efficiencies(5.0, 1.5, allow_unvalidated=bad)
+    mie.efficiencies(3e4, 1.5, allow_unvalidated=np.True_)
 
 
 @pytest.mark.parametrize("call", CALLS.values(), ids=CALLS.keys())
@@ -173,7 +177,10 @@ def test_errors_name_the_element(call):
         call(1.0, 1.5, n_max=2**40)
 
 
-@pytest.mark.parametrize(("x", "m"), [(3e4, 1.5), (1.0, 11.0), (1.0, 1.5 + 11j), (1.0, 2j)])
+@pytest.mark.parametrize(
+    ("x", "m"),
+    [(3e4, 1.5), (1.0, 11.0), (1.0, 1.5 + 11j), (1.0, 2j), (1.0, 0.05), (1.0, 0.01 + 0.01j)],
+)
 def test_outside_the_domain(x, m):
     with pytest.raises(OutsideValidatedDomainError):
         mie.efficiencies(x, m)

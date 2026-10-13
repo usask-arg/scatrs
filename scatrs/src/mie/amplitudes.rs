@@ -36,8 +36,8 @@ fn check_cosines<T: Real>(mu: &[T]) -> Result<()> {
         .find(|v| !(v.is_finite() && (-1.0..=1.0).contains(&v.approx_f64())))
     {
         Some(v) => Err(Error::InvalidInput(format!(
-            "a cosine of the scattering angle must be finite and in [-1, 1] (derivative parts \
-             included), got {}",
+            "a cosine of the scattering angle must be finite and in [-1, 1], and for dual \
+             numbers have finite derivative parts, got {}",
             v.approx_f64()
         ))),
         None => Ok(()),

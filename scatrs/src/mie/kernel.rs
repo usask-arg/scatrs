@@ -254,7 +254,8 @@ impl<T: Real> State<T> {
                 let dp = (u.scale(two) * inv_z - inv_z * inv_z).scale(int(k + 1)) - one_u2;
                 let d_plus = u.scale(weight) - z * one_u2; // D + zD′
                 let d_minus = d.scale(two) - d_plus; // D − zD′
-                let kk1: T = int(k * (k + 1));
+                // As a product of two `T`s: k(k + 1) overflows a 32-bit usize for k ≥ 65536.
+                let kk1: T = int::<T>(k) * int::<T>(k + 1);
                 let ida2 = inv_da * inv_da;
                 let idb2 = inv_db * inv_db;
                 self.da_dm.push(i1 * d_minus * inv_m2 * ida2);

@@ -17,4 +17,5 @@ All notable changes are documented here. The format follows
   to the size parameter and the refractive index; absorption without cancellation; a declared
   accuracy over a validated domain, enforced in CI against Arb references and a dense
   double-double accuracy map.
-- Arb reference data for Mie scattering, certified with a proven series-tail bound.
+- Arb reference data for Mie scattering, certified with a proven series-tail bound (the series
+  of derivatives and the largest |m|x cases are high-precision).

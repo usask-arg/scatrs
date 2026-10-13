@@ -30,9 +30,9 @@ use scatrs::scalar::DoubleDouble as Dd;
 /// About ten size parameters per decade.
 const MANTISSAS: [&str; 10] = ["1", "1.25", "1.6", "2", "2.5", "3.2", "4", "5", "6.4", "8"];
 
-/// (Re m, Im m): near 1, aerosol and water, high index, strong absorption and metal-like, at
-/// the edges of the domain.
-const INDICES: [(f64, f64); 24] = [
+/// (Re m, Im m): near 1, aerosol and water, high index, strong absorption and metal-like, below
+/// 1 (an air bubble in water, down to the domain's |m| = 0.1), at the edges of the domain.
+const INDICES: [(f64, f64); 28] = [
     (1.0001, 0.0),
     (1.001, 1e-6),
     (1.01, 0.0),
@@ -57,6 +57,10 @@ const INDICES: [(f64, f64); 24] = [
     (0.5, 2.0),
     (0.2, 3.0),
     (0.05, 4.0),
+    (0.75, 0.0),
+    (0.5, 1e-4),
+    (0.3, 0.6),
+    (0.1, 0.0),
 ];
 
 /// The columns of the map.

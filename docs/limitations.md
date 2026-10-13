@@ -14,6 +14,10 @@ it, in `docs/plans/phase-0-followups.md`.
 - **Tested against Arb:** the bounds of the double-double elementary functions, of
   Gauss–Legendre and of the Wigner d-functions. They hold on every reference value, but they
   are not proved for all inputs, and the Wigner bounds are measured, not derived.
+- **Measured and enforced:** the Mie tolerances, C·(κ′ + cond)·2⁻⁵² with measured constants,
+  checked in CI against the Arb references (certified, or high-precision for the series of
+  derivatives and the largest |m|x) and a dense double-double map. See
+  {doc}`validation/accuracy`.
 - **Measured:** worst-case errors and timings quoted from test output, and from probes run
   during code review that are not in the repository (marked as such).
 
@@ -41,7 +45,7 @@ it, in `docs/plans/phase-0-followups.md`.
   returns. Compute a rule once and reuse it.
 - **Planned speed-ups.** Two tunings of the present method measured about 5× faster together
   during code review (not committed). The real fix is an $O(n)$ method (Bogaert 2014). Faster
-  rules are a priority for phase 1, and the cap will be raised once the $O(n)$ method lands.
+  rules are a priority for phase 1b, and the cap will be raised once the $O(n)$ method lands.
 
 ## Builds without FMA
 
@@ -131,7 +135,8 @@ the same treatment when a kernel needs them.
   small window to meet one. Pass a larger `n_max` to include higher orders. See
   {doc}`theory/mie`.
 - **Validated domain.** $10^{-6} \le x \le 2\cdot10^4$, $0 < \operatorname{Re} m \le 10$,
-  $0 \le \operatorname{Im} m \le 10$. Outside it, calls raise `OutsideValidatedDomain`
+  $0 \le \operatorname{Im} m \le 10$, $\lvert m\rvert \ge 0.1$ (below 0.1, $Q_\text{abs}$ and
+  the Jacobian of nearly real $m$ lose accuracy). Outside it, calls raise `OutsideValidatedDomain`
   unless `allow_unvalidated` is set. Accepted inputs extend to $x \in [10^{-30}, 10^6]$ and
   $\lvert m\rvert \in [10^{-6}, 10^3]$, where the outputs are finite but their accuracy is not
   validated. The number of terms is at most `MAX_MIE_ORDER` = $2^{20}$.
@@ -144,7 +149,11 @@ the same treatment when a kernel needs them.
   accurate relative to $Q_\text{ext}$, not to $Q_\text{abs}$ itself: near a resonance with
   $k = 10^{-8}$ their relative error reached $4\cdot10^{-9}$.
 - **Cost.** $O(x + \lvert m\rvert x)$ per sphere; the Python functions loop over the spheres
-  on one thread. Parallel batches arrive in phase 1b.
+  on one thread. Parallel batches arrive in phase 1b. The largest accepted $\lvert m\rvert x$
+  take seconds per sphere, and a call cannot be interrupted.
+- **m = 1 exactly.** The coefficients vanish, but for $x \ge 1$ the lowest orders are computed
+  as rounding noise rather than exact zeros, so $g$ and its derivatives are meaningless there
+  (the efficiencies are at rounding level).
 - **Series derivatives in the reference suite** have no tail bound yet, so they are labelled
   high-precision.
 

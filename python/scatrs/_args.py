@@ -58,6 +58,19 @@ def size(value: SupportsIndex, name: str) -> int:
     return v
 
 
+def flag(value: bool, name: str) -> bool:
+    """``value`` as a bool: Python and numpy bools only.
+
+    Raises
+    ------
+    TypeError
+        For anything else, such as ``0``, ``"no"`` or ``None``.
+    """
+    if not isinstance(value, _BOOLS):
+        raise TypeError(f"{name} must be a bool, not {type(value).__name__}")
+    return bool(value)
+
+
 def int32(value: SupportsIndex, name: str) -> int:
     """An integer for a Rust ``i32`` parameter.
 

@@ -93,6 +93,9 @@ fn the_validated_domain_is_enforced_unless_allowed() {
         (1.0, c(10.5, 0.0)),
         (1.0, c(1.5, 10.5)),
         (1.0, c(0.0, 2.0)),
+        // Below |m| = 0.1, where Q_abs and the Jacobian of nearly real m lose accuracy.
+        (1.0, c(0.05, 0.0)),
+        (1.0, c(0.01, 0.01)),
     ] {
         assert!(!VALIDATED_DOMAIN.contains(x, m));
         assert!(
@@ -111,8 +114,9 @@ fn the_validated_domain_is_enforced_unless_allowed() {
     // The corners are inside.
     for (x, m) in [
         (1e-6, c(10.0, 10.0)),
-        (2e4, c(1e-3, 0.0)),
+        (2e4, c(0.1, 0.0)),
         (1.0, c(1.0, 0.0)),
+        (1.0, c(0.06, 0.08)),
     ] {
         assert!(mie.compute(x, m, &strict).is_ok(), "x = {x}, m = {m}");
     }
@@ -429,13 +433,35 @@ fn closed_form_derivatives_agree_with_dual() {
     }
 }
 
+/// The corners of the accepted inputs that the property test below skips for their cost: every
+/// output finite.
+#[test]
+fn accepted_corners_are_finite() {
+    let lenient = MieOptions::new().with_allow_unvalidated(true);
+    let mut mie = Mie::<f64>::new();
+    for (x, m, opts) in [
+        (1e6, c(1.5, 0.0), lenient),
+        (1e6, c(1e-6, 0.0), lenient),
+        (1e-30, c(999.0, 1.0), lenient.with_n_max(MAX_MIE_ORDER)),
+        (1e-30, c(1e-6, 0.0), lenient.with_n_max(MAX_MIE_ORDER)),
+    ] {
+        let s = mie.compute_with_derivatives(x, m, &opts).unwrap();
+        let j = s.efficiencies_jacobian().unwrap();
+        for e in [s.efficiencies(), j.x, j.m_re, j.m_im] {
+            for k in 0..5 {
+                assert!(q_of(&e, k).is_finite(), "x = {x:e}, m = {m}: Q{k}");
+            }
+        }
+    }
+}
+
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(256))]
 
     /// Inside the domain: Q_abs ≥ 0 (exactly 0 for real m), Q_sca ≤ Q_ext, |g| ≤ 1, and
     /// |aₙ|² ≤ Re aₙ up to rounding (passive media).
     #[test]
-    fn physical_bounds(log_x in -6.0f64..4.3, re in 0.05f64..10.0, log_im in -10.0f64..1.0, real in proptest::bool::ANY) {
+    fn physical_bounds(log_x in -6.0f64..4.3, re in 0.1f64..10.0, log_im in -10.0f64..1.0, real in proptest::bool::ANY) {
         let x = 10f64.powf(log_x).min(2e4);
         let m = c(re, if real { 0.0 } else { 10f64.powf(log_im) });
         let mut mie = Mie::<f64>::new();
@@ -455,8 +481,9 @@ proptest! {
         }
     }
 
-    /// Over the whole accepted input range, outside the domain too: every output finite. A third
-    /// of the cases have real m (the real recurrence for Dₙ) and a third purely imaginary m.
+    /// Over the accepted inputs, outside the domain too, up to x = 10⁵ and |m|x = 10⁶ to bound the
+    /// cost (`accepted_corners_are_finite` covers the rest): every output finite. A third of the
+    /// cases have real m (the real recurrence for Dₙ) and a third purely imaginary m.
     #[test]
     fn no_nan_or_infinity_over_the_supported_inputs(
         log_x in -30.0f64..5.0,

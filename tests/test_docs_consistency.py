@@ -46,6 +46,9 @@ SCALARS = "docs/theory/scalar-types.md"
 LIMITATIONS = "docs/limitations.md"
 WIGNER_EXAMPLE = "docs/examples/wigner-d.md"
 HG_EXAMPLE = "docs/examples/henyey-greenstein.md"
+REFERENCE_SUITE = "docs/validation/reference-suite.md"
+INSTALLATION = "docs/installation.md"
+CONTRIBUTING = "CONTRIBUTING.md"
 
 CONTRACTS = [
     # (what, normalised text, files that must state it)
@@ -64,6 +67,9 @@ CONTRACTS = [
     ("Dual<f64> derivative accuracy", "5.1u", [DUAL_RS, SCALARS]),
     # The executed examples check against the same contract.
     ("Wigner f64 bound in the examples", "16(l+1)eps", [WIGNER_EXAMPLE, HG_EXAMPLE]),
+    ("MSRV", "1.85", [INSTALLATION, CONTRIBUTING]),
+    ("Python floor", "3.11", [INSTALLATION, CONTRIBUTING]),
+    ("numpy floor", "1.26", [INSTALLATION, CONTRIBUTING]),
 ]
 
 
@@ -78,6 +84,28 @@ def test_limits_in_code_match_the_documented_values() -> None:
     assert re.search(r"pub const MAX_GAUSS_LEGENDRE_POINTS: usize = 1 << 17;", gl)
     bindings = (ROOT / BINDINGS_RS).read_text(encoding="utf-8")
     assert re.search(r"pub const MAX_WIGNER_D_VALUES: usize = 1 << 28;", bindings)
+
+
+def test_version_floors_match_the_build_files() -> None:
+    cargo = (ROOT / "Cargo.toml").read_text(encoding="utf-8")
+    assert 'rust-version = "1.85"' in cargo
+    pyproject = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    assert 'requires-python = ">=3.11"' in pyproject
+    assert '"numpy>=1.26"' in pyproject
+
+
+def test_reference_suite_page_matches_the_manifest() -> None:
+    import json
+
+    manifest = json.loads((ROOT / "reference/data/manifest.json").read_text(encoding="utf-8"))
+    page = (ROOT / REFERENCE_SUITE).read_text(encoding="utf-8")
+    for name, entry in manifest["files"].items():
+        row = re.search(rf"^\| `{re.escape(name)}` \| (\d+) \|", page, re.MULTILINE)
+        assert row, f"{name} is missing from the table"
+        assert int(row.group(1)) == entry["records"], name
+    total = sum(p.stat().st_size for p in (ROOT / "reference/data").glob("*.jsonl")) / 1e6
+    stated = re.search(r"The committed data take about ([\d.]+) MB", page)
+    assert stated and abs(float(stated.group(1)) - total) <= 0.1, (stated, total)
 
 
 def test_synced_sections_name_existing_files() -> None:

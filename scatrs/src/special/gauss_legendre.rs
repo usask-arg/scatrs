@@ -161,6 +161,18 @@ impl Recurrence {
 /// 32 ms at n = 1000, 0.72 s at n = 5000 and 11 s at n = 20 000. The call cannot be
 /// interrupted.
 ///
+/// # Examples
+///
+/// ```
+/// use scatrs::special::gauss_legendre;
+///
+/// // The 3-point rule integrates x⁴ exactly: ∫ x⁴ dx over [-1, 1] = 2/5.
+/// let rule = gauss_legendre::<f64>(3)?;
+/// let integral: f64 = rule.nodes.iter().zip(&rule.weights).map(|(x, w)| w * x.powi(4)).sum();
+/// assert!((integral - 0.4).abs() < 1e-15);
+/// # Ok::<(), scatrs::Error>(())
+/// ```
+///
 /// # Errors
 ///
 /// * [`Error::InvalidInput`] if `n == 0` or `n > MAX_GAUSS_LEGENDRE_POINTS`.

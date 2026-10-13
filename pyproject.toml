@@ -23,7 +23,7 @@ classifiers = [
 
 [project.optional-dependencies]
 xarray = ["xarray>=2024.7"]
-test = ["pytest>=8"]
+test = ["pytest>=8", "packaging>=24"]
 docs = [
     "sphinx>=9",
     "furo>=2024.8",

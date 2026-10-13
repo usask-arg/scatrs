@@ -232,6 +232,19 @@ mod traits;
 ///   eˣ − 1 = −½);
 /// * `ln x` for `powf` with a varying exponent;
 /// * for `DoubleDouble`, whose functions dominate, the second function is a second series.
+///
+/// # Examples
+///
+/// ```
+/// use num_traits::Float;
+/// use scatrs::scalar::Dual;
+///
+/// // d/dx (x sin x) = sin x + x cos x, at x = 2.
+/// let x = Dual::<f64, 1>::new(2.0, [1.0]);
+/// let y = x * x.sin();
+/// assert_eq!(y.re(), 2.0 * 2f64.sin());
+/// assert!((y.eps()[0] - (2f64.sin() + 2.0 * 2f64.cos())).abs() < 1e-15);
+/// ```
 #[derive(Clone, Copy, Debug)]
 pub struct Dual<T, const N: usize> {
     re: T,

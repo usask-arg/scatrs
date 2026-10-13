@@ -131,6 +131,18 @@ const GENERAL_DIFFERENCE_FROM: f64 = 0.9;
 /// l = 2000, per degree: in `f64` 2.6 ns for (0, 0), 3.1 ns for (2, ±2) and 3.7 ns for (0, 2)
 /// and other m ≠ ±n; in `DoubleDouble` 30, 38 and 45 ns.
 ///
+/// # Examples
+///
+/// ```
+/// use scatrs::special::wigner_d;
+///
+/// // d^l_{00} is the Legendre polynomial: P₂(0.5) = (3·0.25 − 1)/2 = −0.125.
+/// let mut d = [0.0; 3];
+/// wigner_d(0, 0, 0.5, &mut d)?;
+/// assert_eq!(d, [1.0, 0.5, -0.125]);
+/// # Ok::<(), scatrs::Error>(())
+/// ```
+///
 /// # Errors
 ///
 /// [`Error::InvalidInput`] if `x` (for a `Dual`, its value) is NaN or outside [−1, 1], even when

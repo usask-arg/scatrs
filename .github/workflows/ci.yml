@@ -47,6 +47,10 @@ jobs:
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - name: Build the libraries and the examples (scatrs/examples holds documented code)
         run: cargo build --workspace --lib --examples --locked
+      - name: Rustdoc, private items included (warnings are errors)
+        env:
+          RUSTDOCFLAGS: "-D warnings"
+        run: cargo doc -p scatrs --no-deps --document-private-items --locked
       - name: Check the 32-bit and big-endian wheel targets
         run: |
           for target in i686-unknown-linux-gnu armv7-unknown-linux-gnueabihf \

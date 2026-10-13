@@ -74,6 +74,19 @@ pub use parse::ParseDoubleDoubleError;
 /// Parsing: [`from_decimal_str`](Self::from_decimal_str) and `Num::from_str_radix` (radix 10)
 /// ignore surrounding whitespace; `str::parse` (`FromStr`) does not, accepting exactly the
 /// strings that `f64` accepts.
+///
+/// # Examples
+///
+/// ```
+/// use scatrs::scalar::DoubleDouble;
+///
+/// // 0.1 + 0.2 is 0.3 to about 32 digits, where f64 misses in the 17th.
+/// let x = "0.1".parse::<DoubleDouble>()? + "0.2".parse::<DoubleDouble>()?;
+/// let error = (x - "0.3".parse::<DoubleDouble>()?).abs();
+/// assert!(error.hi() < 1e-32);
+/// assert_ne!(0.1 + 0.2, 0.3);
+/// # Ok::<(), scatrs::scalar::ParseDoubleDoubleError>(())
+/// ```
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct DoubleDouble {
     hi: f64,

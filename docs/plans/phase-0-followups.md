@@ -97,5 +97,12 @@ These items came out of the Phase 0 reviews and were deliberately deferred. Each
 - **Cross-platform CI is essential.** The Task 8 review found a Linux-only failure: macOS passed only because Apple's `pow` happened to cancel a test-reference error. Run the full test suite on Linux and Windows in CI before trusting libm-dependent bounds (Task 13).
 - **`Dual<Dd>::log` cost.** The value must come bitwise from `T::log`, so it computes DD `ln` twice, about 2× DD `log`.
 
+## Wigner d-functions (Phase 1)
+- **Method change from the plan** (controller-approved in Task 10). The planned MTL B.22 three-term recurrence has error ∝ l² near the poles (16–266·(l+1)·eps measured). So for x ≥ 0.9, or m = ±n on the |d| → 1 side, Reinsch difference forms are used instead. Everywhere else the results are bitwise equal to the plan.
+- **Reciprocal speed-up** in the three-term step: 1.42× for f64 (3.75 → 2.63 ns per l), but as a generic change it slows DD by 13–26% and changes the bits. Defer it, perhaps behind a per-type hint.
+- **Batched API for the Greek projection.** Evaluate many nodes at once, sharing the per-l coefficients, so the latency-bound recurrence becomes throughput-bound. This is likely a bigger gain than per-(m, n, L) coefficient tables.
+- **Python bindings should bound `l_max`.** On systems that overcommit memory, a huge `l_max` can get the process killed instead of returning an error.
+- **The manifest `precision_bits` understates generator precision** for `wigner_d`: 800 is the starting value, and it adapts up to 2¹⁶. Consider recording per-record precision.
+
 ## Platform notes
 - On aarch64, `f64::max`/`f64::min` return NaN for a signaling NaN, contrary to Rust's documentation. `DoubleDouble` follows the documented rule. No DD operation produces a signaling NaN.

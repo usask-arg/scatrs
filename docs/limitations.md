@@ -117,7 +117,9 @@ Arb, before the Mie kernels.
   {ref}`dual-zero-tests`.
 - **libm accuracy.** The tests of `f64` derivatives assume each libm call is within 2 ulps.
   That has been measured only on macOS (arm64); CI also runs these tests with glibc and the
-  Windows C runtime.
+  Windows C runtime, and weekly on Intel macOS. There Apple's `sin` and `cos` reach 2.4 units
+  of $2^{-53}$ (1.1 on arm64, 1.0 with glibc on x86_64), so the test of the values `Dual`
+  takes from them allows 3 units instead of 2 on that target only.
 - **Vectorisation.** A loop over many `Dual`s is not vectorised across elements.
 
 ## Python bindings

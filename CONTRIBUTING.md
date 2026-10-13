@@ -55,8 +55,8 @@ cargo test -p scatrs --release -- --ignored
   request and push to `main`; a tag `v*` also publishes them (see below).
 - `.github/workflows/docs.yml`: publishes the documentation from `main` to GitHub Pages.
 - `.github/workflows/scheduled.yml`, every Monday: the `#[ignore]` tests on Linux, macOS and
-  Windows, and a regeneration of every reference file on Linux and macOS that fails on any
-  difference from the committed data.
+  Windows, the Rust tests on Intel macOS, and a regeneration of every reference file on Linux
+  and macOS that fails on any difference from the committed data.
 
 ## Reference data
 

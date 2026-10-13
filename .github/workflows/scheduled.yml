@@ -49,6 +49,20 @@ jobs:
           name: regenerated-reference-data-${{ matrix.os }}
           path: reference/data
 
+  intel-macos:
+    name: Rust tests (Intel macOS)
+    # Not run per change, to keep its cost down; Apple's x86_64 libm is the least accurate the
+    # tests have met (see LIBM_SIN_COS_U in scatrs/tests/dual_functions.rs).
+    runs-on: macos-15-intel
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Run the tests
+        run: cargo test --workspace --locked
+
   ignored-tests:
     name: Slow Rust tests (${{ matrix.os }})
     strategy:

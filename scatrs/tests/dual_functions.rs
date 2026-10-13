@@ -3142,6 +3142,20 @@ fn mul_add_and_abs_sub_follow_the_arithmetic_rules_with_nan() {
     assert_eq!(x.abs_sub(y).eps(), &[0.0; 3]);
 }
 
+/// The accuracy this test assumes of the platform's `f64` sine and cosine, in u = 2⁻⁵³ relative:
+/// 2u, about an ulp of the correctly rounded value. Measured worst over the test's 4006 points:
+/// 1.08u on macOS arm64 and 0.98u with glibc on x86_64.
+#[cfg(not(all(target_vendor = "apple", target_arch = "x86_64")))]
+const LIBM_SIN_COS_U: f64 = 2.0;
+
+/// Loosened to 3u on Intel macOS (written justification for a looser tolerance): Apple's x86_64
+/// libm reaches 2.40u at x = −8.38e5, and 9 of the 4006 points exceed 2u (measured in review,
+/// and confirmed under Rosetta 2). This bound tests the platform's libm, not scatrs: `Dual` sine
+/// and cosine take their values from the platform's `sin_cos` by design, and the bitwise checks
+/// of that stay exact.
+#[cfg(all(target_vendor = "apple", target_arch = "x86_64"))]
+const LIBM_SIN_COS_U: f64 = 3.0;
+
 /// `f64` sine and cosine of one argument, in a function of their own as in any kernel computing
 /// both (fused into one `sincos` call where the target has one).
 #[inline(never)]
@@ -3198,6 +3212,7 @@ fn sin_and_cos_values_are_those_of_sin_cos_and_of_complex_f64() {
         let x = r.pow2(-30, 30);
         r.sign(x)
     }));
+    let (mut worst, mut worst_x) = (0.0_f64, 0.0_f64);
     for &x in &points {
         let (s, c) = sin_cos_f64(x);
         let (ds, dc) = (dual_sin(F1::new(x, [1.0])), dual_cos(F1::new(x, [1.0])));
@@ -3211,13 +3226,17 @@ fn sin_and_cos_values_are_those_of_sin_cos_and_of_complex_f64() {
         );
         let (a, b) = F1::new(x, [1.0]).sin_cos();
         assert!(same(a.re(), s) && same(b.re(), c), "sin_cos({x:e})");
-        // Within an ulp of the correctly rounded values.
+        // The platform's accuracy, against double-double values (see LIBM_SIN_COS_U).
         let xd = Dd::from_f64(x);
-        assert!(
-            ulps(s, xd.sin()) <= 2.0 && ulps(c, xd.cos()) <= 2.0,
-            "{x:e}"
-        );
+        let e = ulps(s, xd.sin()).max(ulps(c, xd.cos()));
+        if e > worst {
+            (worst, worst_x) = (e, x);
+        }
+        assert!(e <= LIBM_SIN_COS_U, "sin/cos({x:e}): {e:.2} u");
     }
+    eprintln!(
+        "f64 sin_cos: worst error {worst:.2} u at x = {worst_x:e} (bound {LIBM_SIN_COS_U} u)"
+    );
     // Complex<Dual>::exp and the polar pattern r·(cos θ, sin θ) give Complex<f64>'s values bit
     // for bit, with derivatives in both directions.
     for (i, &t) in points.iter().enumerate() {

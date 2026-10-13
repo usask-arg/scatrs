@@ -506,27 +506,42 @@ fn constant_dual_at_the_poles() {
     }
 }
 
+/// The derivative of d^l_mn at the pole x0 = ±1 from a one-sided second-order difference in
+/// double-double, ±(3f(x0) − 4f(x0 ∓ h) + f(x0 ∓ 2h))/(2h) with h = 2⁻⁴⁰. For l ≤ 30 its
+/// truncation error h²|f‴|/3 ≤ 2⁻⁸⁰·l⁶/45 (Markov's inequality, |d| ≤ 1) and its rounding error
+/// 8(l + 1)·2⁻⁹⁷/(2h) are both below 2⁻⁴⁹.
+fn one_sided_derivative(m: i32, n: i32, l: usize, x0: f64) -> f64 {
+    let h = 2f64.powi(-40);
+    let at = |x: f64| wigner_d_vec(m, n, l, Dd::from_f64(x)).unwrap()[l];
+    let inward = -x0.signum();
+    let (f0, f1, f2) = (at(x0), at(x0 + inward * h), at(x0 + 2.0 * inward * h));
+    ((f0 * 3.0 - f1 * 4.0 + f2) / (2.0 * h) * -inward).hi()
+}
+
 /// At x = ±1 with a nonzero derivative in x: d^l_mn contains sin^a(θ/2) = ((1 − x)/2)^(a/2),
-/// a = |m − n|, and cos^b(θ/2) = ((1 + x)/2)^(b/2), b = |m + n|. The derivative at x = 1 is
-/// infinite for a = 1, so it must not be finite there; for a = 0 it is finite and computed.
-/// (For a ≥ 2 the documented result is NaN.) The same holds at x = −1 with b.
+/// a = |m − n|, and cos^b(θ/2) = ((1 + x)/2)^(b/2), b = |m + n|. At x = 1 the derivative is
+/// infinite for a = 1, so it must not be finite; for a = 0 and a = 2 it is finite and computed;
+/// for a ≥ 3 it is zero. The same holds at x = −1 with b.
 #[test]
 fn derivative_at_the_poles() {
     let l_max = 30;
+    let mut worst = 0.0_f64;
     for x0 in [1.0, -1.0_f64] {
         let [x] = Dual::<f64, 1>::variables([x0]);
+        let [x_dd] = Dual::<Dd, 1>::variables([Dd::from_f64(x0)]);
         for m in -4..=4_i32 {
             for n in -4..=4_i32 {
                 let d = wigner_d_vec(m, n, l_max, x).unwrap();
+                let d_dd = wigner_d_vec(m, n, l_max, x_dd).unwrap();
                 let power = if x0 > 0.0 { m - n } else { m + n }.unsigned_abs();
                 for l in l_min(m, n)..=l_max {
-                    let dx = d[l].eps()[0];
+                    let (dx, dx_dd) = (d[l].eps()[0], d_dd[l].eps()[0]);
                     let case = format!("m={m} n={n} x={x0} l={l}: derivative {dx}");
+                    let lf = l as f64;
                     match power {
                         0 => {
                             // d^l_mm(θ) = 1 − (l(l+1) − m²)θ²/4 + O(θ⁴) and θ² ≈ 2(1 − x) at
                             // x = 1; at x = −1, d^l_m(−m) = (−1)^(l+m) d^l_mm(π − θ).
-                            let lf = l as f64;
                             let slope = (lf * (lf + 1.0) - f64::from(m * m)) / 2.0;
                             let expected = if x0 > 0.0 {
                                 slope
@@ -537,12 +552,37 @@ fn derivative_at_the_poles() {
                             };
                             let tol = 16.0 * (lf + 1.0) * lf * EPS * slope.abs().max(1.0);
                             assert!((dx - expected).abs() <= tol, "{case}, expected {expected}");
+                            let tol_dd = (lf + 1.0) * lf * dd_unit() * slope.abs().max(1.0);
+                            let err_dd = (dx_dd - Dd::from_f64(expected)).abs().hi();
+                            assert!(err_dd <= tol_dd, "{case}: double-double {dx_dd:?}");
                         }
-                        1 => assert!(!dx.is_finite(), "{case}"),
-                        _ => assert!(dx.is_nan(), "{case}"),
+                        1 => {
+                            assert!(!dx.is_finite(), "{case}");
+                            assert!(!dx_dd.hi().is_finite(), "{case}: double-double");
+                        }
+                        2 => {
+                            // Both values are +0 or −0, but the derivative is finite.
+                            assert_eq!(d[l].re(), 0.0, "{case}");
+                            let expected = one_sided_derivative(m, n, l, x0);
+                            let scale = expected.abs().max(1.0);
+                            // The two error bounds of `one_sided_derivative`.
+                            let reference = 2f64.powi(-48);
+                            let tol = 16.0 * (lf + 1.0) * lf * EPS * scale + reference;
+                            let err = (dx - expected).abs();
+                            worst = worst.max(err / tol);
+                            assert!(err <= tol, "{case}, expected {expected}");
+                            let tol_dd = (lf + 1.0) * lf * dd_unit() * scale + reference;
+                            let err_dd = (dx_dd.hi() - expected).abs();
+                            assert!(err_dd <= tol_dd, "{case}: double-double {dx_dd:?}");
+                        }
+                        _ => {
+                            assert_eq!(dx, 0.0, "{case}");
+                            assert_eq!(dx_dd, Dd::ZERO, "{case}: double-double");
+                        }
                     }
                 }
             }
         }
     }
+    eprintln!("wigner_d derivative at the poles, a = 2: worst {worst:.4} of the f64 bound");
 }

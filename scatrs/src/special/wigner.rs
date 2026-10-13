@@ -86,15 +86,14 @@ const GENERAL_DIFFERENCE_FROM: f64 = 0.9;
 /// # Derivatives
 ///
 /// With `x` a [`Dual`](crate::scalar::Dual) the derivatives are those of the computed values,
-/// and the values are bitwise those of the underlying type. For |x| < 1 the derivatives are
-/// within (l + 1)·l times the value bound above, relative to their size and divided by
-/// 1 − x² (measured: at most 0.02 of that). At x = ±1 a constant `x` (zero derivatives) gives
-/// zero derivatives. A nonzero derivative of `x` at x = 1 gives, with a = |m − n|:
+/// and the values are bitwise those of the underlying type. For |x| < 1 the derivatives d′ are
+/// within (l + 1)·l times the value bound above, times max(|d′|, 1) and divided by 1 − x²
+/// (measured: at most 0.02 of that). At x = ±1 a constant `x` (zero derivatives) gives zero
+/// derivatives. A nonzero derivative of `x` at x = 1 gives, with a = |m − n|:
 ///
-/// * a = 0: the exact derivative (finite);
+/// * a = 0 and a = 2: the exact derivative (finite; within 0.004 of the same bound at a = 2);
 /// * a = 1: ±∞ or NaN, where the true derivative is infinite (sin(θ/2) = √((1 − x)/2));
-/// * a ≥ 2: NaN, although the true derivative is finite: the start value is a product of `a`
-///   factors sin(θ/2), each zero with an infinite derivative.
+/// * a ≥ 3: zero, the exact derivative.
 ///
 /// The same holds at x = −1 with b = |m + n| in place of a.
 ///
@@ -379,6 +378,23 @@ impl<T: Real> Step<T> for GeneralDifference<T> {
 fn start_value<T: Real>(a: u64, b: u64, x: T) -> (T, i64) {
     let half_sin = ((T::one() - x) * 0.5).sqrt();
     let half_cos = ((T::one() + x) * 0.5).sqrt();
+    if a >= 2 && half_sin == T::zero() {
+        // x = 1 (x = −1 is reflected onto it). The value is +0, as from the product below, but
+        // sin^a(θ/2) = ((1 − x)/2)^(a/2) has a finite derivative there, which a product of `a`
+        // factors √((1 − x)/2), each zero with an infinite derivative, would make NaN for a
+        // `Dual`. For a = 2 the start value is √C(b + 2, 2)·(1 − x)/2·cos^b(θ/2) exactly (the
+        // binomial in T, which neither overflows nor loses double-double precision); for a ≥ 3
+        // its first derivative is zero.
+        if a > 2 {
+            return (T::zero(), 0);
+        }
+        let (b1, b2) = (b as f64 + 1.0, b as f64 + 2.0);
+        let mut v = (T::one() - x) * 0.5 * (T::from_f64(b1) * b2 * 0.5).sqrt();
+        for _ in 0..b {
+            v *= half_cos;
+        }
+        return (v, 0);
+    }
     let (low, high) = (pow2(-SCALED_RANGE_BITS), pow2(SCALED_RANGE_BITS));
     let mut v = T::one();
     let mut e = 0;

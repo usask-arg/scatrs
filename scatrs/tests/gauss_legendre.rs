@@ -3,6 +3,7 @@
 mod common;
 
 use std::f64::consts::PI;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use common::{Record, load};
 use scatrs::Error;
@@ -31,9 +32,14 @@ fn indices(r: &Record) -> Vec<usize> {
 const SLOW_N: usize = 10_000;
 
 /// The reference records whose rules have at most `SLOW_N` points, or more if `slow`.
+///
+/// Records whose case ends in `,roots` are skipped: they hold single roots of the largest
+/// accepted rule, which takes minutes to compute whole, and a unit test in
+/// `src/special/gauss_legendre.rs` checks them root by root.
 fn records(slow: bool) -> Vec<Record> {
     load("gauss_legendre.jsonl")
         .into_iter()
+        .filter(|r| !r.case.ends_with(",roots"))
         .filter(|r| (r.input_i64("n") as usize > SLOW_N) == slow)
         .collect()
 }
@@ -202,6 +208,26 @@ fn every_small_rule_converges_to_the_right_roots() {
     for n in 1..=300 {
         check_structure(n, &gauss_legendre::<f64>(n).unwrap());
     }
+}
+
+#[test]
+#[ignore = "every rule up to 3000 points: about 6 CPU-minutes, spread over all threads"]
+fn every_rule_up_to_3000_points_converges_to_the_right_roots() {
+    let next = AtomicUsize::new(1);
+    let threads = std::thread::available_parallelism().map_or(4, |t| t.get());
+    std::thread::scope(|s| {
+        for _ in 0..threads {
+            s.spawn(|| {
+                loop {
+                    let n = next.fetch_add(1, Ordering::Relaxed);
+                    if n > 3000 {
+                        break;
+                    }
+                    check_structure(n, &gauss_legendre::<f64>(n).unwrap());
+                }
+            });
+        }
+    });
 }
 
 #[test]

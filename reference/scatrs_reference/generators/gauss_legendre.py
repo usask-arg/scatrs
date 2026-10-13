@@ -4,6 +4,10 @@ Records ``n=<n>`` hold the whole rule, nodes in ascending order. Records ``n=<n>
 check large rules cheaply: they hold only the nodes at the ascending indices ``indices``,
 the ``EDGE`` nodes nearest to each of ±1 and the ``MIDDLE`` nodes nearest to 0 (symmetric
 about the middle, so the stored nodes still ascend and are symmetric).
+
+The record ``n=<CAP>,roots`` has the same layout for the largest rule scatrs accepts. That
+whole rule takes minutes, so the Rust integration tests skip it; a unit test in
+``scatrs/src/special/gauss_legendre.rs`` computes just these roots instead.
 """
 
 from __future__ import annotations
@@ -15,6 +19,8 @@ from scatrs_reference.records import record
 PRECISION_BITS = 300
 NS = (1, 2, 3, 4, 5, 8, 16, 33, 64, 100, 128, 257, 500, 1000)
 PARTIAL_NS = (5000, 20000)
+#: Must equal ``scatrs::special::MAX_GAUSS_LEGENDRE_POINTS`` (the unit test looks it up).
+CAP = 2**17
 EDGE = 8
 MIDDLE = 4
 
@@ -40,13 +46,13 @@ def generate() -> tuple[int, list[dict]]:
             recs.append(
                 record("gauss_legendre", f"n={n}", {"n": n}, {"nodes": nodes, "weights": weights})
             )
-        for n in PARTIAL_NS:
+        for n, suffix in [*((n, "partial") for n in PARTIAL_NS), (CAP, "roots")]:
             indices = _partial_indices(n)
             nodes, weights = _rule(n, indices)
             recs.append(
                 record(
                     "gauss_legendre",
-                    f"n={n},partial",
+                    f"n={n},{suffix}",
                     {"n": n, "indices": indices},
                     {"nodes": nodes, "weights": weights},
                 )

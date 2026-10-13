@@ -18,18 +18,24 @@ pub struct GaussLegendre<T> {
     pub weights: Vec<T>,
 }
 
-/// The largest number of points [`gauss_legendre`] accepts: 2²⁰ = 1 048 576.
+/// The largest number of points [`gauss_legendre`] accepts: 2¹⁷ = 131 072.
 ///
-/// Larger `n` (up to `usize::MAX`) returns [`Error::InvalidInput`], so that no input can
-/// overflow a size, exhaust memory or run for days. At the cap the O(n²) construction already
-/// takes about 8 hours (28 ns·n² on an Apple M4 Pro), and the cap is still about 25 times the
-/// roughly 4·10⁴ points that Mie quadrature needs at size parameter 2·10⁴. The accuracy
-/// contract is checked against Arb on single roots at the cap. A faster O(n) method may raise
-/// the cap later.
-pub const MAX_GAUSS_LEGENDRE_POINTS: usize = 1 << 20;
+/// Larger `n` (up to `usize::MAX`) returns [`Error::InvalidInput`]. The cap is about three
+/// times the roughly 4·10⁴ points that Mie quadrature needs at size parameter 2·10⁴. It will be
+/// raised when an O(n) method replaces the present O(n²) one (raising it is not a breaking
+/// change, lowering it would be).
+///
+/// Below the cap a call can still be expensive, and it cannot be interrupted:
+///
+/// * time: about 28 ns·n² on an Apple M4 Pro with FMA, so about 8 minutes at the cap, and
+///   roughly 10 times longer on x86_64 builds without the `fma` target feature, where every
+///   double-double operation calls a software `mul_add`;
+/// * memory: (32 + 2·`size_of::<T>()`)·n bytes, 32 bytes per point of recurrence coefficients
+///   besides the rule itself: 6.3 MB for `f64` at the cap, 277 MB for `Dual<DoubleDouble, 64>`.
+pub const MAX_GAUSS_LEGENDRE_POINTS: usize = 1 << 17;
 
 /// Newton steps stop once |Δx| ≤ 2⁻⁹⁰; one further step then reaches rounding level.
-const CONVERGED: f64 = 8.077_935_669_463_161e-28;
+const CONVERGED: f64 = f64::from_bits((1023 - 90) << 52); // 2⁻⁹⁰
 const MAX_ITERATIONS: usize = 100;
 
 /// Recurrence coefficients for Pⱼ = aⱼ·x·Pⱼ₋₁ − bⱼ·Pⱼ₋₂, with aⱼ = (2j − 1)/j and bⱼ = (j − 1)/j.
@@ -75,6 +81,10 @@ impl Recurrence {
     }
 
     /// Newton iteration for the root near `guess`; returns (root, Pₙ′(root)).
+    ///
+    /// After a step |Δx| ≤ 2⁻⁹⁰, one more (polishing) step takes x to rounding level, as
+    /// Newton converges quadratically; that step must itself be at most 2⁻⁹⁰, or iteration
+    /// goes on. On failure, `achieved` is the last |Δx| (its leading word; +∞ if it was NaN).
     fn newton(&self, n: usize, guess: f64) -> Result<(Dd, Dd)> {
         let mut x = Dd::from_f64(guess);
         let mut last = f64::INFINITY;
@@ -83,15 +93,16 @@ impl Recurrence {
             let (p, dp) = self.legendre_and_derivative(n, x);
             let dx = p / dp;
             x -= dx;
-            if polish {
+            last = dx.hi().abs();
+            let small = last <= CONVERGED;
+            if polish && small {
                 let (_, dp) = self.legendre_and_derivative(n, x);
                 return Ok((x, dp));
             }
-            last = dx.hi().abs();
-            polish = last <= CONVERGED;
+            polish = small;
         }
         Err(Error::NotConverged {
-            achieved: last,
+            achieved: if last.is_nan() { f64::INFINITY } else { last },
             requested: CONVERGED,
         })
     }
@@ -130,28 +141,31 @@ impl Recurrence {
 /// # Accuracy
 ///
 /// Verified against Arb for every node of the rules with n ≤ 1000, and for the nodes nearest
-/// to ±1 and to 0 at n = 5000, 20 000 and 2²⁰:
+/// to ±1 and to 0 at n = 5000, 20 000 and 2¹⁷ (the cap):
 ///
 /// * `f64`: node absolute error ≤ 2⁻⁵², weight relative error ≤ 2⁻⁵². Measured: at most
 ///   0.25·2⁻⁵² and 0.49·2⁻⁵², the rounding of the double-double rule.
 /// * `DoubleDouble`: node absolute error ≤ 2⁻⁹⁸, weight relative error ≤ 2⁻¹⁰⁰·(4 + n²). The n²
 ///   comes from the conditioning of 1 − x² next to ±1: a node error δ changes the weight by
 ///   2|x|δ/(1 − x²) relative, and 1 − x² ≈ 5.8/n² at the extreme nodes. Measured: at most
-///   0.51·2⁻¹⁰⁶ for nodes; for weights 2⁻⁸⁵ at n = 5000, 2⁻⁸² at n = 20 000 and 2⁻⁷² at n = 2²⁰.
+///   0.51·2⁻¹⁰⁶ for nodes; for weights about 2⁻⁸⁵, 2⁻⁸² and 2⁻⁸⁰ at n = 5000, 20 000 and 2¹⁷.
 ///
 /// # Cost
 ///
-/// O(n²): each of the ⌈n/2⌉ roots takes four to seven evaluations of the three-term recurrence
-/// in double-double (about four on average for n ≥ 5000). Measured on an Apple M4 Pro: 0.8 ms
-/// at n = 100, 32 ms at n = 1000, 0.72 s at n = 5000 and 11 s at n = 20 000. Memory is O(n):
-/// 32 bytes per point for the recurrence coefficients, besides the rule itself.
+/// O(n²) time and O(n) memory; see [`MAX_GAUSS_LEGENDRE_POINTS`] for the cost model. Each of the
+/// ⌈n/2⌉ roots takes four to seven evaluations of the three-term recurrence in double-double
+/// (about four on average for n ≥ 5000). Measured on an Apple M4 Pro: 0.8 ms at n = 100,
+/// 32 ms at n = 1000, 0.72 s at n = 5000 and 11 s at n = 20 000. The call cannot be
+/// interrupted.
 ///
 /// # Errors
 ///
 /// * [`Error::InvalidInput`] if `n == 0` or `n > MAX_GAUSS_LEGENDRE_POINTS`.
-/// * [`Error::NotConverged`] if a Newton iteration fails to converge. This has not happened for
-///   any `n` tried: every n ≤ 3000, and the roots nearest ±1 and 0 for 147 values of n up to
-///   2²⁰.
+/// * [`Error::NotConverged`] if a Newton iteration fails to converge, with `achieved` the
+///   last Newton step |Δx| (absolute, in x; +∞ if it was NaN) and `requested` 2⁻⁹⁰. The tests
+///   have not found any `n` where this happens: they check every root of every rule with
+///   n ≤ 300 (and, in an ignored test, n ≤ 3000), and the roots nearest ±1 and 0 for over
+///   a hundred values of n up to the cap.
 pub fn gauss_legendre<T: Real>(n: usize) -> Result<GaussLegendre<T>> {
     if n == 0 {
         return Err(Error::InvalidInput(
@@ -180,93 +194,133 @@ pub fn gauss_legendre<T: Real>(n: usize) -> Result<GaussLegendre<T>> {
 
 #[cfg(test)]
 mod tests {
+    use core::f64::consts::PI;
+    use std::collections::BTreeSet;
+
     use super::*;
 
-    /// |got − (hi + lo + lo2)|, accurate to far below 2⁻¹⁰⁶·|got|: the reference agrees with
-    /// `got` to about 100 bits, so the double-double subtractions cancel almost exactly.
-    fn error(got: Dd, [hi, lo, lo2]: [f64; 3]) -> f64 {
-        ((got - Dd::new(hi, lo)) - lo2).abs().hi()
+    /// A reference value: [hi, lo, lo2, err], with |v − (hi + lo + lo2)| ≤ err.
+    type RefValue = [f64; 4];
+
+    /// The Arb record `case` of `reference/data/gauss_legendre.jsonl` (written by
+    /// `reference/scatrs_reference/generators/gauss_legendre.py`): the rule size, the ascending
+    /// indices of the nodes it holds, and those nodes and weights.
+    fn reference(case: &str) -> (usize, Vec<usize>, Vec<RefValue>, Vec<RefValue>) {
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../reference/data/gauss_legendre.jsonl"
+        );
+        let text = std::fs::read_to_string(path)
+            .unwrap_or_else(|e| panic!("cannot read reference file {path}: {e}"));
+        let rec = text
+            .lines()
+            .map(|l| serde_json::from_str::<serde_json::Value>(l).unwrap())
+            .find(|r| r["case"] == case)
+            .unwrap_or_else(|| panic!("no reference case {case}: regenerate the data"));
+        let size = |v: &serde_json::Value| v.as_u64().expect("integer") as usize;
+        let values = |name: &str| -> Vec<RefValue> {
+            let column = |k: &str| -> Vec<f64> {
+                let out = &rec["outputs"][name][k];
+                out.as_array()
+                    .expect("array")
+                    .iter()
+                    .map(|v| v.as_f64().unwrap())
+                    .collect()
+            };
+            let (hi, lo, lo2, err) = (column("hi"), column("lo"), column("lo2"), column("err"));
+            (0..hi.len())
+                .map(|i| [hi[i], lo[i], lo2[i], err[i]])
+                .collect()
+        };
+        let indices = rec["inputs"]["indices"].as_array().expect("array");
+        (
+            size(&rec["inputs"]["n"]),
+            indices.iter().map(size).collect(),
+            values("nodes"),
+            values("weights"),
+        )
     }
 
-    /// Single roots of the largest accepted rule, against Arb at 300 bits (python-flint 0.9.0,
-    /// `arb.legendre_p_root(n, k, weight=True)` split into three doubles; the remainders are
-    /// below 2⁻¹⁶⁰ relative). The whole rule would take hours, but each root costs O(n).
+    /// A bound on |got − v|: the reference agrees with `got` to about 100 bits, so the
+    /// double-double subtractions cancel almost exactly and add far less than 2⁻¹⁰⁶·|got|.
+    fn error(got: Dd, [hi, lo, lo2, err]: RefValue) -> f64 {
+        ((got - Dd::new(hi, lo)) - lo2).abs().hi() + err
+    }
+
+    /// Single roots of the largest accepted rule against Arb. The whole rule takes minutes,
+    /// but each root costs O(n), so this checks the accuracy contract at the cap.
     #[test]
     fn roots_at_the_cap_match_arb() {
-        const N: usize = MAX_GAUSS_LEGENDRE_POINTS;
-        type Ref = (usize, [f64; 3], [f64; 3]);
-        const REFS: [Ref; 4] = [
-            (
-                0,
-                [
-                    0.9999999999973701,
-                    1.0312454907615059e-17,
-                    6.46912313677422e-34,
-                ],
-                [
-                    6.749136713940452e-12,
-                    1.1793618456518766e-28,
-                    -9.005883376763423e-45,
-                ],
-            ),
-            (
-                1,
-                [
-                    0.9999999999861433,
-                    -1.9043773092809482e-17,
-                    -1.4382386576536834e-33,
-                ],
-                [
-                    1.571070557601383e-11,
-                    5.7112218541792405e-28,
-                    2.2937093581105864e-44,
-                ],
-            ),
-            (
-                2,
-                [
-                    0.9999999999659454,
-                    1.2513794199728001e-17,
-                    1.7247756829565976e-34,
-                ],
-                [
-                    2.468554407634494e-11,
-                    1.5316259107730884e-27,
-                    -6.446720764937644e-44,
-                ],
-            ),
-            (
-                N / 2 - 1,
-                [
-                    1.4980273988537132e-6,
-                    -9.990635557478403e-23,
-                    -5.865200403019905e-39,
-                ],
-                [
-                    2.9960547977051852e-6,
-                    -8.559746921672828e-23,
-                    -2.931030688665622e-39,
-                ],
-            ),
-        ];
-        let rec = Recurrence::new(N);
+        let (n, indices, nodes, weights) =
+            reference(&format!("n={MAX_GAUSS_LEGENDRE_POINTS},roots"));
+        assert_eq!(n, MAX_GAUSS_LEGENDRE_POINTS);
+        let rec = Recurrence::new(n);
         let u2 = 2f64.powi(-106);
-        for (i, x_ref, w_ref) in REFS {
-            let (x, w) = rec.root_and_weight(N, i).unwrap();
-            let ex = error(x, x_ref);
-            let ew = error(w, w_ref) / w_ref[0];
-            eprintln!(
-                "n = 2^20, root {i}: node error {:.3} u², weight error {:.3e} u²",
-                ex / u2,
-                ew / u2
-            );
+        let (mut worst_x, mut worst_w) = (0.0_f64, 0.0_f64);
+        for (k, &idx) in indices.iter().enumerate() {
+            // `gauss_legendre` stores root i (the (i + 1)-th largest) at index n − 1 − i, and its
+            // negation at index i.
+            let (x, w) = rec.root_and_weight(n, idx.min(n - 1 - idx)).unwrap();
+            let x = if idx < n / 2 { -x } else { x };
+            let ex = error(x, nodes[k]);
+            let ew = error(w, weights[k]) / weights[k][0];
+            worst_x = worst_x.max(ex / u2);
+            worst_w = worst_w.max(ew / u2);
             // The double-double contract, and the f64 contract after rounding.
-            assert!(ex <= 2f64.powi(-98), "root {i}: node error {ex:e}");
-            let wtol = 2f64.powi(-100) * (4.0 + (N * N) as f64);
-            assert!(ew <= wtol, "root {i}: weight error {ew:e}");
-            let ex64 = error(Dd::from_f64(x.hi()), x_ref);
-            let ew64 = error(Dd::from_f64(w.hi()), w_ref) / w_ref[0];
-            assert!(ex64 <= f64::EPSILON && ew64 <= f64::EPSILON, "root {i}");
+            assert!(ex <= 2f64.powi(-98), "node {idx}: error {ex:e}");
+            let wtol = 2f64.powi(-100) * (4.0 + (n * n) as f64);
+            assert!(ew <= wtol, "weight {idx}: relative error {ew:e}");
+            let ex64 = error(Dd::from_f64(x.hi()), nodes[k]);
+            let ew64 = error(Dd::from_f64(w.hi()), weights[k]) / weights[k][0];
+            assert!(ex64 <= f64::EPSILON, "node {idx}: f64 error {ex64:e}");
+            assert!(ew64 <= f64::EPSILON, "weight {idx}: f64 error {ew64:e}");
         }
+        eprintln!(
+            "n = {n}: worst node error {worst_x:.3} u², worst weight error {worst_w:.3e} u² \
+             (u² = 2^-106)"
+        );
+    }
+
+    /// Newton finds the right root next to ±1 and 0, where Tricomi's guess is least accurate
+    /// and the roots are closest together, for n from 1 to the cap: each root lies strictly
+    /// inside its own interval of Bruns's inequality (see `tests/gauss_legendre.rs`), whose
+    /// bounds are about 1/n² away from the root in x.
+    #[test]
+    fn roots_next_to_the_ends_and_the_middle_converge_up_to_the_cap() {
+        let cap = MAX_GAUSS_LEGENDRE_POINTS;
+        let mut ns: BTreeSet<usize> = (1..=64).collect();
+        let mut m = 64.0_f64;
+        while (m as usize) < cap {
+            ns.insert(m as usize);
+            m *= 1.1;
+        }
+        for e in 6..=cap.trailing_zeros() {
+            ns.extend(
+                [(1 << e) - 1, 1 << e, (1 << e) + 1]
+                    .into_iter()
+                    .filter(|&n| n <= cap),
+            );
+        }
+        for &n in &ns {
+            let rec = Recurrence::new(n);
+            let half = n.div_ceil(2);
+            let h = n as f64 + 0.5;
+            let roots: BTreeSet<usize> = (0..half.min(6))
+                .chain(half.saturating_sub(3)..half)
+                .collect();
+            for i in roots {
+                let (x, w) = rec
+                    .root_and_weight(n, i)
+                    .unwrap_or_else(|e| panic!("n={n} root {i}: {e}"));
+                let j = (i + 1) as f64; // root i is the j-th largest
+                let (below, above) = ((j * PI / h).cos(), ((j - 0.5) * PI / h).cos());
+                assert!(
+                    below < x.hi() && x.hi() < above,
+                    "n={n} root {i}: {x:?} outside ({below}, {above})"
+                );
+                assert!(w.hi() > 0.0, "n={n} root {i}: weight {w:?}");
+            }
+        }
+        eprintln!("{} values of n up to {cap}: ok", ns.len());
     }
 }

@@ -71,7 +71,9 @@ const GENERAL_DIFFERENCE_FROM: f64 = 0.9;
 /// * `f64`: ≤ 16(l + 1)·2⁻⁵²;
 /// * `DoubleDouble`: ≤ (l + 1)·2⁻⁹⁷.
 ///
-/// These bounds are measured, not proven, and validated for l ≤ 2.5·10⁵. The Arb tests check:
+/// These bounds are measured, not proven. They are validated up to l = 2.5·10⁵ for (0, 0) and
+/// (0, 2), and for general (m, n) up to l = 4000 in the tests and l = 5000 to 20 000 in review
+/// probes. The Arb tests check:
 ///
 /// * every degree l ≤ 100 of 17 pairs (m, n), covering all sign combinations, m = ±n and
 ///   |m|, |n| up to 50, at x = ±1, −1 + 2⁻⁵³, 1 − 3·2⁻⁵³, ±0.9999999, −0.5, 0, 0.3 and cos(π/6);
@@ -105,16 +107,22 @@ const GENERAL_DIFFERENCE_FROM: f64 = 0.9;
 /// * a = 1: ±∞ or NaN, where the true derivative is infinite (sin(θ/2) = √((1 − x)/2));
 /// * a ≥ 3: zero, the exact derivative.
 ///
-/// The same holds at x = −1 with b = |m + n| in place of a.
+/// The same holds at x = −1 with b = |m + n| in place of a. With nested duals
+/// (`Dual<Dual<T, M>, N>`), second derivatives at x = ±1 are exact only for a ≤ 2 (not finite
+/// for a = 1, where they are infinite). For a ≥ 3 the start value is the constant zero, so
+/// every derivative beyond the first is zero: silently wrong, since the true second derivative
+/// is infinite for a = 3 and finite but nonzero for a = 4 (7.5, 105 and 500.5 for (2, −2) at
+/// l = 4, 8 and 12). For |x| < 1 derivatives of every order are those of the computed values.
 ///
 /// # Cost
 ///
 /// O(max(|m|, |n|) + `out.len()`): |m − n| square roots and divisions and
-/// max(|m − n|, |m + n|) ≤ 2·max(|m|, |n|) multiplications for the start value, then per degree one division and two square roots (three-term form), one division
-/// and no square root (m = ±n difference form), or two divisions and one square root (general
-/// difference form). Measured on an Apple M4 Pro over the nodes of the 64-point Gauss–Legendre
-/// rule, up to l = 2000, per degree: in `f64` 2.6 ns for (0, 0), 3.1 ns for (2, ±2) and 3.7 ns
-/// for (0, 2) and other m ≠ ±n; in `DoubleDouble` 30, 38 and 45 ns.
+/// max(|m − n|, |m + n|) ≤ 2·max(|m|, |n|) multiplications for the start value, then per degree
+/// one division and two square roots (three-term form), one division and no square root
+/// (m = ±n difference form), or two divisions and one square root (general difference form).
+/// Measured on an Apple M4 Pro over the nodes of the 64-point Gauss–Legendre rule, up to
+/// l = 2000, per degree: in `f64` 2.6 ns for (0, 0), 3.1 ns for (2, ±2) and 3.7 ns for (0, 2)
+/// and other m ≠ ±n; in `DoubleDouble` 30, 38 and 45 ns.
 ///
 /// # Errors
 ///

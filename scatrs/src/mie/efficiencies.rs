@@ -23,7 +23,11 @@ pub struct Efficiencies<T> {
     /// Backscattering, |Σ (2n + 1)(−1)ⁿ(aₙ − bₙ)|²/x² = 4|S₁(π)|²/x².
     pub q_back: T,
     /// Asymmetry parameter g = ⟨cos Θ⟩, (4/(x² Q_sca)) Σ [n(n + 2)/(n + 1)
-    /// Re(aₙ aₙ₊₁* + bₙ bₙ₊₁*) + (2n + 1)/(n(n + 1)) Re(aₙ bₙ*)]; 0 when Q_sca = 0 (m = 1).
+    /// Re(aₙ aₙ₊₁* + bₙ bₙ₊₁*) + (2n + 1)/(n(n + 1)) Re(aₙ bₙ*)]; 0 when Q_sca = 0.
+    ///
+    /// At m = 1 the coefficients vanish, and for x < 1 they are computed exactly 0, so g = 0.
+    /// For x ≥ 1 they are rounding errors (the conditioning κ is infinite there), and g and its
+    /// derivatives are meaningless.
     pub g: T,
 }
 
@@ -113,11 +117,15 @@ fn derivative_sums<T: Real>(
 impl<T: Real> MieSolution<'_, T> {
     /// The efficiencies and the asymmetry parameter.
     pub fn efficiencies(&self) -> Efficiencies<T> {
+        self.efficiencies_from(&value_sums(&self.state.a, &self.state.b))
+    }
+
+    /// The efficiencies from the value sums of [`value_sums`].
+    fn efficiencies_from(&self, sums: &Sums<T>) -> Efficiencies<T> {
         let s = self.state;
         let inv_x = s.x.recip();
         let inv_x2 = inv_x * inv_x;
         let two_x2 = T::from_f64(2.0) * inv_x2;
-        let sums = value_sums(&s.a, &s.b);
         let q_sca = two_x2 * sums.sca;
         let q_abs = two_x2 * s.abs_sum;
         let g = if sums.sca == T::zero() {
@@ -147,7 +155,7 @@ impl<T: Real> MieSolution<'_, T> {
         let inv_x2 = inv_x * inv_x;
         let two_x2 = two * inv_x2;
         let values = value_sums(&s.a, &s.b);
-        let q = self.efficiencies();
+        let q = self.efficiencies_from(&values);
         let mut out = [q; 3];
         for (p, o) in out.iter_mut().enumerate() {
             let sums = match p {

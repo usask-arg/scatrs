@@ -58,6 +58,27 @@ fn invalid_inputs_are_rejected() {
             "n_max = {n}"
         );
     }
+    // `Dual` inputs whose values are fine but whose derivative parts are not.
+    let mut dual = Mie::<D3>::new();
+    let nan_seed = D3::new(1.0, [f64::NAN, 0.0, 0.0]);
+    let m = Complex::new(D3::constant(1.5), D3::constant(0.0));
+    let r = dual.compute(nan_seed, m, &opts).map(|_| ());
+    assert!(matches!(r, Err(Error::InvalidInput(_))));
+    let m = Complex::new(D3::new(1.5, [0.0, f64::INFINITY, 0.0]), D3::constant(0.0));
+    let r = dual.compute(D3::constant(1.0), m, &opts).map(|_| ());
+    assert!(matches!(r, Err(Error::InvalidInput(_))));
+    let m = Complex::new(D3::constant(1.5), D3::constant(0.0));
+    let s = dual.compute(D3::constant(1.0), m, &opts).unwrap();
+    let zero = Complex::new(D3::constant(0.0), D3::constant(0.0));
+    let (mut s1, mut s2) = ([zero], [zero]);
+    let r = s.amplitudes(
+        &[D3::new(0.5, [f64::NAN, 0.0, 0.0])],
+        AmplitudeBuffers {
+            s1: &mut s1,
+            s2: &mut s2,
+        },
+    );
+    assert!(matches!(r, Err(Error::InvalidInput(_))));
 }
 
 #[test]
@@ -213,7 +234,8 @@ fn bad_cosines_and_buffers_are_rejected_without_writing() {
     assert!(matches!(r, Err(Error::InvalidInput(_))));
 }
 
-/// Forward and backward symmetries hold exactly: πₙ(±1) = ±τₙ(±1) in exact integers.
+/// Forward and backward symmetries hold exactly: πₙ(±1) = ±τₙ(±1) in exact integers (while
+/// n²(n + 1)/2 < 2⁵³, so for the default truncation of x up to about 2.6·10⁵).
 #[test]
 fn forward_and_backward_amplitudes() {
     let mut mie = Mie::<f64>::new();
@@ -274,7 +296,8 @@ type D3 = Dual<f64, 3>;
 /// through the same recurrences: the values agree bitwise, and the derivatives within
 /// 64·κ′·2⁻⁵² of their array's (or the efficiency's natural) scale, with κ′ the a-priori
 /// factor of the derivative tolerances (`ValidatedDomain`): both carry rounding errors of
-/// that size, from different formulas.
+/// that size, from different formulas. Relative to the array's largest entry, errors in its
+/// smallest entries (orders far above x) go unseen, as in the tolerance model.
 #[test]
 fn closed_form_derivatives_agree_with_dual() {
     let mu = [1.0, 0.6, 0.0, -0.3, -1.0];
@@ -324,13 +347,30 @@ fn closed_form_derivatives_agree_with_dual() {
                 }
             }
         }
-        for (n, z) in d.a.iter().enumerate() {
+        for (n, (za, zb)) in d.a.iter().zip(&d.b).enumerate() {
             assert_eq!(
-                value(*z),
+                value(*za),
                 f.a[n],
-                "values differ: x = {x}, m = {m}, n = {}",
+                "a differs: x = {x}, m = {m}, n = {}",
                 n + 1
             );
+            assert_eq!(
+                value(*zb),
+                f.b[n],
+                "b differs: x = {x}, m = {m}, n = {}",
+                n + 1
+            );
+        }
+        for i in 0..6 {
+            for j in 0..mu.len() {
+                assert_eq!(value(d.s[i][j]), f.s[i][j], "S differs: x = {x}, m = {m}");
+            }
+        }
+        for p in 0..3 {
+            for k in 0..5 {
+                let (vd, vf) = (q_of(&d.jac[p], k).re(), q_of(&f.jac[p], k));
+                assert_eq!(vd, vf, "Jacobian differs: x = {x}, m = {m}, Q{k} p{p}");
+            }
         }
         // Efficiencies: the Jacobian against the derivative parts.
         let sizes = [x, m.norm(), m.norm()];
@@ -393,16 +433,22 @@ proptest! {
         }
     }
 
-    /// Over the whole accepted input range, outside the domain too: every output finite.
+    /// Over the whole accepted input range, outside the domain too: every output finite. A third
+    /// of the cases have real m (the real recurrence for Dₙ) and a third purely imaginary m.
     #[test]
     fn no_nan_or_infinity_over_the_supported_inputs(
         log_x in -30.0f64..5.0,
         log_abs_m in -6.0f64..3.0,
         angle in 0.0f64..std::f64::consts::FRAC_PI_2,
+        kind in 0u8..3,
     ) {
         let x = 10f64.powf(log_x);
         let r = 10f64.powf(log_abs_m);
-        let m = c(r * angle.cos(), r * angle.sin());
+        let m = match kind {
+            0 => c(r, 0.0),
+            1 => c(0.0, r),
+            _ => c(r * angle.cos(), r * angle.sin()),
+        };
         prop_assume!(m.norm() * x <= 1e6); // keep the cost of Dₙ(mx) bounded
         let opts = MieOptions::new().with_allow_unvalidated(true);
         let mut mie = Mie::<f64>::new();

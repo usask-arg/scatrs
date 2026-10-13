@@ -28,14 +28,16 @@ impl<T> AmplitudeBuffers<'_, T> {
     }
 }
 
+/// Every cosine in [−1, 1] (for `Dual`, its value) and finite (for `Dual`, its derivative
+/// parts too).
 fn check_cosines<T: Real>(mu: &[T]) -> Result<()> {
     match mu
         .iter()
-        .map(|v| v.approx_f64())
-        .find(|v| !(-1.0..=1.0).contains(v))
+        .find(|v| !(v.is_finite() && (-1.0..=1.0).contains(&v.approx_f64())))
     {
         Some(v) => Err(Error::InvalidInput(format!(
-            "a cosine of the scattering angle must be in [-1, 1], got {v}"
+            "a cosine of the scattering angle must be finite and in [-1, 1], got {}",
+            v.approx_f64()
         ))),
         None => Ok(()),
     }

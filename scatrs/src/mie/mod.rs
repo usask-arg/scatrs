@@ -82,8 +82,9 @@ pub use efficiencies::{Efficiencies, EfficiencyJacobian};
 
 /// The largest number of terms [`Mie::compute`] accepts, 2²⁰.
 ///
-/// It bounds the workspace to about 200 MB with derivatives. Larger `n_max`, or a size
-/// parameter whose default truncation exceeds it, raise [`Error::InvalidInput`].
+/// It bounds the workspace to about 200 MB for `f64` with derivatives (twice that for
+/// `DoubleDouble`, four times for `Dual<f64, 3>`). Larger `n_max`, or a size parameter whose
+/// default truncation exceeds it, raise [`Error::InvalidInput`].
 pub const MAX_MIE_ORDER: usize = 1 << 20;
 /// The smallest size parameter accepted. Below it the coefficients (∝ x³) and efficiencies
 /// (∝ x⁴) leave the normal `f64` range.
@@ -92,7 +93,8 @@ pub const MIN_SIZE_PARAMETER: f64 = 1e-30;
 pub const MAX_SIZE_PARAMETER: f64 = 1e6;
 /// The smallest |m| accepted.
 pub const MIN_REFRACTIVE_INDEX: f64 = 1e-6;
-/// The largest |m| accepted. The cost of Dₙ(mx) grows like |m|x.
+/// The largest |m| accepted. The cost of Dₙ(mx) grows like |m|x: about 1 s per 10⁸ of |m|x in
+/// `f64` on an Apple M4 Pro, so the largest accepted inputs take seconds per sphere.
 pub const MAX_REFRACTIVE_INDEX: f64 = 1e3;
 
 /// The default number of terms for `f64`: N = ⌈x + 6x^(1/3) + 3⌉.
@@ -128,8 +130,9 @@ fn default_terms<T: Real>(x: f64) -> usize {
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 #[non_exhaustive]
 pub struct MieOptions {
-    /// The number of terms; `None` for the default (see [`default_n_max`]). Fewer terms than
-    /// the default are outside the validated domain.
+    /// The number of terms; `None` for the default: [`default_n_max`] for `f64` (and
+    /// `Dual<f64, N>`), ⌈x + 12x^(1/3) + 6⌉ for `DoubleDouble`. Fewer terms than the default
+    /// of the scalar type are outside the validated domain.
     pub n_max: Option<usize>,
     /// Compute even outside [`VALIDATED_DOMAIN`] instead of returning
     /// [`Error::OutsideValidatedDomain`].
@@ -227,6 +230,13 @@ impl<T: Real> Mie<T> {
         derivatives: bool,
     ) -> Result<MieSolution<'_, T>> {
         let n = check_inputs::<T>(x.approx_f64(), m.re.approx_f64(), m.im.approx_f64(), opts)?;
+        // The values are checked above; for `Dual` this also rejects non-finite derivative
+        // parts, which would otherwise give NaN derivatives silently.
+        if !(x.is_finite() && m.re.is_finite() && m.im.is_finite()) {
+            return Err(Error::InvalidInput(
+                "the derivative parts of x and m must be finite".into(),
+            ));
+        }
         self.state.solve(x, m, n, derivatives);
         Ok(MieSolution { state: &self.state })
     }

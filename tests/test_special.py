@@ -5,7 +5,7 @@ from concurrent.futures import ThreadPoolExecutor
 import numpy as np
 import pytest
 
-from scatrs import _scatrs, special
+from scatrs import _args, _scatrs, special
 
 
 def test_gauss_legendre_matches_numpy():
@@ -118,7 +118,8 @@ def _root(a):
 def _assert_owned_by_rust(a):
     root, owner = _root(a)
     # rust-numpy's from_vec/into_pyarray hand the Vec to numpy without copying; the Vec is
-    # freed when the array is.
+    # freed when the array is. PySliceContainer is rust-numpy's internal owner class, so this
+    # may need updating when rust-numpy is upgraded.
     assert type(owner).__name__ == "PySliceContainer"
     assert np.shares_memory(a, root)
     assert a.dtype == np.float64
@@ -163,11 +164,23 @@ def test_wigner_d_passes_contiguous_float64_input_without_copying(monkeypatch):
         special.wigner_d(1, 0, 5, x)
         assert spy.seen[-1].ctypes.data == x.ctypes.data
         assert np.shares_memory(spy.seen[-1], x)
+        # A fresh view, never x itself (see scatrs._args.real_array).
+        assert spy.seen[-1] is not x
     # Anything else is converted to contiguous float64 once.
     for x in (np.linspace(-1, 1, 12)[::2], np.linspace(-1, 1, 12).astype(np.float32)):
         special.wigner_d(1, 0, 5, x)
         assert not np.shares_memory(spy.seen[-1], x)
         assert spy.seen[-1].dtype == np.float64 and spy.seen[-1].flags.c_contiguous
+
+
+def test_real_array_returns_qualifying_arrays_as_they_are():
+    x = np.linspace(-1, 1, 12).reshape(3, 4)
+    assert _args.real_array(x, "x") is x
+    for other in (x.T, x.astype(np.float32), x.astype(x.dtype.newbyteorder()), x.tolist()):
+        converted = _args.real_array(other, "x")
+        assert converted.dtype == np.float64 and converted.dtype.isnative
+        assert converted.flags.c_contiguous and converted.flags.aligned
+        np.testing.assert_array_equal(converted, np.asarray(other, dtype=np.float64))
 
 
 # --- Threads and the GIL -----------------------------------------------------------------------

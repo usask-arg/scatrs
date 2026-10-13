@@ -1,6 +1,8 @@
 import datetime
 import math
 import pickle
+import sys
+import types
 
 import numpy as np
 import pytest
@@ -96,9 +98,22 @@ CAP = special.MAX_GAUSS_LEGENDRE_POINTS
 VALUES = special.MAX_WIGNER_D_VALUES  # 2²⁸
 
 
-@pytest.mark.parametrize("n", [0, -1, -(2**70), CAP + 1, 2**63, 2**64, 2**200])
-def test_gauss_legendre_n_out_of_range_is_invalid_input(n):
-    with pytest.raises(scatrs.InvalidInputError, match="Gauss-Legendre rule needs"):
+@pytest.mark.parametrize(
+    ("n", "message"),
+    [
+        # Values the Rust core sees, and words the errors for:
+        (0, "Gauss-Legendre rule needs n >= 1"),
+        (CAP + 1, f"Gauss-Legendre rule needs n <= {CAP}, got {CAP + 1}"),
+        (2**63, f"Gauss-Legendre rule needs n <= {CAP}, got {2**63}"),
+        # Values that do not fit a usize, rejected while converting:
+        (-1, "n must not be negative, got -1"),
+        (-(2**70), "n must not be negative"),
+        (2**64, f"n must be at most {2**64 - 1}, got {2**64}"),
+        (2**200, "n must be at most"),
+    ],
+)
+def test_gauss_legendre_n_out_of_range_is_invalid_input(n, message):
+    with pytest.raises(scatrs.InvalidInputError, match=f"^invalid input: {message}"):
         special.gauss_legendre(n)
 
 
@@ -129,7 +144,7 @@ def test_wigner_d_orders_beyond_32_bits_are_overflow_errors(name, bad):
 @pytest.mark.parametrize(
     ("l_max", "x"),
     [
-        (-1, 0.5),
+        (-1, 0.5),  # rejected while converting, as is 2**70 below
         (-(2**70), 0.5),
         (VALUES, 0.5),  # one row of 2²⁸ + 1 values
         (2**31, 0.5),
@@ -188,6 +203,53 @@ def test_wigner_d_non_real_x_is_type_error(x):
 
 # --- Robustness: the extension module called directly --------------------------------------------
 # scatrs._scatrs is private; it relies on the wrapper for conversions, but must still never crash.
+
+
+# --- Robustness: arrays borrowed elsewhere, and failures while raising ---------------------------
+
+
+def test_x_borrowed_for_writing_by_another_extension_is_buffer_error():
+    # rust-numpy tracks borrows across all extensions built on it; _with_write_borrow holds a
+    # writeable one, as another such extension could, while the callback runs.
+    x = np.linspace(-1, 1, 6)
+    for call in (
+        lambda: special.wigner_d(0, 0, 3, x),
+        lambda: special.wigner_d(0, 0, 3, x.reshape(2, 3)),
+        lambda: _scatrs.wigner_d(0, 0, 3, x),
+    ):
+        with pytest.raises(BufferError, match="x cannot be read: The given array is already"):
+            _scatrs._with_write_borrow(x, call)
+    with pytest.raises(BufferError):  # a borrow of an overlapping view conflicts too
+        _scatrs._with_write_borrow(x[2:4], lambda: special.wigner_d(0, 0, 3, x))
+    # Disjoint data does not conflict, and the borrow ends with the call.
+    assert _scatrs._with_write_borrow(x[:2], lambda: special.wigner_d(0, 0, 3, x[3:])).shape == (
+        3,
+        4,
+    )
+    np.testing.assert_array_equal(special.wigner_d(0, 0, 3, x)[:, 0], 1.0)
+
+
+def test_error_mapping_without_scatrs_errors_falls_back_to_runtime_error(monkeypatch):
+    monkeypatch.setitem(sys.modules, "scatrs.errors", None)  # importing it now fails
+    with pytest.raises(RuntimeError, match=r"^invalid input: bad$") as info:
+        _scatrs._raise_core_error("InvalidInput", "bad")
+    assert isinstance(info.value.__cause__, ImportError)
+    with pytest.raises(RuntimeError, match=r"^not converged: achieved inf") as info:
+        _scatrs._raise_core_error("NotConverged", achieved=math.inf, requested=1e-6)
+    assert isinstance(info.value.__cause__, ImportError)
+    with pytest.raises(RuntimeError, match="-1 <= x <= 1"):
+        special.wigner_d(0, 0, 3, [math.nan])
+
+
+class _InterruptingModule(types.ModuleType):
+    def __getattr__(self, name):
+        raise KeyboardInterrupt
+
+
+def test_error_mapping_passes_non_exceptions_through(monkeypatch):
+    monkeypatch.setitem(sys.modules, "scatrs.errors", _InterruptingModule("scatrs.errors"))
+    with pytest.raises(KeyboardInterrupt):
+        _scatrs._raise_core_error("InvalidInput", "bad")
 
 
 def test_extension_rejects_out_of_range_integers():

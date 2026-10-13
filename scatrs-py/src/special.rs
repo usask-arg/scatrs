@@ -1,8 +1,14 @@
 //! Bindings for `scatrs::special`.
+//!
+//! Pattern for array arguments: take `Bound<'py, PyArray…>` and borrow it with `try_readonly`
+//! (or `try_readwrite`), never `PyReadonlyArray`/`PyReadwriteArray` as a `#[pyfunction]`
+//! parameter type. Their extractors unwrap the borrow, so an array that another rust-numpy
+//! extension holds a writeable borrow of would panic (`PanicException`, a `BaseException`)
+//! instead of raising `BufferError`.
 
 use numpy::ndarray::Array2;
-use numpy::{IntoPyArray, PyArray1, PyArray2, PyReadonlyArray1};
-use pyo3::exceptions::{PyMemoryError, PyRuntimeError};
+use numpy::{IntoPyArray, PyArray1, PyArray2, PyArrayMethods};
+use pyo3::exceptions::{PyBufferError, PyMemoryError, PyRuntimeError};
 use pyo3::prelude::*;
 
 use crate::errors::to_pyerr;
@@ -39,8 +45,10 @@ pub fn gauss_legendre(py: Python<'_>, n: usize) -> PyResult<Rule<'_>> {
 /// `scatrs.special.wigner_d`.
 ///
 /// `x` must be an aligned, contiguous, native-endian 1-D float64 array (otherwise
-/// `TypeError`); it is read in place. Raises `InvalidInputError` for an x outside [-1, 1] or
-/// NaN, and for max(len(x), 1)·(l_max + 1) > MAX_WIGNER_D_VALUES; `MemoryError` if the output
+/// `TypeError`); it is read in place, with the GIL released, so it must not be modified or
+/// resized from another thread during the call. Raises `InvalidInputError` for an x outside
+/// [-1, 1] or NaN, and for max(len(x), 1)·(l_max + 1) > MAX_WIGNER_D_VALUES; `BufferError` if
+/// another rust-numpy extension holds a writeable borrow of `x`; `MemoryError` if the output
 /// cannot be allocated; `OverflowError` for m or n outside the 32-bit range, or l_max < 0 or
 /// l_max >= 2**64.
 #[pyfunction]
@@ -49,8 +57,11 @@ pub fn wigner_d<'py>(
     m: i32,
     n: i32,
     l_max: usize,
-    x: PyReadonlyArray1<'py, f64>,
+    x: Bound<'py, PyArray1<f64>>,
 ) -> PyResult<Bound<'py, PyArray2<f64>>> {
+    let x = x
+        .try_readonly()
+        .map_err(|e| PyBufferError::new_err(format!("x cannot be read: {e}")))?;
     let xs = x.as_slice()?;
     let too_many = || {
         to_pyerr(

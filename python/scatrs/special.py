@@ -1,19 +1,18 @@
 """Special functions and quadrature rules (thin wrappers over the Rust core).
 
-Arguments are converted and checked here; the computation runs in Rust with the GIL released.
-See :mod:`scatrs.errors` for which exception each kind of bad argument raises.
+Arguments are converted here (see :mod:`scatrs._args`), their values are checked by the Rust
+core, and the computation runs in Rust with the GIL released. See :mod:`scatrs.errors` for
+which exception each kind of bad argument raises.
 """
 
 from __future__ import annotations
 
-import operator
 from typing import Final, SupportsIndex
 
 import numpy as np
 from numpy.typing import ArrayLike, NDArray
 
-from scatrs import _scatrs
-from scatrs.errors import InvalidInputError
+from scatrs import _args, _scatrs
 
 __all__ = ["MAX_GAUSS_LEGENDRE_POINTS", "MAX_WIGNER_D_VALUES", "gauss_legendre", "wigner_d"]
 
@@ -27,19 +26,6 @@ The bound applies to ``max(x.size, 1) * (l_max + 1)``, so ``l_max`` is bounded e
 empty ``x``. It keeps a request from being accepted by an overcommitting allocator and then
 killed for lack of memory; it may be raised in a later release.
 """
-
-_INT32_MIN: Final = -(2**31)
-_INT32_MAX: Final = 2**31 - 1
-
-
-def _integer(value: SupportsIndex, name: str) -> int:
-    """``value`` as an int; anything without ``__index__``, and bools, raise TypeError."""
-    if isinstance(value, bool | np.bool_):
-        raise TypeError(f"{name} must be an integer, not {type(value).__name__}")
-    try:
-        return operator.index(value)
-    except TypeError:
-        raise TypeError(f"{name} must be an integer, not {type(value).__name__}") from None
 
 
 def gauss_legendre(n: SupportsIndex) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
@@ -73,20 +59,13 @@ def gauss_legendre(n: SupportsIndex) -> tuple[NDArray[np.float64], NDArray[np.fl
     The rule is computed in double-double arithmetic and rounded once, so nodes and weights
     are accurate to about half an ulp, and the rule is exactly symmetric.
 
-    The cost is O(n**2) time and O(n) memory: about ``28 ns * n**2`` on an Apple M4 Pro, which
-    is 32 ms at n = 1000, 0.72 s at n = 5000, 11 s at n = 20000 and about 8 minutes at the cap;
-    x86-64 builds without FMA are roughly ten times slower. The call releases the GIL, so other
-    Python threads keep running, but it cannot be interrupted: Ctrl+C takes effect only once it
-    returns. Compute a rule once and reuse it.
+    The cost is ``O(n**2)`` time and ``O(n)`` memory: about ``28 ns * n**2`` on an Apple M4
+    Pro, which is 32 ms at n = 1000, 0.72 s at n = 5000, 11 s at n = 20000 and about 8 minutes
+    at the cap; x86-64 builds without FMA are roughly ten times slower. The call releases the
+    GIL, so other Python threads keep running, but it cannot be interrupted: Ctrl+C takes
+    effect only once it returns. Compute a rule once and reuse it.
     """
-    n = _integer(n, "n")
-    if n < 1:
-        raise InvalidInputError(f"invalid input: Gauss-Legendre rule needs n >= 1, got {n}")
-    if n > MAX_GAUSS_LEGENDRE_POINTS:
-        raise InvalidInputError(
-            f"invalid input: Gauss-Legendre rule needs n <= {MAX_GAUSS_LEGENDRE_POINTS}, got {n}"
-        )
-    return _scatrs.gauss_legendre(n)
+    return _scatrs.gauss_legendre(_args.size(n, "n"))
 
 
 def wigner_d(
@@ -106,7 +85,8 @@ def wigner_d(
     x : array_like
         :math:`\cos\theta`, with every element in [-1, 1]. An aligned, C-contiguous,
         native-endian float64 array is read in place; anything else real (integer or other
-        float dtypes, other memory layouts, lists, scalars) is converted to one first.
+        float dtypes, other memory layouts, lists, scalars) is converted to one first. Do not
+        modify or resize ``x`` from another thread during the call.
 
     Returns
     -------
@@ -122,8 +102,12 @@ def wigner_d(
         If ``m``, ``n`` or ``l_max`` is not an integer (``float`` and ``bool`` values are
         rejected), or if ``x`` is not real: complex, boolean, string, object, datetime or
         timedelta.
+    ValueError
+        Raised by numpy if ``x`` is a ragged nested sequence.
     OverflowError
         If ``m`` or ``n`` is outside the 32-bit signed range.
+    BufferError
+        If another extension built on rust-numpy holds a writeable borrow of ``x``.
     MemoryError
         If the output cannot be allocated.
 
@@ -133,25 +117,14 @@ def wigner_d(
     proven): for degrees up to 4000 with general orders, and up to 2.5e5 for
     ``(m, n) = (0, 0)`` and ``(0, 2)``.
 
-    The cost is O(max(|m|, |n|)) per element of ``x`` for the start value, then about 3 ns per
-    degree (2.6 to 3.7 ns on an Apple M4 Pro); the output takes ``8 * x.size * (l_max + 1)``
+    The cost is ``O(max(|m|, |n|))`` per element of ``x`` for the start value, then about 3 ns
+    per degree (2.6 to 3.7 ns on an Apple M4 Pro); the output takes ``8 * x.size * (l_max + 1)``
     bytes. The call releases the GIL but cannot be interrupted.
     """
-    m, n, l_max = _integer(m, "m"), _integer(n, "n"), _integer(l_max, "l_max")
-    for name, value in (("m", m), ("n", n)):
-        if not _INT32_MIN <= value <= _INT32_MAX:
-            raise OverflowError(f"{name} = {value} is outside the 32-bit signed range")
-    if l_max < 0:
-        raise InvalidInputError(f"invalid input: wigner_d needs l_max >= 0, got {l_max}")
-    xs = np.asarray(x)
-    if xs.dtype.kind not in "iuf":
-        raise TypeError(f"x must be real numbers, not an array of dtype {xs.dtype}")
-    if max(xs.size, 1) * (l_max + 1) > MAX_WIGNER_D_VALUES:
-        raise InvalidInputError(
-            "invalid input: wigner_d needs max(x.size, 1) * (l_max + 1) <= "
-            f"{MAX_WIGNER_D_VALUES}, got x.size = {xs.size}, l_max = {l_max}"
-        )
-    # Aligned, contiguous, native-endian float64: what the extension reads in place.
-    xs = np.require(xs, dtype=np.float64, requirements=["C", "A"])
+    m, n = _args.int32(m, "m"), _args.int32(n, "n")
+    l_max = _args.size(l_max, "l_max")
+    xs = _args.real_array(x, "x")
+    shape = xs.shape
+    # A fresh view, not the caller's array: see _args.real_array.
     out = _scatrs.wigner_d(m, n, l_max, xs.reshape(-1))
-    return out.reshape((*xs.shape, l_max + 1))
+    return out.reshape((*shape, l_max + 1))

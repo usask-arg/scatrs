@@ -15,8 +15,11 @@ Standard exceptions are used where Python itself would raise them:
 * :class:`TypeError` for an argument of the wrong type: a ``float`` or ``bool`` (Python or
   numpy) where an integer is needed, or non-real values (complex, strings, objects) where
   real numbers are needed;
+* :class:`ValueError`, raised by numpy, for a ragged nested sequence where an array is needed;
 * :class:`OverflowError` for an integer that does not fit the type the Rust core uses, such as
   a Wigner order outside the 32-bit signed range;
+* :class:`BufferError` when another extension built on rust-numpy holds a writeable borrow of
+  an input array;
 * :class:`MemoryError` when an output cannot be allocated.
 """
 
@@ -35,7 +38,11 @@ class ScatrsError(Exception):
 
 
 class InvalidInputError(ScatrsError, ValueError):
-    """An input is outside its mathematically valid range."""
+    """An input is outside its valid range.
+
+    That is its mathematical domain (a NaN, or ``x`` outside [-1, 1] for ``x = cos(theta)``) or
+    a documented limit, such as ``MAX_GAUSS_LEGENDRE_POINTS`` or ``MAX_WIGNER_D_VALUES``.
+    """
 
 
 class NotConvergedError(ScatrsError, ArithmeticError):

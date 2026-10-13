@@ -1,5 +1,6 @@
 [build-system]
-requires = ["maturin>=1.8,<2.0"]
+# 1.9.4 is the first maturin that reads license-files and writes a PEP 639 License-Expression.
+requires = ["maturin>=1.9.4,<2.0"]
 build-backend = "maturin"
 
 [project]
@@ -36,7 +37,7 @@ Documentation = "https://usask-arg.github.io/scatrs/"
 Repository = "https://github.com/usask-arg/scatrs"
 
 [dependency-groups]
-dev = ["maturin>=1.8,<2.0", "pytest>=8", "mypy>=1.13", "ruff>=0.8", "pre-commit>=4"]
+dev = ["maturin>=1.9.4,<2.0", "pytest>=8", "mypy>=1.13", "ruff>=0.8", "pre-commit>=4"]
 
 [tool.uv]
 # uv rebuilds the (editable, release-profile) install only when a cache key changes; listing
@@ -45,9 +46,11 @@ cache-keys = [
     { file = "pyproject.toml" },
     { file = "Cargo.toml" },
     { file = "Cargo.lock" },
+    { file = ".cargo/config.toml" },
     { file = "scatrs/Cargo.toml" },
     { file = "scatrs/src/**/*.rs" },
     { file = "scatrs-py/Cargo.toml" },
+    { file = "scatrs-py/build.rs" },
     { file = "scatrs-py/src/**/*.rs" },
 ]
 
@@ -55,7 +58,6 @@ cache-keys = [
 manifest-path = "scatrs-py/Cargo.toml"
 python-source = "python"
 module-name = "scatrs._scatrs"
-features = ["scatrs-py/extension-module"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

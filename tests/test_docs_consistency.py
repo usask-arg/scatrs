@@ -1,14 +1,18 @@
-"""The contracts quoted in the documentation pages must match the rustdoc and docstrings.
+"""The figures quoted in the documentation must match their sources.
 
-The pages under ``docs/`` repeat accuracy bounds, limits and costs from the Rust sources (marked
-``<!-- synced with ... -->``). These tests look for each figure in every file that states it, so
-a change in one place fails until the others follow. Texts are compared after normalising
-Unicode superscripts, LaTeX and Python operators to one form (see ``normalise``).
+The pages under ``docs/`` repeat accuracy bounds, limits, costs and version floors from the
+Rust sources, the docstrings, the build files, the reference manifest and the accuracy map
+(marked ``<!-- synced with ... -->``). These tests look for each figure in every file that
+states it, so a change in one place fails until the others follow. Texts are compared after
+normalising Unicode superscripts, LaTeX and Python operators to one form (see ``normalise``).
 """
 
 from __future__ import annotations
 
+import json
+import math
 import re
+import tomllib
 from pathlib import Path
 
 import pytest
@@ -62,6 +66,9 @@ CONTRACTS = [
     ("Gauss-Legendre cap", "2^17", [GL_RS, SPECIAL_PY, THEORY, LIMITATIONS]),
     ("Gauss-Legendre cap", "131072", [GL_RS, SPECIAL_PY, THEORY]),
     ("Gauss-Legendre cost model", "28nsn^2", [GL_RS, SPECIAL_PY, THEORY]),
+    ("Gauss-Legendre timing", "0.72s", [GL_RS, SPECIAL_PY, THEORY]),
+    ("Gauss-Legendre timing", "11s", [GL_RS, SPECIAL_PY, THEORY, LIMITATIONS]),
+    ("Wigner cost", "2.6ns", [WIGNER_RS, THEORY]),
     ("Gauss-Legendre f64 node contract", "nodeabsoluteerror≤2^-52", [GL_RS]),
     ("Gauss-Legendre f64 weight contract", "weightrelativeerror≤2^-52", [GL_RS]),
     ("Gauss-Legendre f64 contract", "|f64|≤2^-52|≤2^-52|", [THEORY]),
@@ -78,9 +85,6 @@ CONTRACTS = [
     ("Mie output cap", "2^27", [MIE_BINDINGS_RS, MIE_PY, LIMITATIONS]),
     ("Mie tolerance", "+cond)2^-52", [DOMAIN_RS, MIE_THEORY]),
     ("Mie validated x range", "10^-6≤x≤2", [MIE_THEORY, LIMITATIONS]),
-    ("MSRV", "1.85", [INSTALLATION, CONTRIBUTING]),
-    ("Python floor", "3.11", [INSTALLATION, CONTRIBUTING]),
-    ("numpy floor", "1.26", [INSTALLATION, CONTRIBUTING]),
 ]
 
 
@@ -102,12 +106,26 @@ def test_limits_in_code_match_the_documented_values() -> None:
     assert re.search(r"pub const MAX_MIE_VALUES: usize = 1 << 27;", mie_bindings)
 
 
-def test_version_floors_match_the_build_files() -> None:
-    cargo = (ROOT / "Cargo.toml").read_text(encoding="utf-8")
-    assert 'rust-version = "1.85"' in cargo
-    pyproject = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
-    assert 'requires-python = ">=3.11"' in pyproject
-    assert '"numpy>=1.26"' in pyproject
+def _version_floors() -> dict[str, str]:
+    """The MSRV, the Python floor and the numpy floor, from the build files."""
+    cargo = tomllib.loads((ROOT / "Cargo.toml").read_text(encoding="utf-8"))
+    project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"]
+    python = re.fullmatch(r">=\s*([\d.]+)", project["requires-python"])
+    numpy = [re.fullmatch(r"numpy\s*>=\s*([\d.]+)", d) for d in project["dependencies"]]
+    numpy = [m for m in numpy if m]
+    assert python and len(numpy) == 1, (project["requires-python"], project["dependencies"])
+    return {
+        "MSRV": cargo["workspace"]["package"]["rust-version"],
+        "Python floor": python.group(1),
+        "numpy floor": numpy[0].group(1),
+    }
+
+
+@pytest.mark.parametrize("what", ["MSRV", "Python floor", "numpy floor"])
+def test_version_floors_are_stated_everywhere(what: str) -> None:
+    floor = _version_floors()[what]
+    missing = [f for f in (INSTALLATION, CONTRIBUTING) if floor not in read(f)]
+    assert not missing, f"{what} {floor} (from the build files) is not stated in {missing}"
 
 
 def _declared_mie_constants() -> dict[str, float]:
@@ -123,8 +141,6 @@ def _declared_mie_constants() -> dict[str, float]:
 
 
 def test_mie_constants_match_the_accuracy_map() -> None:
-    import json
-
     columns = {
         "coefficients": "Coefficients",
         "q_ext": "Extinction",
@@ -142,8 +158,10 @@ def test_mie_constants_match_the_accuracy_map() -> None:
     data = json.loads((ROOT / "docs/validation/data/mie-accuracy-map.json").read_text())
     for column, variant in columns.items():
         assert data["declared"][column] == constants[variant], column
-        # The documented margin: every constant at least 4 times the worst C of the map.
-        assert 4 * max(max(row) for row in data["c"][column]) <= constants[variant], column
+        # The documented margin: every constant at least 4 times the worst C of the map. A null
+        # (a non-finite C) counts as infinite.
+        worst = max(math.inf if c is None else c for row in data["c"][column] for c in row)
+        assert 4 * worst <= constants[variant], column
 
 
 # The `MieOutput` variants that share a constant, as the theory chapter and the rustdoc table of
@@ -181,17 +199,16 @@ def test_mie_constants_are_stated_in_the_theory_and_the_rustdoc() -> None:
 
 
 def test_reference_suite_page_matches_the_manifest() -> None:
-    import json
-
     manifest = json.loads((ROOT / "reference/data/manifest.json").read_text(encoding="utf-8"))
     page = (ROOT / REFERENCE_SUITE).read_text(encoding="utf-8")
+    rows = dict(re.findall(r"^\| `([\w.]+\.jsonl)` \| (\d+) \|", page, re.MULTILINE))
+    assert set(rows) == set(manifest["files"]), "the table and the manifest list different files"
     for name, entry in manifest["files"].items():
-        row = re.search(rf"^\| `{re.escape(name)}` \| (\d+) \|", page, re.MULTILINE)
-        assert row, f"{name} is missing from the table"
-        assert int(row.group(1)) == entry["records"], name
+        assert int(rows[name]) == entry["records"], name
     total = sum(p.stat().st_size for p in (ROOT / "reference/data").glob("*.jsonl")) / 1e6
-    stated = re.search(r"The committed data take about ([\d.]+) MB", page)
-    assert stated and abs(float(stated.group(1)) - total) <= 0.1, (stated, total)
+    stated = re.search(r"The committed data take about\s+([\d.]+)\s+MB", page)
+    assert stated, "size sentence not found"
+    assert abs(float(stated.group(1)) - total) <= 0.1, (stated.group(1), total)
 
 
 def test_synced_sections_name_existing_files() -> None:

@@ -182,13 +182,27 @@ Decisions (spec `docs/specs/2026-10-13-phase-1-mie-design.md`, section 12):
 - Truncation ⌈x + 6x^(1/3) + 3⌉ (f64) and ⌈x + 12x^(1/3) + 6⌉ (DoubleDouble), measured.
 - Dₙ(mx) by a contracting downward recurrence: no Lentz continued fraction, no `NotConverged`.
 - Q_ext = Q_sca + Q_abs, with Q_abs from the per-term identity.
-- Tolerance C·(κ′ + cond)·2⁻⁵², enforced by `mie_reference.rs` and `mie_accuracy_map.rs`.
+- Tolerance C·(κ′ + cond)·2⁻⁵², enforced by `mie_reference.rs` and `mie_accuracy_map.rs`:
+  cond componentwise in Re m and Im m for the real outputs (a normwise cond made their
+  tolerances vacuous at small Im m) and normwise for the holomorphic ones; κ′ = κ for the
+  values, κ·max(1, |m|/|m − 1|) for the efficiency Jacobian, 1 + |m|x for the coefficient and
+  amplitude derivatives; C = 16, 64, 256, 512. `DoubleDouble`, the map's stand-in for exact
+  values, is checked against Arb on every output, within 16 times the declared constants in
+  units of 2⁻¹⁰⁴.
+- The Python layer bounds every output (`MAX_MIE_VALUES`) before allocating, because
+  broadcasting makes outputs far larger than inputs; `scatrs::mie::n_terms` validates and
+  sizes without solving.
 - The reference generator avoids Arb's Bessel functions and uses disk arithmetic.
 
 Phase 1b must include (besides spec section 9):
-- **Performance.** The Jacobian costs 1.8× the values at large x: profile the per-order
-  derivative work (three complex reciprocals per order in the ratio region). Measure Mie on
-  x86_64 with and without FMA (the f64 kernel uses no `mul_add`, but `DoubleDouble` maps do).
+- **Performance.** The Jacobian costs 1.8× the values at large x for complex m, and 2.0× for
+  real m (whose values take the cheaper real recurrence), at the limit of the 2× target:
+  profile the per-order derivative work (three complex reciprocals per order in the ratio
+  region), and consider merging the three `derivative_sums` passes and `value_sums` into one;
+  make the real-m case a gate of the instruction-count benchmark. The amplitudes cost about
+  4 ns per angle and term, bound by the latency of the πₙ recurrence, which divides twice per
+  angle and term: reciprocals per n shared across angles should help. Measure Mie on x86_64
+  with and without FMA (the f64 kernel uses no `mul_add`, but `DoubleDouble` maps do).
 - **Derivative series tail bound.** Certify the series of derivatives, for example with
   Cauchy's estimate in m (a disk of m in the tail bound of Proposition 3).
 - **Larger certified cases.** Series records with |m|x > 6·10⁴ are high-precision (9 of 306);
@@ -201,3 +215,44 @@ Phase 1b must include (besides spec section 9):
 - **First real CI run.** The Mie accuracy map and reference tests run on Windows for the first
   time there; libm sin/cos differences change last digits only, but check the printed worst
   constants.
+- **`DoubleDouble` amplitudes at large x.** Against Arb, `DoubleDouble` ∂S/∂x at x = 2·10⁴
+  reaches C = 91 in units of (κ′ + cond)·2⁻¹⁰⁴, and S₁, S₂ 32, against at most 9 for `f64` in
+  units of 2⁻⁵². Not truncation (300 more terms change nothing), not `DoubleDouble` sin/cos
+  (within 0.1·2⁻¹⁰⁴ of Arb), and dS/dm at the same point has C = 0.01: find the cause in the
+  angular recurrences or the x-derivative terms.
+- **Tighter tolerances near m = 1.** κ multiplies 1 + |m|x by |m|/|m − 1|, which leaves the
+  values' tolerance loose near m = 1 at large x (7·10⁻⁷ relative at m = 1.0001,
+  x = 1.6·10⁴, where the map's C is 10⁻⁵ to 10⁻⁸). An additive κ′ = (1 + |m|x) +
+  |m|/|m − 1| (squared for the Jacobian) passes the map with C ≤ 3.4 for the coefficients
+  and g, 41.7 for the Jacobian and 16.9 for the amplitudes (constant 128 for the margin);
+  check it against Arb before adopting it.
+
+Recorded in review, lower priority:
+- **m = 1 with x ≥ 1.** The orders n ≤ ⌊x⌋ come from ψₙ and χₙ, so the coefficients are
+  rounding noise instead of exact zeros (κ is infinite there), and g and its derivatives are
+  meaningless (documented). Cancellation-free numerators below n_s too (with care near zeros of
+  ψₙ(x)), or exact zeros when m == 1 by value, would fix it.
+- **Large |m|x is slow:** about 1 s per 10⁸ of |m|x in `f64`, and a call cannot be
+  interrupted. Consider capping |m|·x (say at 10⁸) with `InvalidInput`.
+- **Untested guard.** The exact-zero guard in the D and u(x) recurrences has no test: extract
+  the step u = 1/(c − u) into a function and test the guard.
+- **Kernel cleanups declined for now:** copy the real u buffer into u_z directly; a summary
+  `Debug` for `Mie` and `MieSolution` (the derived one dumps whole buffers); split
+  `kernel::solve` (about 160 lines) into per-region helpers; `reserve` to avoid twice the
+  capacity during warm-up.
+- **Reference data.** The manifest's `precision_bits` (320) for `mie` and `mie_derivatives` is
+  the starting precision; cases may double it, as for `wigner_d`. The components of a
+  coefficient record share one scale per complex array (max |re| + |im|), so a small
+  component (Re bₙ for real m at x = 10⁻⁶, m = 1.0001) is accurate only relative to that scale
+  (2⁻⁶¹ relative to itself there), as the Rust tests measure it.
+- **Generator.** Sharper tail-bound tests: compare each tail sum with the matching sum of
+  absolute terms from a longer solve (slack 2–3); the containment test only detects tails too
+  small by more than about 20×. Refactors declined: a shared helper for the value and
+  derivative series loops, splitting `_case_records`, an early error for tail width in the
+  precision loop.
+- **Python API.** Errors index elements in flat C order of the broadcast shape; also report
+  the multi-index for multi-dimensional inputs. `d()` on scalar inputs returns numpy scalars
+  where the values are 0-d arrays. The binding restates three core checks (the `n_max` range,
+  the cosines, the x range of `default_n_max`) so that empty inputs are checked too: expose
+  the core's checks if their wording changes. mypy (not run in CI) reports two errors in
+  `python/scatrs/mie.py`, at the `MieEfficiencies(*fields, params=…, _jacobian=…)` call.

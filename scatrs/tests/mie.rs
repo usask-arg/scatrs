@@ -256,7 +256,8 @@ fn bad_cosines_and_buffers_are_rejected_without_writing() {
 }
 
 /// Forward and backward symmetries hold exactly: πₙ(±1) = ±τₙ(±1) in exact integers (while
-/// n²(n + 1)/2 < 2⁵³, so for the default truncation of x up to about 2.6·10⁵).
+/// n(n + 1)(2n + 1)/2 < 2⁵³, the largest product the π recurrence forms, so for x up to about
+/// 2·10⁵).
 #[test]
 fn forward_and_backward_amplitudes() {
     let mut mie = Mie::<f64>::new();

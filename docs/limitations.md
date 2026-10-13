@@ -153,7 +153,9 @@ the same treatment when a kernel needs them.
 - **Shared inputs.** Calls release the GIL and read input arrays in place. Do not modify or
   resize an input array from another thread during a call.
 - **Output size.** One Mie call returns at most `MAX_MIE_VALUES` = $2^{27}$ complex values,
-  counting derivatives (2 GiB).
+  counting derivatives (2 GiB), or twice as many real values for the efficiencies. The bound
+  applies to the broadcast output, which small inputs can make large: a call above it raises
+  `InvalidInputError` before allocating anything.
 - **Per-call overhead.** Measured during code review on an Apple M4 Pro (not committed), the
   extension call costs about 180 ns and the Python wrapper about 0.84 µs. Prefer one call on a
   large array to many small calls.

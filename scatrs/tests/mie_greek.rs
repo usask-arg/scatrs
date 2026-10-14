@@ -4,7 +4,7 @@
 
 mod common;
 
-use common::greek::{GreekOutputs, solve_greek};
+use common::greek::{GreekOutputs, greek_arrays, solve_greek};
 use num_complex::Complex;
 use scatrs::Error;
 use scatrs::mie::{
@@ -136,7 +136,11 @@ fn greek_coefficients_expand_the_phase_matrix() {
         let scale = a1.iter().fold(0.0f64, |s, v| s.max(v.abs()));
         for (j, &u) in mu.iter().enumerate() {
             let (f11, f12, f33, f34) = (f.phase[0][j], f.phase[1][j], f.phase[2][j], f.phase[3][j]);
-            let tol = 1e-12 * scale * a1.len() as f64 * f11.max(1.0);
+            // The coefficients carry the quadrature term ((L + 1)² + x²)/8 of their tolerance,
+            // with constant 16, relative to the sum of |α₁| (|dₗ| ≤ 1).
+            let l1 = a1.len() as f64;
+            let sum: f64 = a1.iter().map(|v| v.abs()).sum();
+            let tol = 2.0 * (l1 * l1 + x * x) * EPS * sum.max(scale);
             let checks = [
                 ("F11", expand(a1, 0, 0, u), f11),
                 ("F22 + F33", expand(&plus, 2, 2, u), f11 + f33),
@@ -205,9 +209,14 @@ fn orders_above_2n_are_exactly_zero_and_lower_orders_a_prefix() {
 
 #[test]
 fn the_projector_is_exact_for_polynomials() {
-    // Tables built from known coefficients up to order K, projected with a rule exact for
-    // degree K + L: the coefficients come back, and those above K are 0.
-    let (k_max, order) = (37usize, 45usize);
+    // K + L odd: the fewest nodes that are exact, (K + L + 1)/2; K + L even: one more than half.
+    projector_recovers(37, 44);
+    projector_recovers(37, 45);
+}
+
+/// Tables built from known coefficients up to order `k_max`, projected up to `order` with the
+/// fewest nodes exact for degree K + L: the coefficients come back, and those above K are 0.
+fn projector_recovers(k_max: usize, order: usize) {
     let coef = |s: f64| -> Vec<f64> {
         (0..=k_max)
             .map(|l| ((l as f64 + s) * 0.7).sin() / (1.0 + l as f64))
@@ -427,25 +436,25 @@ fn bad_buffers_tables_and_solutions_are_rejected() {
 #[test]
 fn derivatives_values_match_the_plain_values_bitwise() {
     let mu = [1.0, 0.2, -1.0];
-    for (x, m) in SPHERES {
-        let mut mie = Mie::<f64>::new();
-        let plain = mie.compute(x, m, &MieOptions::new()).unwrap();
-        let g = plain.greek(None, Normalization::Normalized).unwrap();
-        let mut f: [Vec<f64>; 4] = std::array::from_fn(|_| vec![0.0; mu.len()]);
-        {
-            let [f11, f12, f33, f34] = &mut f;
-            plain
-                .phase_matrix(
-                    &mu,
-                    Normalization::Normalized,
-                    PhaseBuffers { f11, f12, f33, f34 },
-                )
-                .unwrap();
+    for normalization in [Normalization::Normalized, Normalization::Unnormalized] {
+        for order in [None, Some(7)] {
+            for (x, m) in SPHERES {
+                let mut mie = Mie::<f64>::new();
+                let plain = mie.compute(x, m, &MieOptions::new()).unwrap();
+                let g = plain.greek(order, normalization).unwrap();
+                let mut f: [Vec<f64>; 4] = std::array::from_fn(|_| vec![0.0; mu.len()]);
+                plain
+                    .phase_matrix(&mu, normalization, bufs(&mut f))
+                    .unwrap();
+                let both = solve_greek(x, m, &mu, None, order, normalization);
+                assert_eq!(both.phase, f, "{normalization:?} x = {x}: phase matrix");
+                assert_eq!(
+                    both.greek,
+                    greek_arrays(&g),
+                    "{normalization:?} {order:?} x = {x}"
+                );
+            }
         }
-        let both = solve(x, m, &mu, Normalization::Normalized);
-        assert_eq!(both.phase, f, "x = {x}: phase matrix");
-        assert_eq!(both.greek[0], g.alpha1, "x = {x}: alpha1");
-        assert_eq!(both.greek[5], g.beta2, "x = {x}: beta2");
     }
 }
 

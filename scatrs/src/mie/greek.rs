@@ -2,7 +2,7 @@
 
 use super::{MAX_MIE_ORDER, MieSolution, Normalization, PhaseBuffers};
 use crate::scalar::Real;
-use crate::special::{GaussLegendre, gauss_legendre, wigner_d};
+use crate::special::{GaussLegendre, MAX_GAUSS_LEGENDRE_POINTS, gauss_legendre, wigner_d};
 use crate::{Error, Result};
 
 /// The expansion coefficients of a sphere's phase matrix for l = 0, …, L (Mishchenko, Travis &
@@ -40,9 +40,10 @@ impl<T: Real> GreekCoefficients<T> {
         }
     }
 
-    /// The highest order L.
+    /// The highest order L (0 if the arrays have been emptied; this crate never returns empty
+    /// arrays).
     pub fn order(&self) -> usize {
-        self.alpha1.len() - 1
+        self.alpha1.len().saturating_sub(1)
     }
 
     fn arrays_mut(&mut self) -> [&mut Vec<T>; 6] {
@@ -161,6 +162,9 @@ impl<T: Real> GreekProjector<T> {
                 )));
             }
         }
+        if tables.is_empty() {
+            return Ok(Vec::new());
+        }
         let len = self.order + 1;
         let mut out: Vec<_> = tables
             .iter()
@@ -212,6 +216,11 @@ impl<T: Real> GreekProjector<T> {
 
 /// The highest order [`MieSolution::greek`] accepts, 2²¹: twice [`MAX_MIE_ORDER`], since the
 /// coefficients of an N-term sphere vanish above order 2N.
+///
+/// Two other limits apply: all orders of a sphere need N + N + 1 ≤ 2¹⁷ quadrature nodes
+/// ([`MAX_GAUSS_LEGENDRE_POINTS`]), so N ≤ 2¹⁶ − 1 (x up to about 6.5·10⁴), and every order
+/// asked for is stored, so the largest order costs 6·(2²¹ + 1) values per coefficient set
+/// even for a tiny sphere (100 MB in `f64`, four sets with derivatives).
 pub const MAX_GREEK_ORDER: usize = 2 * MAX_MIE_ORDER;
 
 fn check_order(order: usize) -> Result<()> {
@@ -247,10 +256,14 @@ impl<T: Real> MieSolution<'_, T> {
         let order = order.unwrap_or(2 * n);
         check_order(order)?;
         let projected = order.min(2 * n);
-        Ok((
-            order,
-            GreekProjector::new(projected, n + (projected + 1).div_ceil(2))?,
-        ))
+        let nodes = n + (projected + 1).div_ceil(2);
+        if nodes > MAX_GAUSS_LEGENDRE_POINTS {
+            return Err(Error::InvalidInput(format!(
+                "the Greek coefficients of a sphere with {n} terms up to order {projected} need \
+                 {nodes} quadrature nodes, more than {MAX_GAUSS_LEGENDRE_POINTS}"
+            )));
+        }
+        Ok((order, GreekProjector::new(projected, nodes)?))
     }
 
     /// The Greek coefficients up to `order` (default: all, 2N), exact up to rounding: the phase
@@ -264,8 +277,9 @@ impl<T: Real> MieSolution<'_, T> {
     ///
     /// # Errors
     ///
-    /// [`Error::InvalidInput`] if `order` > [`MAX_GREEK_ORDER`]; as [`gauss_legendre`] (above
-    /// 2¹⁷ nodes, so for N + ⌈(min(L, 2N) + 1)/2⌉ > 2¹⁷).
+    /// [`Error::InvalidInput`] if `order` > [`MAX_GREEK_ORDER`], or if the rule would need more
+    /// than [`MAX_GAUSS_LEGENDRE_POINTS`] nodes (N + ⌈(min(L, 2N) + 1)/2⌉ > 2¹⁷, so N above
+    /// about 4.4·10⁴ for all orders).
     pub fn greek(
         &self,
         order: Option<usize>,

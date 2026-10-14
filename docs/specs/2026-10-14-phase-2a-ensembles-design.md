@@ -179,3 +179,41 @@ estimates, Jacobians), an executed example (a lognormal sulfate-like aerosol acr
 wavelengths: cross sections, ω, g, Greek coefficients, derivatives), the accuracy page
 (calibration), limitations (cost of pass 2 for broad distributions of large spheres;
 unresolvable ripples without absorption), CHANGELOG.
+
+## 12. Changes during implementation
+
+Recorded 2026-10-14, after prototyping and measuring:
+
+- **Cut-offs.** The Mie integration range bounds the number (r⁰) and area (r²) tails at
+  rtol/10 each: renormalizing over the range moves every per-particle average by the omitted
+  number fraction, so the number tail must be bounded too. The volume (r³) tail is not used
+  for the Mie range (for σ_g = 2 it pushed the range to x ≈ 5000): the moments ⟨r²⟩ and ⟨r³⟩
+  are integrated separately, without Mie solutions, on a range that also bounds the volume
+  tail. The cut-offs move each average by at most about 2·rtol/10, which every error
+  estimate includes.
+- **Refined quantities.** Pass 1 refines on 1 (the normalization), ⟨C_ext⟩, ⟨C_sca⟩ and
+  ⟨C_sca g⟩, the requested distribution-parameter integrals, and, when derivatives with
+  respect to m are requested, the derivatives of the cross sections with respect to m (to
+  rtol of their absolute integrals): without that, their estimates fell short by a factor of
+  3. ⟨C_back⟩ is refined only with `refine_backscatter` (to rtol of max(⟨C_back⟩, ⟨C_sca⟩), as
+  phase 1a measures Q_back): its glory ripples made a broad weakly absorbing case unconverged
+  at 4096 panels; without refinement its estimate is indicative (it fell short by up to a
+  factor of 7.6 on a derivative). Panels are split only for quantities still above their
+  targets.
+- **Projector bands.** One shared projector (n_q = N_max + ⌈(L + 1)/2⌉) made every small sphere
+  pay for the largest: 20 s per wavelength for a broad distribution. Nodes are grouped into
+  bands by their number of terms (bands growing by a factor 1.25), each with its own exact
+  projector.
+- **Initial panels** are capped at `max_panels` (equal panels in ln r beyond it).
+- **Validation.** Jacobians are checked against central differences at rtol 1e-11 rather than
+  with frozen panels; the reference integrals are `f64` at rtol 1e-11. On the calibration grid
+  (eight distributions, with backscattering refined) every true error is within its estimate:
+  at most 0.085 of it for the refined outputs and 0.37 for the others.
+- **Measured cost** (Apple M4 Pro, one wavelength, lognormal r_g = 1, σ_g = 2,
+  m = 1.33 + 10⁻⁴i, rtol 1e-6): cross sections, g and moments 0.04 s at λ = 1, 0.11 s at
+  λ = 0.5, 0.23 s at λ = 0.3; with Greek coefficients to order 32, 1.1 s, 5.9 s and 22.6 s. The
+  exact Greek coefficients need each node's amplitudes at about N + L/2 cosines, O(N²) for
+  large spheres. Recorded as a follow-up for the performance phase: Clebsch–Gordan Greek
+  coefficients (O(N·L) per sphere) and shared πₙ/τₙ tables per band.
+- **Non-absorbing spheres.** Derivatives with respect to Im m at Im m = 0 have a spike at every
+  resonance and do not converge (flagged); the values do.

@@ -83,8 +83,12 @@ jobs:
           persist-credentials: false
       - name: Install Rust
         run: rustup toolchain install stable --profile minimal --no-self-update
-      # The #[ignore] tests, all in tests/gauss_legendre.rs: Gauss–Legendre at n = 20000
-      # against Arb, and every rule up to 3000 points. Building only that test binary saves
-      # fat-LTO builds of the others. --nocapture shows the worst errors they measure.
+      # The #[ignore] tests: in tests/gauss_legendre.rs, the double-double Gauss–Legendre rule
+      # at n = 20000 against Arb and every rule up to 3000 points; in
+      # tests/mie_greek_accuracy_map.rs, the phase matrix and Greek coefficients of spheres up
+      # to x = 2e4. Building only those test binaries saves fat-LTO builds of the others.
+      # --nocapture shows the worst errors they measure.
       - name: Run the ignored tests
-        run: cargo test -p scatrs --release --locked --test gauss_legendre -- --ignored --nocapture
+        run: >-
+          cargo test -p scatrs --release --locked --test gauss_legendre
+          --test mie_greek_accuracy_map -- --ignored --nocapture

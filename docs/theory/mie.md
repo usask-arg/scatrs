@@ -233,7 +233,8 @@ the amplitudes, with $S_\text{rms} = x\sqrt{Q_\text{sca}}/2$). The two condition
 The constants C are measured, with a margin of at least 4 over the worst case found at every
 Arb reference point and on a dense double-double grid: 16 for the coefficients, efficiencies
 and $g$; 128 for $S_1$, $S_2$; 64 for their derivatives; 256 for the efficiency Jacobian; 512
-for the coefficient derivatives. See {doc}`/validation/accuracy` for the map, and for why
+for the coefficient derivatives; 32 for the phase matrix; 128 for its derivatives; 8 for the
+Greek coefficients; 16 for their derivatives. See {doc}`/validation/accuracy` for the map, and for why
 neither term alone is enough.
 
 ## Reference values

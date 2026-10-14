@@ -181,14 +181,16 @@ def _declared_mie_constants() -> dict[str, float]:
     body = source[source.index("pub fn constant(") :]
     body = body[: body.index("\n    }\n")]
     constants = {}
-    for arm in re.finditer(r"((?:\s*\|?\s*MieOutput::\w+)+)\s*=>\s*([\d.]+)", body):
+    variant = r"MieOutput::\w+(?:\s*\{\s*\.\.\s*\})?"
+    for arm in re.finditer(rf"((?:\s*\|?\s*{variant})+)\s*=>\s*([\d.]+)", body):
         for variant in re.findall(r"MieOutput::(\w+)", arm.group(1)):
             constants[variant] = float(arm.group(2))
     return constants
 
 
-def test_mie_constants_match_the_accuracy_map() -> None:
-    columns = {
+# The columns of each accuracy map, by the `MieOutput` variant each measures.
+ACCURACY_MAPS = {
+    "mie-accuracy-map.json": {
         "coefficients": "Coefficients",
         "q_ext": "Extinction",
         "q_sca": "Scattering",
@@ -199,10 +201,24 @@ def test_mie_constants_match_the_accuracy_map() -> None:
         "coefficient_derivatives": "CoefficientDerivatives",
         "efficiency_jacobian": "EfficiencyJacobian",
         "amplitude_derivatives": "AmplitudeDerivatives",
-    }
+    },
+    "greek-accuracy-map.json": {
+        "phase_matrix": "PhaseMatrix",
+        "phase_matrix_derivatives": "PhaseMatrixDerivatives",
+        "greek": "GreekCoefficients",
+        "greek_derivatives": "GreekDerivatives",
+    },
+}
+
+
+@pytest.mark.parametrize("name", sorted(ACCURACY_MAPS))
+def test_mie_constants_match_the_accuracy_map(name: str) -> None:
+    columns = ACCURACY_MAPS[name]
     constants = _declared_mie_constants()
-    assert set(constants) == set(columns.values())
-    data = json.loads((ROOT / "docs/validation/data/mie-accuracy-map.json").read_text())
+    measured = {v for c in ACCURACY_MAPS.values() for v in c.values()}
+    assert set(constants) == measured, "a constant that no map measures, or the reverse"
+    data = json.loads((ROOT / "docs/validation/data" / name).read_text())
+    assert set(data["declared"]) == set(data["c"]) == set(columns)
     for column, variant in columns.items():
         assert data["declared"][column] == constants[variant], column
         # The documented margin: every constant at least 4 times the worst C of the map. A null
@@ -223,6 +239,10 @@ MIE_CONSTANT_GROUPS = [
     (("AmplitudeDerivatives",), "their derivatives", "derivatives of S₁, S₂"),
     (("EfficiencyJacobian",), "the efficiency Jacobian", "efficiency Jacobian"),
     (("CoefficientDerivatives",), "the coefficient derivatives", "coefficient derivatives"),
+    (("PhaseMatrix",), "the phase matrix", "phase matrix"),
+    (("PhaseMatrixDerivatives",), "its derivatives", "derivatives of the phase matrix"),
+    (("GreekCoefficients",), "the Greek coefficients", "Greek coefficients"),
+    (("GreekDerivatives",), "their derivatives", "derivatives of the Greek coefficients"),
 ]
 
 

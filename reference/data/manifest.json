@@ -72,6 +72,14 @@
       "records": 160,
       "sha256": "72ce63fb87dd1f519d13ad71ed33a3689fdc1477ca50d94e8bd019c08b2b2b1c"
     },
+    "mie_greek.jsonl": {
+      "flint": "3.6.0",
+      "generator": "mie_greek",
+      "precision_bits": 320,
+      "python_flint": "0.9.0",
+      "records": 36,
+      "sha256": "ec1a2e4927a0636738e6d05324172f257122c03b73f52b99b6dfbb2836c24866"
+    },
     "wigner_d.jsonl": {
       "flint": "3.6.0",
       "generator": "wigner_d",

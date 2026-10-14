@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import numbers
+from collections.abc import Sequence
 from dataclasses import dataclass
 
 import numpy as np
@@ -10,7 +11,7 @@ from numpy.typing import NDArray
 
 from scatrs.refractive import Constant, Function, RefractiveIndex
 
-__all__ = ["Sphere"]
+__all__ = ["LayeredSphere", "Sphere"]
 
 
 def _model(value: object) -> RefractiveIndex:
@@ -68,3 +69,102 @@ class Sphere:
         index there (the wavelengths' shape), which the result reports."""
         m = self.refractive_index.evaluate(wavelength)
         return ("sphere", np.ascontiguousarray(m.reshape(-1))), m
+
+
+def _fractions(value: object, layers: int) -> tuple[float, ...]:
+    """``value`` as the radius fractions of ``layers`` layers.
+
+    Raises
+    ------
+    TypeError
+        If ``value`` is not a sequence of real numbers.
+    ValueError
+        If there are not ``layers - 1`` of them, or they are not nondecreasing in (0, 1].
+    """
+    if isinstance(value, (str, bytes)) or not isinstance(value, (Sequence, np.ndarray)):
+        raise TypeError(
+            f"radius_fraction must be a sequence of real numbers, not {type(value).__name__}"
+        )
+    out: list[float] = []
+    for i, v in enumerate(value):
+        if isinstance(v, (bool, np.bool_)) or not isinstance(v, numbers.Real):
+            raise TypeError(f"radius_fraction[{i}] must be a real number, not {type(v).__name__}")
+        f = float(v)
+        if not 0.0 < f <= 1.0:
+            raise ValueError(f"radius_fraction[{i}] must be in (0, 1], got {f}")
+        if out and f < out[-1]:
+            raise ValueError(
+                f"radius_fraction must be nondecreasing from the core out, but "
+                f"radius_fraction[{i}] = {f} < {out[-1]}"
+            )
+        out.append(f)
+    if len(out) != layers - 1:
+        raise ValueError(
+            f"a layered sphere of {layers} layers needs {layers - 1} radius fractions, "
+            f"got {len(out)}"
+        )
+    return tuple(out)
+
+
+@dataclass(frozen=True)
+class LayeredSphere:
+    """A layered sphere: a core and concentric shells (see :mod:`scatrs.layered`).
+
+    In an :class:`~scatrs.Ensemble` the size distribution gives the outer radius, and each
+    interface stays at a fixed fraction of it. The core's volume fraction is the cube of its
+    radius fraction: a core of a quarter of the particle's volume has
+    ``radius_fraction=[0.25 ** (1 / 3)]``.
+
+    Parameters
+    ----------
+    refractive_index : sequence
+        Each layer's refractive index, the core first: :mod:`scatrs.refractive` models, numbers
+        (:class:`~scatrs.refractive.Constant`) or other callables
+        (:class:`~scatrs.refractive.Function`), as for :class:`Sphere`. Stored as a tuple.
+    radius_fraction : sequence of float
+        The outer radius of each layer but the last, as a fraction of the particle's radius:
+        L − 1 values, nondecreasing in (0, 1] (empty for one layer). Stored as a tuple.
+
+    Raises
+    ------
+    TypeError
+        If ``refractive_index`` is not a sequence of models, numbers or callables, or
+        ``radius_fraction`` not a sequence of real numbers.
+    ValueError
+        If there is no layer, or the fractions are not L − 1 values nondecreasing in (0, 1].
+    """
+
+    refractive_index: tuple[RefractiveIndex, ...]
+    radius_fraction: tuple[float, ...] = ()
+
+    def __post_init__(self) -> None:
+        m = self.refractive_index
+        if isinstance(m, (str, bytes)) or not isinstance(m, (Sequence, np.ndarray)):
+            raise TypeError(
+                "refractive_index must be a sequence with one model, number or callable per "
+                f"layer, not {type(m).__name__}; for a homogeneous sphere use Sphere"
+            )
+        if len(m) == 0:
+            raise ValueError("a layered sphere needs at least one layer")
+        object.__setattr__(self, "refractive_index", tuple(_model(v) for v in m))
+        object.__setattr__(
+            self, "radius_fraction", _fractions(self.radius_fraction, len(self.refractive_index))
+        )
+
+    @classmethod
+    def coated(cls, core: object, shell: object, *, core_fraction: float) -> LayeredSphere:
+        """A core of refractive index ``core`` in a shell of ``shell``, the core's radius
+        ``core_fraction`` of the particle's."""
+        return cls((_model(core), _model(shell)), (core_fraction,))
+
+    @property
+    def layers(self) -> int:
+        """The number of layers L."""
+        return len(self.refractive_index)
+
+    def _engine(self, wavelength: NDArray[np.float64]) -> tuple[tuple, NDArray[np.complex128]]:
+        """The engine's tagged tuple for the particle at ``wavelength``, and its refractive
+        indices there (shape ``(L,) + wavelength.shape``), which the result reports."""
+        m = np.stack([v.evaluate(wavelength) for v in self.refractive_index])
+        fractions = np.array(self.radius_fraction, dtype=np.float64)
+        return ("layered", fractions, np.ascontiguousarray(m.reshape(self.layers, -1))), m

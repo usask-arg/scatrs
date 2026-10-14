@@ -18,7 +18,7 @@ from scatrs.errors import (
     OutsideValidatedDomainError,
     ScatrsError,
 )
-from scatrs.particles import Sphere
+from scatrs.particles import LayeredSphere, Sphere
 from scatrs.size import (
     Gamma,
     LogNormal,
@@ -37,6 +37,7 @@ __all__ = [
     "EnsembleResult",
     "Gamma",
     "InvalidInputError",
+    "LayeredSphere",
     "LogNormal",
     "Mixture",
     "ModifiedGamma",

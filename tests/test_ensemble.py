@@ -124,8 +124,12 @@ def test_mixture_results_carry_each_components_refractive_index():
     a = Ensemble(Sphere(1.45), LOGNORMAL)
     b = Ensemble(Sphere(refractive.Cauchy(1.5, 0.004)), LOGNORMAL)
     r = Mixture([(1.0, a), (1.0, b)]).compute(wl)
-    assert r.refractive_index.shape == (2, 1, 3) and r.c_ext.shape == (1, 3)
+    assert r.c_ext.shape == (1, 3)
+    assert isinstance(r.refractive_index, tuple) and len(r.refractive_index) == 2
+    assert r.refractive_index[0].shape == (1, 3)
     np.testing.assert_array_equal(r.refractive_index[1], b.particle.refractive_index.evaluate(wl))
+    with pytest.raises(ValueError):
+        r.refractive_index[0].flags.writeable = True
     assert dict(r.grid) == {}
 
 

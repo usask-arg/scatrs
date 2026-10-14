@@ -170,14 +170,14 @@ impl<T: Real> MieSolution<'_, T> {
         let i1 = Complex::new(T::zero(), T::one());
         let v = values;
         let [mut dx, mut dr, mut di] = d;
-        for j in 0..n {
-            let (s1, s2) = (s[0][j], s[1][j]);
+        let [s1s, s2s, dx1, dx2, dm1, dm2] = &s;
+        for (j, (&s1, &s2)) in s1s.iter().zip(s2s).enumerate() {
             let f = elements(s1, s2);
             // ∂S/∂x, ∂S/∂(Re m) = dS/dm, ∂S/∂(Im m) = i·dS/dm.
             let df = [
-                element_derivatives(s1, s2, s[2][j], s[3][j]),
-                element_derivatives(s1, s2, s[4][j], s[5][j]),
-                element_derivatives(s1, s2, i1 * s[4][j], i1 * s[5][j]),
+                element_derivatives(s1, s2, dx1[j], dx2[j]),
+                element_derivatives(s1, s2, dm1[j], dm2[j]),
+                element_derivatives(s1, s2, i1 * dm1[j], i1 * dm2[j]),
             ];
             v.f11[j] = c * f[0];
             v.f12[j] = c * f[1];

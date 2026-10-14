@@ -8,6 +8,7 @@ use num_complex::Complex;
 use rayon::prelude::*;
 
 use super::distribution::{SizeDistribution, Support};
+use super::fast::{BandTables, PanelProducts};
 use super::lin::Lin;
 use super::moments::{Moments, moments};
 use super::range::{self, MIE_POWERS, MOMENT_POWERS, STEP};
@@ -708,12 +709,13 @@ fn panel_terms(a: f64, b: f64, lambda: f64, m: Complex<f64>, opts: &MieOptions) 
     Ok(most)
 }
 
-/// One band: its largest number of terms, the start of its tables in the flat layout, and
-/// its projector.
+/// One band: its largest number of terms, the start of its tables in the flat layout, its
+/// projector, and the πₙ, τₙ tables at the projector's nodes.
 struct Band {
     upper: usize,
     start: usize,
     projector: GreekProjector<f64>,
+    tables: BandTables,
 }
 
 /// What pass 2 computes at every node: the per-sphere scalars, the phase matrix at the
@@ -739,7 +741,9 @@ impl Layout<'_> {
 
 /// The per-sphere quantities of pass 2 at radius r into `g` (the common part and the node's
 /// band, whose (start, length) it returns), and their derivatives with respect to Re m, Im m
-/// into `dm` and with respect to r into `dr`, if given.
+/// into `dm` and with respect to r into `dr`, if given. With `products` (the panel's products
+/// and the node's index in them), the band's tables are left to the products: the node's Mie
+/// coefficients go into them instead.
 #[allow(clippy::too_many_arguments)]
 fn quantities2(
     mie: &mut Mie<f64>,
@@ -752,6 +756,7 @@ fn quantities2(
     mut dm: Option<[&mut [f64]; 2]>,
     dr: Option<&mut [f64]>,
     band_terms: usize,
+    products: Option<(&mut PanelProducts, usize)>,
 ) -> Result<Option<(usize, usize)>> {
     let x = size(r, lambda);
     let derivatives = dm.is_some() || dr.is_some();
@@ -786,7 +791,10 @@ fn quantities2(
         ));
     }
     let mut tables = vec![(SCALARS, layout.mu)];
-    tables.extend(band);
+    match products {
+        Some((p, k)) => p.set(k, &s),
+        None => tables.extend(band),
+    }
     let segment = band.map(|(start, nodes)| (start, 4 * nodes.len()));
     if !derivatives {
         for (start, cosines) in tables {
@@ -930,6 +938,45 @@ struct Sums2 {
     blocks: usize,
 }
 
+/// Adds one node's values `g` on [lo, hi) of the layout, weighted by its Kronrod and Gauss
+/// weights, to the panel's sums `pk` and `pg`: the values block (weight u·r), each θ block
+/// (∂u/∂θ·r, from `grad`) and the Re m, Im m blocks (`dmv`).
+#[allow(clippy::too_many_arguments)]
+fn accumulate(
+    pk: &mut [f64],
+    pg: &mut [f64],
+    g: &[f64],
+    dmv: &[f64],
+    grad: &[f64],
+    part: &Part<'_>,
+    len: usize,
+    nm: usize,
+    (lo, hi): (usize, usize),
+    (wk, wg): (f64, f64),
+    u: f64,
+    r: f64,
+) {
+    let nt = part.theta.len();
+    let base = u * r;
+    for i in lo..hi {
+        let gi = g[i];
+        pk[i] += wk * base * gi;
+        pg[i] += wg * base * gi;
+        for (bi, &(_, k)) in part.theta.iter().enumerate() {
+            let o = (1 + bi) * len + i;
+            let dw = grad[k] * r * gi;
+            pk[o] += wk * dw;
+            pg[o] += wg * dw;
+        }
+        for c in 0..nm {
+            let o = (1 + nt + c) * len + i;
+            let dv = base * dmv[c * len + i];
+            pk[o] += wk * dv;
+            pg[o] += wg * dv;
+        }
+    }
+}
+
 /// Pass 2 of one part over its final panels.
 fn pass2(
     part: &Part<'_>,
@@ -954,6 +1001,7 @@ fn pass2(
         dmv: Vec<f64>,
         pk: Vec<f64>,
         pg: Vec<f64>,
+        products: Option<PanelProducts>,
     }
     /// A chunk's sums and errors on one range [lo, hi) of the layout, every block.
     type Segment = ((usize, usize), Vec<f64>, Vec<f64>);
@@ -967,6 +1015,7 @@ fn pass2(
                 dmv: vec![0.0; 2 * len],
                 pk: vec![0.0; blocks * len],
                 pg: vec![0.0; blocks * len],
+                products: None,
             },
             |sc, chunk| {
                 let d = part.dist.prepare();
@@ -977,8 +1026,26 @@ fn pass2(
                     } else {
                         panel_terms(a, b, lambda, m, opts)?
                     };
+                    let band = if layout.bands.is_empty() {
+                        None
+                    } else {
+                        Some(layout.band(band_terms).ok_or_else(|| {
+                            Error::InvalidInput(format!("no projector band for {band_terms} terms"))
+                        })?)
+                    };
+                    let nodes = kronrod::panel(a, b);
+                    if let Some(band) = band {
+                        let fits = sc
+                            .products
+                            .as_ref()
+                            .is_some_and(|p| p.fits(&band.tables, nodes.len(), nm > 0));
+                        if !fits {
+                            sc.products =
+                                Some(PanelProducts::new(&band.tables, nodes.len(), nm > 0));
+                        }
+                    }
                     let mut ranges = vec![(0, common)];
-                    for &(t, wk, wg) in &kronrod::panel(a, b) {
+                    for (k, &(t, wk, wg)) in nodes.iter().enumerate() {
                         let r = t.exp();
                         let u = d.eval(r, &mut sc.grad);
                         let dm = if nm > 0 {
@@ -987,7 +1054,11 @@ fn pass2(
                         } else {
                             None
                         };
-                        let segment = quantities2(
+                        let products = match (band, sc.products.as_mut()) {
+                            (Some(_), Some(p)) => Some((p, k)),
+                            _ => None,
+                        };
+                        quantities2(
                             &mut sc.mie,
                             r,
                             lambda,
@@ -998,33 +1069,56 @@ fn pass2(
                             dm,
                             None,
                             band_terms,
+                            products,
                         )?;
-                        let band = segment.map(|(s, n)| (s, s + n));
-                        if let Some(range) = band {
-                            if !ranges.contains(&range) {
-                                ranges.push(range);
-                            }
+                        accumulate(
+                            &mut sc.pk,
+                            &mut sc.pg,
+                            &sc.g,
+                            &sc.dmv,
+                            &sc.grad,
+                            part,
+                            len,
+                            nm,
+                            (0, common),
+                            (wk, wg),
+                            u,
+                            r,
+                        );
+                    }
+                    // The band's tables of every node at once.
+                    if let (Some(band), Some(p)) = (band, sc.products.as_mut()) {
+                        p.multiply(&band.tables);
+                        let n_q = band.projector.nodes().len();
+                        let (lo, hi) = (band.start, band.start + 4 * n_q);
+                        for (k, &(t, wk, wg)) in nodes.iter().enumerate() {
+                            let r = t.exp();
+                            let u = d.eval(r, &mut sc.grad);
+                            let x = size(r, lambda);
+                            let scale = 4.0 / (x * x) * (PI * r * r);
+                            let dm = if nm > 0 {
+                                let (re, im) = sc.dmv.split_at_mut(len);
+                                Some([&mut re[lo..hi], &mut im[lo..hi]])
+                            } else {
+                                None
+                            };
+                            p.phase(&band.tables, k, scale, &mut sc.g[lo..hi], dm);
+                            accumulate(
+                                &mut sc.pk,
+                                &mut sc.pg,
+                                &sc.g,
+                                &sc.dmv,
+                                &sc.grad,
+                                part,
+                                len,
+                                nm,
+                                (lo, hi),
+                                (wk, wg),
+                                u,
+                                r,
+                            );
                         }
-                        let base = u * r;
-                        for (lo, hi) in [Some((0, common)), band].into_iter().flatten() {
-                            for i in lo..hi {
-                                let gi = sc.g[i];
-                                sc.pk[i] += wk * base * gi;
-                                sc.pg[i] += wg * base * gi;
-                                for (bi, &(_, k)) in part.theta.iter().enumerate() {
-                                    let o = (1 + bi) * len + i;
-                                    let dw = sc.grad[k] * r * gi;
-                                    sc.pk[o] += wk * dw;
-                                    sc.pg[o] += wg * dw;
-                                }
-                                for c in 0..nm {
-                                    let o = (1 + nt + c) * len + i;
-                                    let dv = base * sc.dmv[c * len + i];
-                                    sc.pk[o] += wk * dv;
-                                    sc.pg[o] += wg * dv;
-                                }
-                            }
-                        }
+                        ranges.push((lo, hi));
                     }
                     for &(lo, hi) in &ranges {
                         let w = hi - lo;
@@ -1169,7 +1263,9 @@ fn monodisperse(
         };
         let dr = radius_col.map(|_| drv.as_mut_slice());
         let n = n_terms(size(r, lambda), m, opts).map_err(|e| context(e, lambda, r))?;
-        quantities2(&mut mie, r, lambda, m, opts, layout, &mut g, dm, dr, n)?;
+        quantities2(
+            &mut mie, r, lambda, m, opts, layout, &mut g, dm, dr, n, None,
+        )?;
     }
     let zeros = vec![0.0; len];
     let mut d = Vec::new();
@@ -1240,10 +1336,12 @@ fn wavelength(
         let projected = order.min(2 * upper);
         let projector = GreekProjector::<f64>::new(projected, upper + (projected + 1).div_ceil(2))?;
         let n_q = projector.nodes().len();
+        let tables = BandTables::new(projector.nodes(), upper);
         bands.push(Band {
             upper,
             start: len,
             projector,
+            tables,
         });
         len += 4 * n_q;
     }

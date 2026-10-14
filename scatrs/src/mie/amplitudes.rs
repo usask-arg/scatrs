@@ -49,7 +49,7 @@ fn check_cosines<T: Real>(mu: &[T]) -> Result<()> {
 /// πₙ and τₙ by the upward recurrences (Bohren & Huffman 1983, Eq. 4.47):
 /// πₙ = ((2n − 1)/(n − 1)) μ πₙ₋₁ − (n/(n − 1)) πₙ₋₂ from π₀ = 0, π₁ = 1, and
 /// τₙ = n μ πₙ − (n + 1) πₙ₋₁.
-fn for_each_order<T: Real>(mu: T, n_max: usize, mut f: impl FnMut(usize, T, T)) {
+pub(crate) fn for_each_order<T: Real>(mu: T, n_max: usize, mut f: impl FnMut(usize, T, T)) {
     let mut pi_prev = T::zero();
     let mut pi = T::one();
     for n in 1..=n_max {

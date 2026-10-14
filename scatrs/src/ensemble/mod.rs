@@ -24,6 +24,7 @@
 
 mod distribution;
 mod engine;
+mod fast;
 mod kronrod;
 mod lin;
 mod moments;

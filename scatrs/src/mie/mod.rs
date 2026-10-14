@@ -82,10 +82,12 @@ use crate::scalar::Real;
 use crate::{Error, Result};
 
 pub use amplitudes::AmplitudeBuffers;
+pub(crate) use amplitudes::for_each_order;
 pub use domain::{MieOutput, VALIDATED_DOMAIN, ValidatedDomain};
 pub use efficiencies::{Efficiencies, EfficiencyJacobian};
 pub use greek::{GreekCoefficients, GreekProjector, MAX_GREEK_ORDER, PhaseTables};
 pub use phase::{Normalization, PhaseBuffers};
+pub(crate) use phase::{element_derivatives, elements};
 
 /// The largest number of terms [`Mie::compute`] accepts, 2²⁰.
 ///

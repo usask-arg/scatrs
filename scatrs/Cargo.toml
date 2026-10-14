@@ -18,6 +18,7 @@ num-complex.workspace = true
 num-traits.workspace = true
 rayon.workspace = true
 thiserror.workspace = true
+faer.workspace = true
 
 [dev-dependencies]
 criterion = { version = "0.7", default-features = false, features = ["cargo_bench_support"] }

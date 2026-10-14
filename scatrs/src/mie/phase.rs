@@ -49,7 +49,7 @@ impl<T> PhaseBuffers<'_, T> {
 }
 
 /// (|S₁|² + |S₂|²)/2, (|S₂|² − |S₁|²)/2, Re(S₂S₁*), Im(S₂S₁*).
-fn elements<T: Real>(s1: Complex<T>, s2: Complex<T>) -> [T; 4] {
+pub(crate) fn elements<T: Real>(s1: Complex<T>, s2: Complex<T>) -> [T; 4] {
     let half = T::from_f64(0.5);
     let (n1, n2) = (s1.norm_sqr(), s2.norm_sqr());
     let p = s2 * s1.conj();
@@ -57,7 +57,7 @@ fn elements<T: Real>(s1: Complex<T>, s2: Complex<T>) -> [T; 4] {
 }
 
 /// The derivatives of [`elements`] for amplitude derivatives (d1, d2).
-fn element_derivatives<T: Real>(
+pub(crate) fn element_derivatives<T: Real>(
     s1: Complex<T>,
     s2: Complex<T>,
     d1: Complex<T>,

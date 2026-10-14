@@ -8,11 +8,26 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use common::{Record, load};
 use scatrs::Error;
 use scatrs::scalar::{DoubleDouble as Dd, Dual};
-use scatrs::special::{GaussLegendre, MAX_GAUSS_LEGENDRE_POINTS, gauss_legendre};
+use scatrs::special::{
+    GaussLegendre, MAX_GAUSS_LEGENDRE_POINTS, gauss_legendre, gauss_legendre_into,
+};
 
 const EPS: f64 = f64::EPSILON; // 2^-52
 /// u² = 2^-106.
 const U2: f64 = 1.232_595_164_407_831e-32;
+
+/// From this many points on, the `f64` rule comes from the asymptotic expansions, within
+/// 16·2⁻⁵²; below, it is the double-double rule rounded, within 2⁻⁵².
+const ASYMPTOTIC_FROM: usize = 101;
+
+/// The `f64` contract at n points: node absolute error and weight relative error at most this.
+fn f64_tolerance(n: usize) -> f64 {
+    if n >= ASYMPTOTIC_FROM {
+        16.0 * EPS
+    } else {
+        EPS
+    }
+}
 
 /// The indices into the rule of the values that reference record `r` holds, in the order
 /// stored: every node of the rule, or only those listed in its `indices` input.
@@ -27,20 +42,21 @@ fn indices(r: &Record) -> Vec<usize> {
     }
 }
 
-/// Rules above this size take seconds each (the cost is O(n²)), so their records are checked
-/// only by the ignored test `largest_rules_match_arb`.
+/// Double-double rules above this size take seconds each (the cost is O(n²)), so their records
+/// are checked in double-double only by the ignored test `largest_double_double_rules_match_arb`.
 const SLOW_N: usize = 10_000;
 
-/// The reference records whose rules have at most `SLOW_N` points, or more if `slow`.
+/// The reference records whose rules have at most `SLOW_N` points, or more if `slow`, or all
+/// (`None`).
 ///
 /// Records whose case ends in `,roots` are skipped: they hold single roots of the largest
-/// accepted rule, which takes minutes to compute whole, and a unit test in
+/// accepted rule, whose double-double form takes minutes to compute whole, and a unit test in
 /// `src/special/gauss_legendre.rs` checks them root by root.
-fn records(slow: bool) -> Vec<Record> {
+fn records(slow: Option<bool>) -> Vec<Record> {
     load("gauss_legendre.jsonl")
         .into_iter()
         .filter(|r| !r.case.ends_with(",roots"))
-        .filter(|r| (r.input_i64("n") as usize > SLOW_N) == slow)
+        .filter(|r| slow.is_none_or(|s| (r.input_i64("n") as usize > SLOW_N) == s))
         .collect()
 }
 
@@ -57,8 +73,9 @@ fn check_f64(records: &[Record]) -> (f64, f64) {
             let ew = ws.dd_error(k, rule.weights[i], 0.0) / ws.hi[k];
             worst_x = worst_x.max(ex / EPS);
             worst_w = worst_w.max(ew / EPS);
-            assert!(ex <= EPS, "n={n} node {i}: error {ex:e}");
-            assert!(ew <= EPS, "n={n} weight {i}: relative error {ew:e}");
+            let tol = f64_tolerance(n);
+            assert!(ex <= tol, "n={n} node {i}: error {ex:e}");
+            assert!(ew <= tol, "n={n} weight {i}: relative error {ew:e}");
         }
     }
     (worst_x, worst_w)
@@ -93,14 +110,28 @@ fn check_dd(records: &[Record]) -> (f64, f64, f64) {
 }
 
 #[test]
-fn f64_rule_matches_arb_to_half_an_ulp_level() {
-    let (x, w) = check_f64(&records(false));
-    eprintln!("f64, n <= {SLOW_N}: worst node error {x:.3} eps, worst weight error {w:.3} eps");
+fn f64_rule_matches_arb() {
+    let small: Vec<Record> = records(None)
+        .into_iter()
+        .filter(|r| (r.input_i64("n") as usize) < ASYMPTOTIC_FROM)
+        .collect();
+    let (x, w) = check_f64(&small);
+    eprintln!(
+        "f64, n < {ASYMPTOTIC_FROM}: worst node error {x:.3} eps, worst weight error {w:.3} eps"
+    );
+    let large: Vec<Record> = records(None)
+        .into_iter()
+        .filter(|r| (r.input_i64("n") as usize) >= ASYMPTOTIC_FROM)
+        .collect();
+    let (x, w) = check_f64(&large);
+    eprintln!(
+        "f64, n >= {ASYMPTOTIC_FROM}: worst node error {x:.3} eps, worst weight error {w:.3} eps"
+    );
 }
 
 #[test]
 fn double_double_rule_matches_arb() {
-    let (x, w, w_tol) = check_dd(&records(false));
+    let (x, w, w_tol) = check_dd(&records(Some(false)));
     eprintln!(
         "DD, n <= {SLOW_N}: worst node error {x:.3} u², worst weight error {w:.3e} u² \
          ({w_tol:.3e} of its bound); u² = 2^-106"
@@ -108,12 +139,10 @@ fn double_double_rule_matches_arb() {
 }
 
 #[test]
-#[ignore = "computes two 20000-point rules, about 11 s each in release builds"]
-fn largest_rules_match_arb() {
-    let recs = records(true);
+#[ignore = "computes two 20000-point double-double rules, about 11 s each in release builds"]
+fn largest_double_double_rules_match_arb() {
+    let recs = records(Some(true));
     assert!(!recs.is_empty());
-    let (x, w) = check_f64(&recs);
-    eprintln!("f64, n > {SLOW_N}: worst node error {x:.3} eps, worst weight error {w:.3} eps");
     let (x, w, w_tol) = check_dd(&recs);
     eprintln!(
         "DD, n > {SLOW_N}: worst node error {x:.3} u², worst weight error {w:.3e} u² \
@@ -180,10 +209,10 @@ fn check_structure(n: usize, rule: &GaussLegendre<f64>) {
     }
     assert!(rule.weights.iter().all(|&w| w > 0.0));
     // Summed in double-double, so the sum's own error is negligible; each weight is within
-    // eps relative of the exact one, and the exact weights sum to 2.
+    // `f64_tolerance` relative of the exact one, and the exact weights sum to 2.
     let sum = rule.weights.iter().fold(Dd::ZERO, |s, &w| s + w);
     assert!(
-        (sum - 2.0).abs().hi() <= 2.0 * EPS,
+        (sum - 2.0).abs().hi() <= 2.0 * f64_tolerance(n),
         "n={n}: weights sum to {sum:?}"
     );
 }
@@ -232,7 +261,19 @@ fn every_rule_up_to_3000_points_converges_to_the_right_roots() {
 
 #[test]
 fn large_rules_converge_to_the_right_roots() {
-    for n in [511usize, 512, 1023, 1024, 2047, 2048, 4999, 5000] {
+    for n in [
+        511usize,
+        512,
+        1023,
+        1024,
+        2047,
+        2048,
+        4999,
+        5000,
+        20_000,
+        MAX_GAUSS_LEGENDRE_POINTS - 1,
+        MAX_GAUSS_LEGENDRE_POINTS,
+    ] {
         check_structure(n, &gauss_legendre::<f64>(n).unwrap());
     }
 }
@@ -300,8 +341,11 @@ fn every_type_gets_the_same_rule_bit_for_bit() {
         let dd = gauss_legendre::<Dual<Dd, 3>>(n).unwrap();
         let (f, d, df, dd) = (values(&f), values(&d), values(&df), values(&dd));
         for i in 0..2 * n {
-            // The f64 rule is the double-double rule rounded to nearest.
-            assert_eq!(d[i].hi().to_bits(), f[i].to_bits(), "n={n} value {i}");
+            // Below the asymptotic range, the f64 rule is the double-double rule rounded to
+            // nearest.
+            if n < ASYMPTOTIC_FROM {
+                assert_eq!(d[i].hi().to_bits(), f[i].to_bits(), "n={n} value {i}");
+            }
             assert_eq!(df[i].re().to_bits(), f[i].to_bits(), "n={n} value {i}");
             assert_eq!(dd_bits(dd[i].re()), dd_bits(d[i]), "n={n} value {i}");
             assert!(
@@ -314,4 +358,25 @@ fn every_type_gets_the_same_rule_bit_for_bit() {
             );
         }
     }
+}
+
+#[test]
+fn caller_buffers_get_the_same_rule() {
+    for n in [1usize, 7, 100, 101, 1000] {
+        let rule = gauss_legendre::<f64>(n).unwrap();
+        let (mut x, mut w) = (vec![0.0; n], vec![0.0; n]);
+        gauss_legendre_into(&mut x, &mut w).unwrap();
+        assert_eq!((x, w), (rule.nodes, rule.weights), "n={n}");
+    }
+    let (mut x, mut w) = (vec![5.0; 4], vec![5.0; 3]);
+    assert!(matches!(
+        gauss_legendre_into(&mut x, &mut w),
+        Err(Error::InvalidInput(_))
+    ));
+    assert!(x.iter().chain(&w).all(|&v| v == 5.0), "nothing written");
+    let mut empty: [f64; 0] = [];
+    assert!(matches!(
+        gauss_legendre_into(&mut empty, &mut []),
+        Err(Error::InvalidInput(_))
+    ));
 }

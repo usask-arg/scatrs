@@ -67,6 +67,7 @@ SCALARS = "docs/theory/scalar-types.md"
 LIMITATIONS = "docs/limitations.md"
 WIGNER_EXAMPLE = "docs/examples/wigner-d.md"
 HG_EXAMPLE = "docs/examples/henyey-greenstein.md"
+QUADRATURE = "docs/examples/quadrature.md"
 REFERENCE_SUITE = "docs/validation/reference-suite.md"
 DOMAIN_RS = "scatrs/src/mie/domain.rs"
 MIE_THEORY = "docs/theory/mie.md"
@@ -82,13 +83,23 @@ CONTRACTS = [
     ("Wigner double-double bound", "(l+1)2^-97", [WIGNER_RS, THEORY]),
     ("Gauss-Legendre cap", "2^17", [GL_RS, SPECIAL_PY, THEORY, LIMITATIONS]),
     ("Gauss-Legendre cap", "131072", [GL_RS, SPECIAL_PY, THEORY]),
-    ("Gauss-Legendre cost model", "28nsn^2", [GL_RS, SPECIAL_PY, THEORY]),
-    ("Gauss-Legendre timing", "0.72s", [GL_RS, SPECIAL_PY, THEORY]),
-    ("Gauss-Legendre timing", "11s", [GL_RS, SPECIAL_PY, THEORY, LIMITATIONS]),
+    ("Gauss-Legendre double-double cost model", "28nsn^2", [GL_RS, THEORY]),
+    ("Gauss-Legendre double-double timing", "0.72s", [GL_RS, THEORY]),
+    ("Gauss-Legendre double-double timing", "11s", [GL_RS, THEORY, LIMITATIONS]),
+    ("Gauss-Legendre f64 timing at the cap", "40ms", [GL_RS, SPECIAL_PY, THEORY]),
+    (
+        "Gauss-Legendre asymptotic bound",
+        "162^-52",
+        [GL_RS, SPECIAL_PY, THEORY, LIMITATIONS, QUADRATURE],
+    ),
+    ("Gauss-Legendre asymptotic measured", "2.42^-52", [GL_RS, THEORY]),
+    ("Gauss-Legendre asymptotic measured", "3.62^-52", [GL_RS, THEORY]),
+    ("Gauss-Legendre asymptotic measured", "2.4and3.6unitsof2^-52", [SPECIAL_PY, LIMITATIONS]),
     ("Wigner cost", "2.6ns", [WIGNER_RS, THEORY]),
     ("Gauss-Legendre f64 node contract", "nodeabsoluteerror≤2^-52", [GL_RS]),
     ("Gauss-Legendre f64 weight contract", "weightrelativeerror≤2^-52", [GL_RS]),
-    ("Gauss-Legendre f64 contract", "|f64|≤2^-52|≤2^-52|", [THEORY]),
+    ("Gauss-Legendre f64 contract", "|f64,n≤100|≤2^-52|≤2^-52|", [THEORY]),
+    ("Gauss-Legendre asymptotic contract", "|f64,n>100|≤162^-52|≤162^-52|", [THEORY]),
     ("Gauss-Legendre double-double weight bound", "2^-100(4+n^2)", [GL_RS, THEORY]),
     ("Python Wigner output limit", "2^28", [SPECIAL_PY, LIMITATIONS]),
     ("Double-double full precision", "2^-969", [DD_RS, SCALARS]),

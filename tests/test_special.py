@@ -237,8 +237,10 @@ def _main_thread_stamps_during(call):
 @pytest.mark.parametrize(
     "call",
     [
-        # About 0.1 s on an Apple M4 Pro (28 ns·n²), longer on other machines.
-        pytest.param(lambda: special.gauss_legendre(2000), id="gauss_legendre"),
+        # The largest rule: about 0.04 s on an Apple M4 Pro, longer on other machines.
+        pytest.param(
+            lambda: special.gauss_legendre(special.MAX_GAUSS_LEGENDRE_POINTS), id="gauss_legendre"
+        ),
         # About 2·10⁷ values (160 MB) in the general difference form, the slowest per value.
         pytest.param(
             lambda: special.wigner_d(0, 2, 19_999, np.linspace(0.95, 1, 1000)), id="wigner_d"

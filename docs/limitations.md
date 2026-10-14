@@ -38,14 +38,13 @@ it, in `docs/plans/phase-0-followups.md`.
 
 ## Gauss–Legendre quadrature
 
-- **Cost.** The method is $O(n^2)$. On an Apple M4 Pro it takes about 11 s at $n$ = 20 000,
-  and an extrapolated 8 minutes at the cap of $2^{17}$ points. Mie quadrature at size parameter
-  $2\cdot10^4$ needs about $4\cdot10^4$ points, which takes about 45 s.
-- **Interruption.** A call cannot be interrupted. In Python, Ctrl+C takes effect only once it
-  returns. Compute a rule once and reuse it.
-- **Planned speed-ups.** Two tunings of the present method measured about 5× faster together
-  during code review (not committed). The real fix is an $O(n)$ method (Bogaert 2014). Faster
-  rules are a priority for phase 1b, and the cap will be raised once the $O(n)$ method lands.
+- **Accuracy above 100 points.** `f64` rules above 100 points come from asymptotic expansions,
+  within $16\cdot2^{-52}$ (measured: 2.4 and 3.6 units of $2^{-52}$ for nodes and weights)
+  rather than the half ulp of the double-double rule rounded once.
+- **Double-double cost.** Double-double rules use the $O(n^2)$ Newton method at every $n$. On
+  an Apple M4 Pro that takes about 11 s at $n$ = 20 000, and an extrapolated 8 minutes at the
+  cap of $2^{17}$ points. A call cannot be interrupted; compute a double-double rule once and
+  reuse it.
 
 ## Builds without FMA
 

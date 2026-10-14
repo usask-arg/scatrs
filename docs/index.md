@@ -6,7 +6,8 @@ spheres and axisymmetric T-matrix, written in Rust with a Python interface.
 ```{warning}
 Pre-alpha. Phase 0 provided the numerical foundations: the scalar types, Gauss–Legendre
 quadrature, Wigner d-functions and the Arb reference suite. Phase 1 adds Mie scattering by
-homogeneous spheres, with derivatives. Nothing is published on PyPI or crates.io yet.
+homogeneous spheres, with derivatives; phase 1b adds their phase matrix and exact Greek
+coefficients, and $O(n)$ Gauss–Legendre rules. Nothing is published on PyPI or crates.io yet.
 ```
 
 What exists today:
@@ -17,9 +18,10 @@ What exists today:
   functions, `gauss_legendre` and `wigner_d`. See {doc}`theory/scalar-types` and
   {doc}`theory/special-functions`.
 - **Mie scattering.** `scatrs::mie` (Python {mod}`scatrs.mie`): coefficients, efficiencies,
-  asymmetry parameter and amplitudes of homogeneous spheres, with closed-form derivatives with
-  respect to the size parameter and refractive index, and a declared, tested accuracy over a
-  validated domain. See {doc}`theory/mie` and {doc}`validation/accuracy`.
+  asymmetry parameter, amplitudes, phase matrix and Greek coefficients (to every order) of
+  homogeneous spheres, with closed-form derivatives with respect to the size parameter and
+  refractive index, and a declared, tested accuracy over a validated domain. See
+  {doc}`theory/mie` and {doc}`validation/accuracy`.
 - **The Python package `scatrs`.** {mod}`scatrs.mie`, {func}`scatrs.special.gauss_legendre`
   and {func}`scatrs.special.wigner_d`, and the exceptions in {mod}`scatrs.errors`. See
   {doc}`api`.
@@ -42,6 +44,7 @@ and a dense double-double map. Python exposes only `f64` results. See
 installation
 conventions
 examples/mie
+examples/greek
 examples/quadrature
 examples/wigner-d
 examples/henyey-greenstein

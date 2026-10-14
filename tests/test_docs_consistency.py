@@ -119,6 +119,35 @@ CONTRACTS = [
     ("Mie accepted |m|", "|m|in[10^-6,10^3]", [LIMITATIONS]),
     ("Mie accepted x", "xoutside[1e-30,1e6]", [MIE_PY]),
     ("Mie accepted |m|", "|m|outside[1e-6,1e3]", [MIE_PY]),
+    ("Greek all-orders timing", "7.6s", [MIE_THEORY, LIMITATIONS]),
+    (
+        "Greek quadrature term",
+        "((L+1)^2+x^2)/8",
+        [DOMAIN_RS, MIE_THEORY, "docs/plans/phase-1b-followups.md"],
+    ),
+    (
+        "Greek node rounding",
+        "L^22^-54",
+        [DOMAIN_RS, MIE_THEORY, "docs/plans/phase-1b-followups.md"],
+    ),
+    (
+        "Greek node rounding",
+        "x^22^-54",
+        [DOMAIN_RS, MIE_THEORY, "docs/plans/phase-1b-followups.md"],
+    ),
+    (
+        "Greek C without the term",
+        "C=85atx=100(allorders)",
+        [MIE_THEORY, "docs/validation/accuracy.md"],
+    ),
+    (
+        "Greek C without the term",
+        "C=100atx=210^4(toorder64)",
+        [MIE_THEORY, "docs/validation/accuracy.md"],
+    ),
+    ("Greek worst C", "Cisatmost1.7", [MIE_THEORY, "docs/validation/accuracy.md"]),
+    ("Greek node-rounding error", "210^-9", [LIMITATIONS, "docs/plans/phase-1b-followups.md"]),
+    ("Greek node-rounding error", "210^-11", [LIMITATIONS, "docs/plans/phase-1b-followups.md"]),
 ]
 
 

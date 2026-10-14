@@ -17,8 +17,9 @@ use numpy::{
 use pyo3::exceptions::{PyBufferError, PyMemoryError, PyRuntimeError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use scatrs::mie::{
-    AmplitudeBuffers, GreekCoefficients, MAX_GREEK_ORDER, MAX_MIE_ORDER, MAX_SIZE_PARAMETER,
-    MIN_SIZE_PARAMETER, Mie, MieOptions, MieSolution, Normalization, PhaseBuffers, n_terms,
+    AmplitudeBuffers, AngularTable, GreekCoefficients, MAX_GREEK_ORDER, MAX_MIE_ORDER,
+    MAX_SIZE_PARAMETER, MIN_SIZE_PARAMETER, Mie, MieOptions, MieSolution, Normalization,
+    PhaseBuffers, n_terms,
 };
 
 use crate::errors::to_pyerr;
@@ -143,6 +144,31 @@ fn largest_n_terms(
         most = most.max(n_terms(xi, mi, opts).map_err(at(i))?);
     }
     Ok(most)
+}
+
+/// The most values an angular table may hold, 2²² (32 MiB). Above it, the amplitudes come from
+/// the cosines, which give the same values (bitwise) without the table.
+const MAX_TABLE_VALUES: usize = 1 << 22;
+
+/// An angular table at the cosines `mu` for every sphere, if there are several to share it and
+/// it holds at most `MAX_TABLE_VALUES`.
+fn angular_table(
+    x: &ArrayViewD<'_, f64>,
+    m: &ArrayViewD<'_, Complex64>,
+    opts: &MieOptions,
+    mu: &[f64],
+) -> scatrs::Result<Option<AngularTable<f64>>> {
+    if x.len() < 2 || mu.is_empty() {
+        return Ok(None);
+    }
+    let most = largest_n_terms(x, m, opts)?;
+    if most
+        .checked_mul(2 * mu.len())
+        .is_none_or(|v| v > MAX_TABLE_VALUES)
+    {
+        return Ok(None);
+    }
+    AngularTable::new(mu, most).map(Some)
 }
 
 /// `count` (`None` if it overflowed) values of `kind`, unless that exceeds `limit` (named
@@ -443,6 +469,7 @@ pub fn mie_amplitudes<'py>(
             let mut s = zeros::<Complex64>(2 * per_array, "the amplitudes")?;
             let mut d =
                 zeros::<Complex64>(if derivatives { 4 * per_array } else { 0 }, "derivatives")?;
+            let table = angular_table(&xv, &mv, &opts, &mu)?;
             let mut mie = Mie::<f64>::new();
             let (s1, s2) = s.split_at_mut(per_array);
             // Empty unless `derivatives`.
@@ -463,20 +490,25 @@ pub fn mie_amplitudes<'py>(
                     s2: &mut s2[row.clone()],
                 };
                 if derivatives {
-                    sol.amplitudes_with_derivatives(
-                        &mu,
-                        values,
-                        AmplitudeBuffers {
-                            s1: &mut dx1[row.clone()],
-                            s2: &mut dx2[row.clone()],
-                        },
-                        AmplitudeBuffers {
-                            s1: &mut dm1[row.clone()],
-                            s2: &mut dm2[row.clone()],
-                        },
-                    )?;
+                    let d_dx = AmplitudeBuffers {
+                        s1: &mut dx1[row.clone()],
+                        s2: &mut dx2[row.clone()],
+                    };
+                    let d_dm = AmplitudeBuffers {
+                        s1: &mut dm1[row.clone()],
+                        s2: &mut dm2[row.clone()],
+                    };
+                    match &table {
+                        Some(t) => {
+                            sol.amplitudes_with_derivatives_from_table(t, values, d_dx, d_dm)?
+                        }
+                        None => sol.amplitudes_with_derivatives(&mu, values, d_dx, d_dm)?,
+                    }
                 } else {
-                    sol.amplitudes(&mu, values)?;
+                    match &table {
+                        Some(t) => sol.amplitudes_from_table(t, values)?,
+                        None => sol.amplitudes(&mu, values)?,
+                    }
                 }
             }
             Ok((s, d))
@@ -525,6 +557,7 @@ pub fn mie_phase_matrix<'py>(
         .detach(|| -> Result<_, Failure> {
             let mut f = zeros::<f64>(4 * per_array, "the phase matrix")?;
             let mut d = zeros::<f64>(if derivatives { 12 * per_array } else { 0 }, "derivatives")?;
+            let table = angular_table(&xv, &mv, &opts, &mu)?;
             let mut mie = Mie::<f64>::new();
             for (i, (&xi, &mi)) in xv.iter().zip(mv.iter()).enumerate() {
                 if n_mu == 0 {
@@ -538,19 +571,22 @@ pub fn mie_phase_matrix<'py>(
                 if derivatives {
                     let (dx, rest) = d.split_at_mut(4 * per_array);
                     let (dr, di) = rest.split_at_mut(4 * per_array);
-                    sol.phase_matrix_with_derivatives(
-                        &mu,
-                        norm,
-                        values,
-                        [
-                            phase_buffers(dx, per_array, row.clone()),
-                            phase_buffers(dr, per_array, row.clone()),
-                            phase_buffers(di, per_array, row.clone()),
-                        ],
-                    )
+                    let d = [
+                        phase_buffers(dx, per_array, row.clone()),
+                        phase_buffers(dr, per_array, row.clone()),
+                        phase_buffers(di, per_array, row.clone()),
+                    ];
+                    match &table {
+                        Some(t) => sol.phase_matrix_with_derivatives_from_table(t, norm, values, d),
+                        None => sol.phase_matrix_with_derivatives(&mu, norm, values, d),
+                    }
                     .map_err(at(i))?;
                 } else {
-                    sol.phase_matrix(&mu, norm, values).map_err(at(i))?;
+                    match &table {
+                        Some(t) => sol.phase_matrix_from_table(t, norm, values),
+                        None => sol.phase_matrix(&mu, norm, values),
+                    }
+                    .map_err(at(i))?;
                 }
             }
             Ok((f, d))

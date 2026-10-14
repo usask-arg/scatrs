@@ -3,8 +3,8 @@ name = "scatrs-benchmarks"
 version = "0.1.0"
 description = "Accuracy and speed of scatrs against other scattering codes"
 requires-python = ">=3.11"
-# sasktran2 pinned exactly: the published comparison names the version it measured.
-dependencies = ["scatrs", "sasktran2==2026.10.1", "numpy>=1.26"]
+# sasktran2 and scattnlay pinned exactly: the published comparisons name the versions measured.
+dependencies = ["scatrs", "sasktran2==2026.10.1", "scattnlay==2.4", "numpy>=1.26"]
 
 [tool.uv]
 package = false

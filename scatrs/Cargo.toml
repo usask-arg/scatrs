@@ -35,3 +35,7 @@ harness = false
 [[bench]]
 name = "ensemble"
 harness = false
+
+[[bench]]
+name = "layered"
+harness = false

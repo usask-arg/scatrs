@@ -15,7 +15,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from typing import Literal
+from typing import Final, Literal
 
 import numpy as np
 from numpy.typing import ArrayLike, NDArray
@@ -25,9 +25,15 @@ from scatrs.errors import InvalidInputError
 
 __all__ = ["Cauchy", "Constant", "Function", "RefractiveIndex", "Sellmeier", "Table"]
 
+# Accepted by float() and complex() but not numbers: rejected with TypeError.
+_NOT_NUMBERS: Final = (bool, np.bool_, str, bytes)
+
 
 def _finite(value: object, what: str) -> float:
+    """``value`` as a finite float; ``what`` names it in errors ("Cauchy: A", say)."""
     try:
+        if isinstance(value, _NOT_NUMBERS):
+            raise TypeError
         v = float(value)  # type: ignore[arg-type]
     except (TypeError, ValueError):
         raise TypeError(f"{what} must be a real number, not {type(value).__name__}") from None
@@ -41,6 +47,24 @@ def _absorption(k: object, what: str) -> float:
     if v < 0:
         raise InvalidInputError(f"invalid input: {what} must not be negative, got {v}")
     return v
+
+
+def _finite_sequence(values: Sequence[float], what: str) -> tuple[float, ...]:
+    """A one-dimensional sequence of finite floats, as :func:`_finite` for each element."""
+    if isinstance(values, (str, bytes)):
+        raise TypeError(f"{what} must be a sequence of real numbers, not {type(values).__name__}")
+    try:
+        shape = np.shape(values)
+    except ValueError:  # ragged
+        shape = None
+    if shape is None or len(shape) != 1:
+        got = "a ragged sequence" if shape is None else f"shape {shape}"
+        raise InvalidInputError(
+            f"invalid input: {what} must be a one-dimensional sequence, got {got}"
+        )
+    # The elements themselves, not np.asarray's conversion of them, so bools and strings
+    # among numbers are caught.
+    return tuple(_finite(v, f"{what}[{i}]") for i, v in enumerate(values))
 
 
 class RefractiveIndex(ABC):
@@ -106,11 +130,15 @@ class Constant(RefractiveIndex):
 
     def __post_init__(self) -> None:
         try:
+            if isinstance(self.m, _NOT_NUMBERS):
+                raise TypeError
             m = complex(self.m)
         except (TypeError, ValueError):
-            raise TypeError(f"m must be a number, not {type(self.m).__name__}") from None
+            raise TypeError(f"Constant: m must be a number, not {type(self.m).__name__}") from None
         if not (np.isfinite(m.real) and np.isfinite(m.imag)) or m.imag < 0:
-            raise InvalidInputError(f"invalid input: m must be finite with Im m ≥ 0, got {m}")
+            raise InvalidInputError(
+                f"invalid input: Constant: m must be finite with Im m ≥ 0, got {m}"
+            )
         object.__setattr__(self, "m", m)
 
     @property
@@ -154,8 +182,9 @@ class Table(RefractiveIndex):
                 "invalid input: a Table's wavelengths must be strictly increasing"
             )
         if self.interpolation not in ("linear", "log_k"):
-            raise ValueError(
-                f"interpolation must be 'linear' or 'log_k', not {self.interpolation!r}"
+            raise InvalidInputError(
+                "invalid input: a Table's interpolation must be 'linear' or 'log_k', not "
+                f"{self.interpolation!r}"
             )
         floor = 0.0 if self.interpolation == "linear" else np.nextafter(0.0, 1.0)
         if np.any(m.imag < floor):
@@ -194,21 +223,24 @@ class Cauchy(RefractiveIndex):
 
     def __post_init__(self) -> None:
         for name in ("A", "B", "C"):
-            object.__setattr__(self, name, _finite(getattr(self, name), name))
-        object.__setattr__(self, "k", _absorption(self.k, "k"))
+            object.__setattr__(self, name, _finite(getattr(self, name), f"Cauchy: {name}"))
+        object.__setattr__(self, "k", _absorption(self.k, "Cauchy: k"))
 
     @property
     def parameters(self) -> tuple[str, ...]:
         return ("A", "B", "C", "k")
 
+    # At λ = 0 these are not finite; evaluate() reports that, so numpy need not warn.
     def _m(self, wavelength: NDArray[np.float64]) -> ArrayLike:
-        s = wavelength**-2.0
-        return self.A + self.B * s + self.C * s * s + 1j * self.k
+        with np.errstate(divide="ignore", invalid="ignore", over="ignore"):
+            s = wavelength**-2.0
+            return self.A + self.B * s + self.C * s * s + 1j * self.k
 
     def _dm(self, wavelength: NDArray[np.float64]) -> NDArray[np.complex128]:
-        s = wavelength**-2.0
-        out = np.empty((4, *wavelength.shape), dtype=complex)
-        out[0], out[1], out[2], out[3] = 1.0, s, s * s, 1j
+        with np.errstate(divide="ignore", invalid="ignore", over="ignore"):
+            s = wavelength**-2.0
+            out = np.empty((4, *wavelength.shape), dtype=complex)
+            out[0], out[1], out[2], out[3] = 1.0, s, s * s, 1j
         return out
 
 
@@ -223,16 +255,16 @@ class Sellmeier(RefractiveIndex):
     k: float = 0.0
 
     def __post_init__(self) -> None:
-        b = tuple(_finite(v, f"B[{i}]") for i, v in enumerate(np.ravel(self.B)))
-        c = tuple(_finite(v, f"C[{i}]") for i, v in enumerate(np.ravel(self.C)))
+        b = _finite_sequence(self.B, "Sellmeier: B")
+        c = _finite_sequence(self.C, "Sellmeier: C")
         if len(b) != len(c) or not b:
             raise InvalidInputError(
-                f"invalid input: B and C must have the same length, at least 1; got {len(b)} "
-                f"and {len(c)}"
+                "invalid input: Sellmeier: B and C must have the same length, at least 1; got "
+                f"{len(b)} and {len(c)}"
             )
         object.__setattr__(self, "B", b)
         object.__setattr__(self, "C", c)
-        object.__setattr__(self, "k", _absorption(self.k, "k"))
+        object.__setattr__(self, "k", _absorption(self.k, "Sellmeier: k"))
 
     @property
     def parameters(self) -> tuple[str, ...]:

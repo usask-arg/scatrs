@@ -1,5 +1,7 @@
 """scatrs.refractive models and scatrs.Sphere."""
 
+import warnings
+
 import numpy as np
 import pytest
 
@@ -19,6 +21,22 @@ def test_constant():
     np.testing.assert_array_equal(d[0], 1.0)
     np.testing.assert_array_equal(d[1], 1j)
     assert Constant(1.5) == Constant(1.5 + 0j) and hash(Constant(1.5)) == hash(Constant(1.5 + 0j))
+    assert Constant(np.float32(1.5)) == Constant(2 - 0.5) == Constant(np.complex64(1.5))
+
+
+def test_constant_errors():
+    with pytest.raises(
+        InvalidInputError,
+        match=r"^invalid input: Constant: m must be finite with Im m ≥ 0, got \(1\.5-0\.001j\)$",
+    ):
+        Constant(1.5 - 1e-3j)
+    with pytest.raises(InvalidInputError, match=r"^invalid input: Constant: m must be finite"):
+        Constant(complex(np.nan, 0))
+    for bad in (True, np.bool_(False), "1.5", b"1.5", None, [1.5]):
+        with pytest.raises(
+            TypeError, match=f"Constant: m must be a number, not {type(bad).__name__}"
+        ):
+            Constant(bad)
 
 
 def test_table_interpolates_linearly_and_is_exact_at_its_nodes():
@@ -55,7 +73,9 @@ def test_table_errors():
         Table([0.4, 0.5], [1.5, 1.4 - 1e-3j])
     with pytest.raises(InvalidInputError, match="> 0 for log_k"):
         Table([0.4, 0.5], [1.5, 1.4 + 1e-3j], interpolation="log_k")
-    with pytest.raises(ValueError, match="interpolation"):
+    with pytest.raises(
+        InvalidInputError, match=r"^invalid input: a Table's interpolation must be 'linear' or"
+    ):
         Table([0.4, 0.5], [1.5, 1.4], interpolation="cubic")
 
 
@@ -65,10 +85,44 @@ def test_cauchy():
         c.evaluate(WL), 1.45 + 0.004 / WL**2 + 1e-4 / WL**4 + 1e-5j, rtol=1e-15
     )
     assert c.parameters == ("A", "B", "C", "k")
-    with pytest.raises(InvalidInputError, match="k must not be negative"):
+    assert Cauchy(np.float32(1.5), 1, np.int64(0)) == Cauchy(1.5, 1.0)
+
+
+def test_cauchy_errors():
+    with pytest.raises(
+        InvalidInputError, match=r"^invalid input: Cauchy: k must not be negative, got -0\.001$"
+    ):
         Cauchy(1.45, k=-1e-3)
-    with pytest.raises(InvalidInputError, match="finite"):
+    with pytest.raises(
+        InvalidInputError, match=r"^invalid input: Cauchy: A must be finite, got nan$"
+    ):
         Cauchy(np.nan)
+    with pytest.raises(
+        InvalidInputError, match=r"^invalid input: Cauchy: B must be finite, got nan$"
+    ):
+        Cauchy(1.4, np.nan)
+    with pytest.raises(
+        InvalidInputError, match=r"^invalid input: Cauchy: k must be finite, got inf$"
+    ):
+        Cauchy(1.4, k=np.inf)
+    for bad in (True, np.bool_(True), "1.4", None, 1.4 + 0j):
+        with pytest.raises(
+            TypeError, match=f"Cauchy: A must be a real number, not {type(bad).__name__}"
+        ):
+            Cauchy(bad)
+    with pytest.raises(TypeError, match="Cauchy: k must be a real number, not bool"):
+        Cauchy(1.4, k=False)
+
+
+def test_cauchy_at_zero_wavelength_raises_without_warnings():
+    c = Cauchy(1.4, 0.01)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        with pytest.raises(InvalidInputError, match=r"at wavelength 0\.0"):
+            c.evaluate(0.0)
+        with pytest.raises(InvalidInputError, match=r"at wavelength 0\.0"):
+            Cauchy(1.4, 0.01, 1e-4).evaluate([0.5, 0.0])
+        c.derivatives(0.0)
 
 
 def test_sellmeier():
@@ -84,8 +138,55 @@ def test_sellmeier():
         Sellmeier([1.0], [0.25]).evaluate([0.6, 0.4])  # n² < 0 just above the pole at λ = 0.5
     with pytest.raises(InvalidInputError, match="n² must be positive"):
         Sellmeier([1.0], [0.25]).evaluate(0.5)  # at the pole
-    with pytest.raises(InvalidInputError, match="same length"):
+    assert Sellmeier(np.array([1.0]), (np.float32(0.25),)) == Sellmeier([1], [0.25])
+
+
+def test_sellmeier_errors():
+    with pytest.raises(
+        InvalidInputError,
+        match=r"^invalid input: Sellmeier: B and C must have the same length, at least 1; "
+        r"got 2 and 1$",
+    ):
         Sellmeier([1.0, 2.0], [0.25])
+    with pytest.raises(
+        InvalidInputError, match=r"^invalid input: Sellmeier: B and C .* got 0 and 0$"
+    ):
+        Sellmeier([], [])
+    with pytest.raises(
+        InvalidInputError, match=r"^invalid input: Sellmeier: B\[1\] must be finite"
+    ):
+        Sellmeier([1.0, np.nan], [0.1, 0.2])
+    with pytest.raises(
+        InvalidInputError, match=r"^invalid input: Sellmeier: C\[0\] must be finite"
+    ):
+        Sellmeier([1.0], [np.inf])
+    with pytest.raises(
+        InvalidInputError, match=r"^invalid input: Sellmeier: k must not be negative"
+    ):
+        Sellmeier([1.0], [0.1], k=-1.0)
+    with pytest.raises(
+        InvalidInputError,
+        match=r"^invalid input: Sellmeier: B must be a one-dimensional sequence, got shape \(\)$",
+    ):
+        Sellmeier(1.0, [0.1])
+    with pytest.raises(
+        InvalidInputError,
+        match=r"^invalid input: Sellmeier: C must be a one-dimensional sequence, got shape "
+        r"\(1, 1\)$",
+    ):
+        Sellmeier([1.0], np.array([[0.1]]))
+    with pytest.raises(
+        InvalidInputError, match=r"^invalid input: Sellmeier: B .* got a ragged sequence$"
+    ):
+        Sellmeier([[1.0], [2.0, 3.0]], [0.1])  # ragged
+    with pytest.raises(TypeError, match=r"Sellmeier: B\[0\] must be a real number, not str"):
+        Sellmeier(["1.0"], [0.1])
+    with pytest.raises(TypeError, match=r"Sellmeier: B\[1\] must be a real number, not bool"):
+        Sellmeier([1.0, True], [0.1, 0.2])
+    with pytest.raises(TypeError, match=r"Sellmeier: C\[0\] must be a real number, not bool"):
+        Sellmeier([1.0], np.array([True]))
+    with pytest.raises(TypeError, match="Sellmeier: B must be a sequence of real numbers, not str"):
+        Sellmeier("1.0", [0.1])
 
 
 @pytest.mark.parametrize(

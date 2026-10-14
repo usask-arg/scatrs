@@ -3,22 +3,26 @@
 from importlib.metadata import PackageNotFoundError as _PackageNotFoundError
 from importlib.metadata import version as _version
 
-from scatrs import _scatrs, ensemble, mie, special
+from scatrs import _scatrs, ensemble, mie, particles, refractive, special
 from scatrs.errors import (
     InvalidInputError,
     NotConvergedError,
     OutsideValidatedDomainError,
     ScatrsError,
 )
+from scatrs.particles import Sphere
 
 __all__ = [
     "InvalidInputError",
     "NotConvergedError",
     "OutsideValidatedDomainError",
     "ScatrsError",
+    "Sphere",
     "__version__",
     "ensemble",
     "mie",
+    "particles",
+    "refractive",
     "special",
 ]
 

@@ -1,5 +1,7 @@
 """scatrs.size: distributions as values, array-valued parameters, grids."""
 
+import copy
+import pickle
 from dataclasses import FrozenInstanceError
 
 import numpy as np
@@ -60,3 +62,41 @@ def test_grids_broadcast_and_flatten_in_c_order():
     )
     shape, arrays = size._grid(m)
     assert set(arrays) == {"mode0.weight"}
+
+
+def _copies(x):
+    """``x`` pickled and unpickled, and deep-copied."""
+    return [pickle.loads(pickle.dumps(x)), copy.deepcopy(x)]
+
+
+def test_pickled_and_copied_distributions_stay_immutable_values():
+    g = LogNormal([0.1, 0.2], 1.5)
+    b = MultiModal([([1.0, 2.0], LogNormal(0.1, 1.5)), (1.0, LogNormal(0.2, [1.6, 1.7]))])
+    t = Tabulated([0.1, 0.5], [1.0, 2.0])
+    for d, arrays in [
+        (g, lambda c: [c.median_radius]),
+        (b, lambda c: [c.modes[0][0], c.modes[1][1].width]),
+        (t, lambda c: []),
+    ]:
+        for c in _copies(d):
+            assert type(c) is type(d) and c == d and hash(c) == hash(d)
+            for a in arrays(c):
+                with pytest.raises(ValueError):
+                    a.flags.writeable = True
+    for c in _copies(t):
+        assert c.radius == (0.1, 0.5) and c.density == (1.0, 2.0)
+
+
+def test_mode_weights_and_pairs_are_checked():
+    ln = LogNormal(0.1, 1.5)
+    for w in (True, np.bool_(False), "1.0", b"1", [True, False]):
+        with pytest.raises(TypeError, match="the weight of mode 1"):
+            MultiModal([(1.0, ln), (w, ln)])
+    with pytest.raises(
+        TypeError, match=r"mode 1 must be a \(weight, distribution\) pair, not LogN"
+    ):
+        MultiModal([(1.0, ln), ln])
+    with pytest.raises(
+        TypeError, match=r"mode 0 must be a \(weight, distribution\) pair, not tuple"
+    ):
+        MultiModal([(1.0, ln, 2.0)])

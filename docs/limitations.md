@@ -107,8 +107,8 @@ describes what the accuracy figures rest on.
   database grid of {doc}`validation/sasktran2` (2 GB for 800 distributions on one thread; more
   wavelengths run at once on more threads). Split very large grids.
 - **Tables can exceed `max_panels`.** Every radius of a `Tabulated` distribution is a panel
-  edge, so a table of more radii than `max_panels`, or a grid with many tables, takes more
-  panels than `max_panels` (still converging).
+  edge, so a table of more radii than `max_panels` still takes more panels than `max_panels`
+  (and converges).
 - **Distributions over size only.** The particles are spheres, so the distributions are over
   their radius only.
 - **Threads.** The computation runs on all cores, through rayon's global thread pool. Python

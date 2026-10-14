@@ -77,6 +77,11 @@ class _Distribution:
     def __hash__(self) -> int:
         return hash(self._identity())
 
+    def __reduce__(self) -> tuple:
+        # Pickling and copying rebuild through the constructor: `__post_init__` makes the
+        # arrays read-only copies again, which unpickling the fields themselves would not.
+        return (type(self), tuple(getattr(self, f.name) for f in fields(self)))  # type: ignore[arg-type]
+
 
 class _Simple(_Distribution):
     """A distribution whose parameters are its fields, in the engine's order."""
@@ -178,11 +183,16 @@ class MultiModal(_Distribution):
     modes: Sequence[tuple[Param, Distribution]]
 
     def __post_init__(self) -> None:
-        modes = tuple(
-            (_param(w, f"the weight of mode {j}"), _check(d, f"mode {j}"))
-            for j, (w, d) in enumerate(self.modes)
-        )
-        object.__setattr__(self, "modes", modes)
+        modes = []
+        for j, mode in enumerate(self.modes):
+            try:
+                w, d = mode
+            except (TypeError, ValueError):
+                raise TypeError(
+                    f"mode {j} must be a (weight, distribution) pair, not {type(mode).__name__}"
+                ) from None
+            modes.append((_param(w, f"the weight of mode {j}"), _check(d, f"mode {j}")))
+        object.__setattr__(self, "modes", tuple(modes))
 
     def _leaves(self, prefix: str = "") -> list[tuple[str, Param]]:
         out = []
@@ -241,10 +251,13 @@ def _grid(d: Distribution) -> tuple[tuple[int, ...], dict[str, NDArray[np.float6
     return shape, {n: np.broadcast_to(a, shape) for n, a in arrays.items()}
 
 
-def _specs(d: Distribution) -> tuple[tuple[int, ...], list[tuple]]:
+def _specs(
+    d: Distribution,
+    grid: tuple[tuple[int, ...], dict[str, NDArray[np.float64]]] | None = None,
+) -> tuple[tuple[int, ...], list[tuple]]:
     """The grid shape of ``d``, and the engine spec of each of its points in C order (one for
-    a scalar distribution)."""
-    shape, arrays = _grid(d)
+    a scalar distribution); ``grid`` is ``_grid(d)``, if already computed."""
+    shape, arrays = _grid(d) if grid is None else grid
     flat = {n: a.reshape(-1) for n, a in arrays.items()}
     count = int(np.prod(shape))
 
@@ -252,3 +265,12 @@ def _specs(d: Distribution) -> tuple[tuple[int, ...], list[tuple]]:
         return lambda n, v: float(v) if isinstance(v, float) else float(flat[n][k])
 
     return shape, [d._spec(at(k)) for k in range(count)]
+
+
+def _scalar_spec(d: Distribution) -> tuple:
+    """The engine spec of ``d``, which is not a grid (every parameter is a float)."""
+
+    def pick(name: str, value: Param) -> float:
+        return float(value)
+
+    return d._spec(pick)

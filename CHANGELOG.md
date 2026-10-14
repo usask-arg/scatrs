@@ -18,6 +18,10 @@ replacement:
 - `ensemble.compute_batch([LogNormal(r1, s1), LogNormal(r2, s2), ...], wavelength, m, ...)` →
   `scatrs.Ensemble(scatrs.Sphere(m), scatrs.LogNormal([r1, r2, ...], [s1, s2, ...])).compute(wavelength, ...)`:
   array-valued distribution parameters broadcast into a grid of distributions.
+- `ensemble.compute_batch` also accepted any list of distributions, such as distributions of
+  different kinds or many different `Tabulated` tables. A grid broadcasts the numeric
+  parameters of one distribution only, so such a list has no single replacement: compute each
+  distribution as its own `scatrs.Ensemble`.
 - `ensemble.Component` is removed; the size distributions move from `scatrs.ensemble` to
   `scatrs.size` and the top level (`scatrs.LogNormal`, …).
 - A refractive index given as an array of values per wavelength is no longer accepted: use

@@ -23,17 +23,16 @@ read-only arrays.
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
-from types import MappingProxyType
-from typing import Literal, SupportsIndex
+from typing import Any, Literal, SupportsIndex
 
 import numpy as np
 from numpy.typing import ArrayLike, NDArray
 
 from scatrs import _args, _scatrs
 from scatrs.particles import Sphere
-from scatrs.size import Distribution, _check, _grid, _specs
+from scatrs.size import Distribution, _check, _grid, _scalar_spec, _specs
 
 __all__ = [
     "SCALARS",
@@ -68,8 +67,40 @@ def _frozen(a: np.ndarray) -> np.ndarray:
     return a.view()
 
 
+class _ReadOnly:
+    """Unpickles and deep-copies a result read-only: numpy restores arrays writeable."""
+
+    def __setstate__(self, state: dict[str, Any]) -> None:
+        for name, value in state.items():
+            frozen = _frozen(value) if isinstance(value, np.ndarray) else value
+            object.__setattr__(self, name, frozen)
+
+
+class _Grid(Mapping[str, NDArray[np.float64]]):
+    """A read-only mapping of names to read-only copies of arrays (which, unlike
+    :class:`types.MappingProxyType`, pickles)."""
+
+    def __init__(self, arrays: Mapping[str, NDArray[np.float64]]) -> None:
+        self._arrays = {n: _frozen(np.array(a)) for n, a in arrays.items()}
+
+    def __getitem__(self, name: str) -> NDArray[np.float64]:
+        return self._arrays[name]
+
+    def __iter__(self) -> Iterator[str]:
+        return iter(self._arrays)
+
+    def __len__(self) -> int:
+        return len(self._arrays)
+
+    def __reduce__(self) -> tuple:
+        return (_Grid, (self._arrays,))
+
+    def __repr__(self) -> str:
+        return f"Grid({', '.join(f'{n}={a.shape}' for n, a in self._arrays.items())})"
+
+
 @dataclass(frozen=True, eq=False)
-class EnsembleGreek:
+class EnsembleGreek(_ReadOnly):
     """Greek coefficients per wavelength, arrays of shape ``wavelength.shape + (L + 1,)``
     (after the grid's axes), zero-padded to the largest order (see
     :class:`scatrs.mie.MieGreek` for the expansion)."""
@@ -83,7 +114,7 @@ class EnsembleGreek:
 
 
 @dataclass(frozen=True, eq=False)
-class EnsemblePhase:
+class EnsemblePhase(_ReadOnly):
     """The phase matrix per wavelength at the cosines ``mu``, arrays of shape
     ``wavelength.shape + mu.shape`` (after the grid's axes)."""
 
@@ -94,7 +125,7 @@ class EnsemblePhase:
 
 
 @dataclass(frozen=True, eq=False)
-class EnsembleOutputs:
+class EnsembleOutputs(_ReadOnly):
     """The outputs of an ensemble (or their error estimates, or their derivatives with
     respect to one parameter), each an array of shape ``grid + wavelength.shape``.
 
@@ -204,7 +235,7 @@ class EnsembleResult(EnsembleOutputs):
 
 
 def _outputs(
-    raw: dict, which: str, k: int | None, shape: tuple[int, ...], mu_shape
+    raw: dict, which: str, k: int | None, shape: tuple[int, ...], mu_shape: tuple[int, ...]
 ) -> EnsembleOutputs:
     """The outputs of kind ``which`` ("" for values, "_errors", "_d" with derivative ``k``,
     "_d_errors")."""
@@ -318,7 +349,7 @@ def _result(
         panels=raw["panels"].reshape(shape),
         wavelength=_frozen(wavelength.copy()),
         refractive_index=_frozen(m),
-        grid=MappingProxyType({n: _frozen(a.copy()) for n, a in grid.items()}),
+        grid=_Grid(grid),
         params=params,
         _d=tuple(_outputs(raw, "_d", k, shape, mu_shape) for k in range(len(params))),
         _d_errors=tuple(_outputs(raw, "_d_errors", k, shape, mu_shape) for k in range(len(params))),
@@ -326,7 +357,11 @@ def _result(
 
 
 def _single(
-    items: list, mixture: bool, wl: NDArray[np.float64], derivatives, o: _Options
+    items: list,
+    mixture: bool,
+    wl: NDArray[np.float64],
+    derivatives: bool | Sequence[str],
+    o: _Options,
 ) -> tuple[dict, tuple[str, ...]]:
     """The engine's single-distribution or mixture path."""
     names = tuple(_scatrs.ensemble_parameters(items, mixture))
@@ -346,6 +381,20 @@ def _single(
         o.refine_backscatter,
     )
     return raw, params
+
+
+def _weight(w: ArrayLike, what: str) -> float:
+    """``w`` as a float.
+
+    Raises
+    ------
+    TypeError
+        If ``w`` is not a real number: a bool, a string or an array, say.
+    """
+    a = _args.real_array(w, what)
+    if a.ndim != 0:
+        raise TypeError(f"{what} must be a real number, not an array of shape {a.shape}")
+    return float(a)
 
 
 def _sphere(particle: object, what: str) -> Sphere:
@@ -466,7 +515,7 @@ class Ensemble:
         shape, grid = _grid(self.size)
         flat_m = np.ascontiguousarray(m.reshape(-1))
         if shape == ():
-            items = [(_specs(self.size)[1][0], flat_m, 1.0)]
+            items = [(_scalar_spec(self.size), flat_m, 1.0)]
             raw, params = _single(items, False, wl, derivatives, o)
             return _result(raw, wl.shape, o, wl, m, grid, params)
         if not (isinstance(derivatives, (bool, np.bool_)) and not derivatives):
@@ -475,7 +524,7 @@ class Ensemble:
                 "as its own Ensemble"
             )
         raw = _scatrs.ensemble_compute_batch(
-            _specs(self.size)[1],
+            _specs(self.size, (shape, grid))[1],
             flat_m,
             np.ascontiguousarray(wl.reshape(-1)),
             o.order,
@@ -519,7 +568,7 @@ class Mixture:
     Raises
     ------
     TypeError
-        If a component is not a (weight, Ensemble) pair.
+        If a component is not a (weight, Ensemble) pair, or a weight not a real number.
     ValueError
         If an ensemble is a grid.
     """
@@ -542,7 +591,7 @@ class Mixture:
                     f"the distribution of component {i} is a grid of shape {e.grid_shape}; "
                     "a mixture needs scalar parameters"
                 )
-            out.append((float(w), e))
+            out.append((_weight(w, f"the weight of component {i}"), e))
         object.__setattr__(self, "components", tuple(out))
 
     def compute(
@@ -564,12 +613,11 @@ class Mixture:
             greek, mu, normalized, rtol, max_panels, allow_unvalidated, refine_backscatter
         )
         items = [
-            (_specs(e.size)[1][0], np.ascontiguousarray(m.reshape(-1)), w)
+            (_scalar_spec(e.size), np.ascontiguousarray(m.reshape(-1)), w)
             for (w, e), m in zip(self.components, ms, strict=True)
         ]
         raw, params = _single(items, True, wl, derivatives, o)
-        m = np.stack(ms) if ms else np.zeros((0, *wl.shape), dtype=complex)
-        return _result(raw, wl.shape, o, wl, m, {}, params)
+        return _result(raw, wl.shape, o, wl, np.stack(ms), {}, params)
 
 
 Mixture.compute.__doc__ = _COMPUTE_DOC.format(

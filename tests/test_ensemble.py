@@ -1,8 +1,10 @@
 """Ensemble and Mixture: values, shapes, derivatives, grids, mixtures and errors."""
 
+import copy
+import pickle
 import threading
 import time
-from dataclasses import FrozenInstanceError
+from dataclasses import FrozenInstanceError, fields
 
 import numpy as np
 import pytest
@@ -23,6 +25,7 @@ from scatrs import (
     mie,
     refractive,
 )
+from scatrs.ensemble import SCALARS
 
 LOGNORMAL = LogNormal(0.08, 1.6)
 
@@ -340,3 +343,76 @@ def test_repr_prints_no_arrays():
     assert (
         repr(g) == "EnsembleResult(shape=(2,), params=(), grid=('median_radius',), converged=2/2)"
     )
+
+
+def _copies(x):
+    """``x`` pickled and unpickled, and deep-copied."""
+    return [pickle.loads(pickle.dumps(x)), copy.deepcopy(x)]
+
+
+def _assert_outputs_equal(a, b):
+    """The outputs ``a`` and ``b`` are equal, and those of ``a`` read-only."""
+    arrays = [(getattr(a, n), getattr(b, n)) for n in SCALARS]
+    for part in ("greek", "phase"):
+        pa, pb = getattr(a, part), getattr(b, part)
+        assert (pa is None) == (pb is None)
+        if pa is not None:
+            arrays += [(getattr(pa, f.name), getattr(pb, f.name)) for f in fields(pa)]
+    for x, y in arrays:
+        np.testing.assert_array_equal(x, y)
+        with pytest.raises(ValueError):
+            x.flags.writeable = True
+
+
+def test_results_pickle_and_deepcopy():
+    r = compute(LOGNORMAL, [0.4, 0.5], 1.43, greek=4, mu=[0.0, 0.5], derivatives=["width"])
+    g = compute(LogNormal([0.1, 0.2], 1.5), [0.4, 0.5], 1.43)
+    for x in (r, g):
+        for c in _copies(x):
+            assert c.params == x.params and repr(c) == repr(x)
+            _assert_outputs_equal(c, x)
+            _assert_outputs_equal(c.error, x.error)
+            for p in x.params:
+                _assert_outputs_equal(c.d(p), x.d(p))
+                _assert_outputs_equal(c.d_error(p), x.d_error(p))
+            for n in ("converged", "panels", "wavelength", "refractive_index"):
+                np.testing.assert_array_equal(getattr(c, n), getattr(x, n))
+                with pytest.raises(ValueError):
+                    getattr(c, n).flags.writeable = True
+            assert list(c.grid) == list(x.grid) and len(c.grid) == len(x.grid)
+            for n in x.grid:
+                np.testing.assert_array_equal(c.grid[n], x.grid[n])
+                with pytest.raises(ValueError):
+                    c.grid[n].flags.writeable = True
+            assert not hasattr(c.grid, "__setitem__")
+    assert list(g.grid) == ["median_radius"] and "median_radius" in g.grid
+    assert dict(r.grid) == {} and repr(g.grid) == "Grid(median_radius=(2,))"
+
+
+def test_ensembles_and_mixtures_pickle():
+    bi = MultiModal([([1.0, 2.0], LogNormal(0.1, 1.5)), (1.0, Tabulated([0.1, 0.5], [1.0, 1.0]))])
+    e = Ensemble(Sphere(1.5), bi)
+    x = Mixture(
+        [
+            (1.0, Ensemble(Sphere(1.5), Tabulated([0.1, 0.5], [1.0, 2.0]))),
+            (2.0, Ensemble(Sphere(1.6), MultiModal([(1.0, LOGNORMAL), (2.0, Gamma(1.0, 0.1))]))),
+        ]
+    )
+    for v in (e, x):
+        for c in _copies(v):
+            assert c == v and hash(c) == hash(v)
+    for c in _copies(e):
+        assert c.grid_shape == (2,)
+        with pytest.raises(ValueError):
+            c.size.modes[0][0].flags.writeable = True
+
+
+def test_mixture_weights_are_real_scalars():
+    e = Ensemble(Sphere(1.5), LOGNORMAL)
+    for w in (True, np.bool_(True), "1.0", b"1", None):
+        with pytest.raises(TypeError, match="the weight of component 1"):
+            Mixture([(1.0, e), (w, e)])
+    with pytest.raises(TypeError, match=r"weight of component 0 must be a real number, not an ar"):
+        Mixture([([1.0, 2.0], e)])
+    w = Mixture([(np.int64(2), e)]).components[0][0]
+    assert type(w) is float and w == 2.0

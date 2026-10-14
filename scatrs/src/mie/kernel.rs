@@ -268,8 +268,36 @@ impl<T: Real> State<T> {
                 let xi_prev = Complex::new(psi_prev, -chi_prev);
                 inv_da = inv(big_a * xi - xi_prev);
                 inv_db = inv(big_b * xi - xi_prev);
-                an = (big_a.scale(psi) - real(psi_prev)) * inv_da;
-                bn = (big_b.scale(psi) - real(psi_prev)) * inv_db;
+                match side {
+                    None => {
+                        an = (big_a.scale(psi) - real(psi_prev)) * inv_da;
+                        bn = (big_b.scale(psi) - real(psi_prev)) * inv_db;
+                    }
+                    Some((sa, sb)) => {
+                        // A layered sphere: the outer layer's own numerator, plus δ/m·ψ_n and
+                        // m δ·ψ_n, so that δ (the inner layers' share, which can be far smaller
+                        // than D_n(mx)) is not rounded away; the own numerator vanishes exactly
+                        // for m = 1 (D_n(x) + n/x = ψ_{n−1}/ψ_n), where it would otherwise leave
+                        // a rounding error of the size of ψ_{n−1}.
+                        let own = |f: Complex<T>| {
+                            if m == real(one) {
+                                real(T::zero())
+                            } else {
+                                (f + real(k_x)).scale(psi) - real(psi_prev)
+                            }
+                        };
+                        an = match sa {
+                            Side::Delta(delta) => {
+                                (own(d * inv_m) + (delta * inv_m).scale(psi)) * inv_da
+                            }
+                            Side::Direct(_) => (big_a.scale(psi) - real(psi_prev)) * inv_da,
+                        };
+                        bn = match sb {
+                            Side::Delta(delta) => (own(d * m) + (m * delta).scale(psi)) * inv_db,
+                            Side::Direct(_) => (big_b.scale(psi) - real(psi_prev)) * inv_db,
+                        };
+                    }
+                }
                 g_a = xi * inv_da;
                 g_b = xi * inv_db;
                 h_a = xi_prev * inv_da;

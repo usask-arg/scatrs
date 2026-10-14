@@ -90,10 +90,10 @@ type DualKernel<T, const N: usize> = Option<Box<kernel::Kernel<Dual<T, N>>>>;
 /// The kernels in dual numbers of a workspace, one per number of derivatives.
 #[derive(Clone, Debug)]
 struct DualKernels<T: Real> {
-    k3: DualKernel<T, 3>,
+    k2: DualKernel<T, 2>,
+    k4: DualKernel<T, 4>,
     k6: DualKernel<T, 6>,
-    k9: DualKernel<T, 9>,
-    k12: DualKernel<T, 12>,
+    k8: DualKernel<T, 8>,
 }
 
 /// The kernel with `N` derivatives.
@@ -111,10 +111,10 @@ macro_rules! dual_slot {
         }
     };
 }
-dual_slot!(3, k3);
+dual_slot!(2, k2);
+dual_slot!(4, k4);
 dual_slot!(6, k6);
-dual_slot!(9, k9);
-dual_slot!(12, k12);
+dual_slot!(8, k8);
 
 /// A reusable workspace for layered spheres, one per thread.
 ///
@@ -149,10 +149,10 @@ impl<T: Real> Layered<T> {
             derivatives: false,
             layers: Vec::new(),
             duals: DualKernels {
-                k3: None,
+                k2: None,
+                k4: None,
                 k6: None,
-                k9: None,
-                k12: None,
+                k8: None,
             },
         }
     }
@@ -196,9 +196,14 @@ impl<T: Real> Layered<T> {
 
     /// As [`compute`](Self::compute), also computing the derivatives of the coefficients with
     /// respect to each layer's size parameter and refractive index: forward-mode dual numbers
-    /// through the kernel, in one pass with 3L derivatives for L ≤ 4 layers and one pass of 3
-    /// per layer above (for one layer, the sphere's closed forms). The values are bitwise those
-    /// of [`compute`](Self::compute).
+    /// through the kernel, seeded in every layer's x_l and Re m_l (the coefficients are
+    /// holomorphic in m_l, so ∂/∂(Re m_l) is the complex derivative), in one pass with 2L
+    /// derivatives for L ≤ 4 layers and one pass of 2 per layer above; for one layer, the
+    /// sphere's closed forms. The derivative of the absorption sum with respect to Im m_l follows
+    /// from the coefficients' (−Im aₙ′ + 2 Im(āₙaₙ′) and likewise for bₙ, per order). Im m is
+    /// never seeded, so the values take the same paths and are bitwise those of
+    /// [`compute`](Self::compute): a real index keeps its real recurrence, and a lossless particle
+    /// its Q_abs of exactly 0.
     ///
     /// # Errors
     ///
@@ -228,12 +233,12 @@ impl<T: Real> Layered<T> {
                 d.db_dm.clone_from(&s.db_dm);
                 d.abs_sum = s.abs_sum_jacobian;
             }
-            2 => self.dual::<6>(x, m, n, 0),
-            3 => self.dual::<9>(x, m, n, 0),
-            4 => self.dual::<12>(x, m, n, 0),
+            2 => self.dual::<4>(x, m, n, 0),
+            3 => self.dual::<6>(x, m, n, 0),
+            4 => self.dual::<8>(x, m, n, 0),
             _ => {
                 for l in 0..layers {
-                    self.dual::<3>(x, m, n, l);
+                    self.dual::<2>(x, m, n, l);
                 }
             }
         }
@@ -241,17 +246,17 @@ impl<T: Real> Layered<T> {
         Ok(LayeredSolution { s: self })
     }
 
-    /// One pass in `Dual<T, N>`, seeding x, Re m and Im m of the N/3 layers from `first`; the
-    /// first pass also stores the values.
+    /// One pass in `Dual<T, N>`, seeding x and Re m of the N/2 layers from `first`; the first
+    /// pass also stores the values.
     fn dual<const N: usize>(&mut self, x: &[T], m: &[Complex<T>], n: usize, first: usize)
     where
         DualKernels<T>: DualSlot<T, N>,
     {
-        let seeded = first..first + N / 3;
+        let seeded = first..first + N / 2;
         let seed = |l: usize, k: usize, v: T| {
             let mut eps = [T::zero(); N];
             if seeded.contains(&l) {
-                eps[3 * (l - first) + k] = T::one();
+                eps[2 * (l - first) + k] = T::one();
             }
             Dual::new(v, eps)
         };
@@ -259,7 +264,7 @@ impl<T: Real> Layered<T> {
         let md: Vec<Complex<Dual<T, N>>> = m
             .iter()
             .enumerate()
-            .map(|(l, v)| Complex::new(seed(l, 1, v.re), seed(l, 2, v.im)))
+            .map(|(l, v)| Complex::new(seed(l, 1, v.re), Dual::constant(v.im)))
             .collect();
         let kernel = DualSlot::<T, N>::kernel(&mut self.duals);
         kernel.solve(&xd, &md, n);
@@ -274,7 +279,7 @@ impl<T: Real> Layered<T> {
         }
         let part = |z: &Complex<Dual<T, N>>, k: usize| Complex::new(z.re.eps()[k], z.im.eps()[k]);
         for l in seeded.filter(|&l| l < x.len()) {
-            let j = 3 * (l - first);
+            let j = 2 * (l - first);
             let d = &mut self.layers[l];
             for (out, c, k) in [
                 (&mut d.da_dx, &s.a, j),
@@ -285,8 +290,22 @@ impl<T: Real> Layered<T> {
                 out.clear();
                 out.extend(c.iter().map(|z| part(z, k)));
             }
+            // ∂/∂(Im m) of Σ (2n + 1)(Re aₙ − |aₙ|² + Re bₙ − |bₙ|²), with ∂aₙ/∂(Im m) = i aₙ′:
+            // Re(i a′) = −Im a′ and 2 Re(ā i a′) = −2 Im(ā a′).
+            let mut im = T::zero();
+            for (k, ((a, b), (da, db))) in self
+                .a
+                .iter()
+                .zip(&self.b)
+                .zip(d.da_dm.iter().zip(&d.db_dm))
+                .enumerate()
+            {
+                let w = T::from_f64((2 * k + 3) as f64);
+                let term = |c: &Complex<T>, dc: &Complex<T>| (c.conj() * dc).im * 2.0 - dc.im;
+                im += w * (term(a, da) + term(b, db));
+            }
             let e = s.abs_sum.eps();
-            d.abs_sum = [e[j], e[j + 1], e[j + 2]];
+            d.abs_sum = [e[j], e[j + 1], im];
         }
     }
 }

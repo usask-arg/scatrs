@@ -64,16 +64,24 @@ impl ValidatedDomain {
             })
     }
 
-    /// κ(x_L, m) = (1 + max_l max(1, |m_l|)·x_L)·max(1, max_l |m_l| / max_l |m_l − 1|): as for
-    /// a sphere, with the largest index and the largest contrast of any layer. Infinite when
-    /// every layer has m = 1.
+    /// κ(x_L, m) = (1 + max_l max(1, |m_l|)·x_L)·max(1, max_l |m_l|/|m_l − 1|): as for a sphere,
+    /// with the largest index and the largest near-unity factor of any layer whose index is not
+    /// exactly 1 (an index near 1 loses accuracy in that layer's differences, as for a sphere;
+    /// an index of exactly 1 makes them exact). Infinite when every layer has m = 1.
     pub fn condition_factor(x: f64, m: &[Complex<f64>]) -> f64 {
         let big = m.iter().map(|m| m.norm()).fold(1.0, f64::max);
-        let contrast = m
+        let one = Complex::new(1.0, 0.0);
+        let near_one = m
             .iter()
-            .map(|m| (m - Complex::new(1.0, 0.0)).norm())
-            .fold(0.0, f64::max);
-        (1.0 + big * x) * (big / contrast).max(1.0)
+            .filter(|&&m| m != one)
+            .map(|m| (m.norm() / (m - one).norm()).max(1.0))
+            .fold(f64::NEG_INFINITY, f64::max);
+        let near_one = if near_one.is_finite() {
+            near_one
+        } else {
+            f64::INFINITY
+        };
+        (1.0 + big * x) * near_one
     }
 
     /// The declared bound on the error of `output`: C·(κ′ + `condition`)·2⁻⁵², with κ′ as for

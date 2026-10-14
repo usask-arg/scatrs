@@ -8,6 +8,7 @@ from . import _testing as _testing
 
 __all__ = [
     "MAX_GAUSS_LEGENDRE_POINTS",
+    "MAX_GREEK_ORDER",
     "MAX_MIE_ORDER",
     "MAX_MIE_VALUES",
     "MAX_WIGNER_D_VALUES",
@@ -17,6 +18,8 @@ __all__ = [
     "mie_coefficients",
     "mie_default_n_max",
     "mie_efficiencies",
+    "mie_greek",
+    "mie_phase_matrix",
     "wigner_d",
 ]
 
@@ -25,6 +28,7 @@ MAX_GAUSS_LEGENDRE_POINTS: Final[int]
 MAX_WIGNER_D_VALUES: Final[int]
 MAX_MIE_ORDER: Final[int]
 MAX_MIE_VALUES: Final[int]
+MAX_GREEK_ORDER: Final[int]
 
 def gauss_legendre(n: int) -> tuple[NDArray[np.float64], NDArray[np.float64]]: ...
 def wigner_d(m: int, n: int, l_max: int, x: NDArray[np.float64]) -> NDArray[np.float64]: ...
@@ -56,3 +60,21 @@ def mie_amplitudes(
     derivatives: bool,
     allow_unvalidated: bool,
 ) -> tuple[NDArray[np.complex128], NDArray[np.complex128] | None]: ...
+def mie_phase_matrix(
+    x: NDArray[np.float64],
+    m: NDArray[np.complex128],
+    mu: NDArray[np.float64],
+    n_max: int | None,
+    derivatives: bool,
+    allow_unvalidated: bool,
+    normalized: bool,
+) -> tuple[NDArray[np.float64], NDArray[np.float64] | None]: ...
+def mie_greek(
+    x: NDArray[np.float64],
+    m: NDArray[np.complex128],
+    order: int | None,
+    n_max: int | None,
+    derivatives: bool,
+    allow_unvalidated: bool,
+    normalized: bool,
+) -> tuple[NDArray[np.uint64], NDArray[np.float64], NDArray[np.float64] | None]: ...

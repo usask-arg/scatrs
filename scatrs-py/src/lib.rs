@@ -27,6 +27,9 @@ fn _scatrs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(mie::mie_efficiencies, m)?)?;
     m.add_function(wrap_pyfunction!(mie::mie_coefficients, m)?)?;
     m.add_function(wrap_pyfunction!(mie::mie_amplitudes, m)?)?;
+    m.add("MAX_GREEK_ORDER", scatrs::mie::MAX_GREEK_ORDER)?;
+    m.add_function(wrap_pyfunction!(mie::mie_phase_matrix, m)?)?;
+    m.add_function(wrap_pyfunction!(mie::mie_greek, m)?)?;
     testing::register(m)?;
     Ok(())
 }

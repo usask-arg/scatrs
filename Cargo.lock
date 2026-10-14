@@ -1059,7 +1059,7 @@ dependencies = [
 
 [[package]]
 name = "scatrs"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "criterion",
  "faer",
@@ -1074,7 +1074,7 @@ dependencies = [
 
 [[package]]
 name = "scatrs-py"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "numpy",
  "pyo3",

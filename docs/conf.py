@@ -64,9 +64,14 @@ nb_execution_raise_on_error = True
 nb_execution_timeout = 300
 nb_output_stderr = "warn"
 
-# No "edit this page" links (furo's source_repository options) until the repository is public.
 html_theme = "furo"
 html_title = "scatrs"
+# "View source" and "edit this page" links to the repository.
+html_theme_options = {
+    "source_repository": "https://github.com/usask-arg/scatrs/",
+    "source_branch": "main",
+    "source_directory": "docs/",
+}
 
 autodoc_default_options = {"members": True, "undoc-members": False}
 autodoc_member_order = "bysource"

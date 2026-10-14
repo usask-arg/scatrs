@@ -100,11 +100,7 @@ CONTRACTS = [
     ),
     ("Gauss-Legendre asymptotic measured", "2.82^-52", [GL_RS, THEORY]),
     ("Gauss-Legendre asymptotic measured", "4.02^-52", [GL_RS, THEORY]),
-    (
-        "Gauss-Legendre asymptotic measured",
-        "2.8and4.0unitsof2^-52",
-        [SPECIAL_PY, LIMITATIONS, "CHANGELOG.md"],
-    ),
+    ("Gauss-Legendre asymptotic measured", "2.8and4.0unitsof2^-52", [SPECIAL_PY, LIMITATIONS]),
     ("Wigner cost", "2.6ns", [WIGNER_RS, THEORY]),
     ("Gauss-Legendre f64 node contract", "nodeabsoluteerror≤2^-52", [GL_RS]),
     ("Gauss-Legendre f64 weight contract", "weightrelativeerror≤2^-52", [GL_RS]),

@@ -3,10 +3,10 @@
 Fast, linearized, rigorously validated single-scattering calculations for spherical
 particles, written in Rust with a Python interface.
 
-```{note}
-scatrs is in early development and not yet published on PyPI or crates.io; see
-{doc}`installation` to build it.
-```
+scatrs is built out of the scattering core of the
+[sasktran2](https://github.com/usask-arg/sasktran2) radiative transfer model, as a standalone
+library for the optical properties of particles. Install it with `pip install scatrs` or
+`cargo add scatrs` ({doc}`installation`).
 
 - **Mie scattering by homogeneous spheres** ({mod}`scatrs.mie`): Mie coefficients,
   efficiencies, asymmetry parameter, amplitudes, phase matrix and Greek coefficients to every

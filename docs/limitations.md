@@ -10,20 +10,17 @@ describes what the accuracy figures rest on.
 
 ## Scope and availability
 
-- Homogeneous spheres, single or averaged over size distributions and external mixtures, are
-  the only particles yet. Layered spheres and non-spherical particles (the T-matrix) are not
-  available.
+- scatrs computes homogeneous spheres, single or averaged over size distributions and
+  external mixtures.
 - Python exposes only `f64` results. Double-double precision and the `Dual` derivatives of
   the Rust core are available from Rust only.
-- Neither wheels nor the Rust crate are published, so the Rust API reference is in these
-  pages ({doc}`rust-api`) but not on docs.rs. See {doc}`installation`.
 - The tests run on Linux (x86_64), macOS (arm64) and Windows (x86_64) for every change. The
   slowest tests run weekly, on the same three systems: the 20 000-point double-double
   Gauss–Legendre rule against Arb, every asymptotic rule from 101 to 3000 points against
   double-double, and the phase matrix and Greek coefficients of spheres at
-  $x = 2\cdot10^3$, $10^4$ and $2\cdot10^4$. Wheels are also built for platforms that no
-  tests run on (aarch64 Linux and Windows, s390x, ppc64le, musl Linux and Intel macOS).
-  32-bit platforms are not supported.
+  $x = 2\cdot10^3$, $10^4$ and $2\cdot10^4$. The released wheels are also tested on aarch64
+  Linux and Windows and on Intel macOS; the s390x, ppc64le and musl Linux wheels are built
+  but not tested. 32-bit platforms are not supported.
 
 ## Mie scattering
 
@@ -111,8 +108,8 @@ describes what the accuracy figures rest on.
 - **Tables can exceed `max_panels`.** Every radius of a `Tabulated` distribution is a panel
   edge, so a table of more radii than `max_panels`, or a batch of many tables, takes more
   panels than `max_panels` (still converging).
-- **Distributions over size only.** Distributions over other parameters, such as shape, need
-  non-spherical particles, which scatrs does not support yet.
+- **Distributions over size only.** The particles are spheres, so the distributions are over
+  their radius only.
 - **Threads.** The computation runs on all cores, through rayon's global thread pool. Python
   has no call to set the number of threads; set the environment variable `RAYON_NUM_THREADS`
   before the first call (in Rust, a caller can `install` its own pool).

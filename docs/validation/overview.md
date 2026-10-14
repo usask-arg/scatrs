@@ -46,7 +46,7 @@ same integral at a far tighter tolerance.
 
 The reference values are computed from the same equations as scatrs. They would not catch a
 mistake in an equation, or a convention that differs from everyone else's. So scatrs is also
-compared with results it shares nothing with:
+compared with results from outside its own code:
 
 - **Wiscombe's MIEV0 test cases.** MIEV0 is the most widely used Mie code, and its published
   test cases are the standard benchmark for new ones. scatrs reproduces all fifteen cases,
@@ -56,8 +56,9 @@ compared with results it shares nothing with:
   and in the sign and normalization of every element of the phase matrix and every Greek
   coefficient. Large spheres must remove twice their geometric cross section, and every
   sphere must satisfy the optical theorem.
-- **sasktran2.** For size distributions, scatrs is compared with the Mie integration of the
-  sasktran2 radiative transfer model, on a single distribution and on an optics-database grid.
+- **sasktran2.** For size distributions, scatrs is compared with the Mie integration that
+  sasktran2, the radiative transfer model scatrs grew out of, still uses: a separate
+  implementation, compared on a single distribution and on an optics-database grid.
 
 {doc}`external` runs the first two on every build of this documentation, and
 {doc}`sasktran2` shows the third.

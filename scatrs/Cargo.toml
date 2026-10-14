@@ -1,13 +1,13 @@
 [package]
 name = "scatrs"
-description = "Fast, linearized, rigorously validated single-scattering calculations (Mie, layered spheres, T-matrix)"
+description = "Fast, linearized, rigorously validated single-scattering calculations for spherical particles (Lorenz–Mie, size distributions)"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 readme = "../README.md"
-keywords = ["scattering", "mie", "t-matrix", "optics", "atmosphere"]
+keywords = ["scattering", "mie", "aerosol", "optics", "atmosphere"]
 categories = ["science", "mathematics"]
 # The integration tests read the Arb reference data in ../reference/data, which is outside the
 # package, so they are not published. (LICENSE is a copy of the repository's, for the package.)

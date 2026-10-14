@@ -6,8 +6,7 @@ compiled and run as a test:
 
 <p><a href="rustdoc/scatrs/index.html"><strong>Open the Rust API reference →</strong></a></p>
 
-The crate is not yet on crates.io, so it is not on docs.rs either; {doc}`installation` shows
-how to depend on a checkout.
+Add it with `cargo add scatrs`. The same reference is on [docs.rs](https://docs.rs/scatrs).
 
 ## The crate and the Python package
 

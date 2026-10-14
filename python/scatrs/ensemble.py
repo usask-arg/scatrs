@@ -471,8 +471,8 @@ class Ensemble:
             return _result(raw, wl.shape, o, wl, m, grid, params)
         if not (isinstance(derivatives, (bool, np.bool_)) and not derivatives):
             raise NotImplementedError(
-                "derivatives of a grid of distributions are not available yet; compute each "
-                "point as its own Ensemble"
+                "derivatives of a grid of distributions are not supported; compute each point "
+                "as its own Ensemble"
             )
         raw = _scatrs.ensemble_compute_batch(
             _specs(self.size)[1],

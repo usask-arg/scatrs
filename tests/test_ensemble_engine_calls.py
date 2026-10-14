@@ -39,18 +39,19 @@ def _equal(raw, result, shape, params=()):
     for key, outputs in [("values", result), ("errors", result.error)]:
         for row, name in zip(raw[key], names, strict=True):
             np.testing.assert_array_equal(getattr(outputs, name), row.reshape(shape))
-    for row, name in zip(
-        raw["greek"], ("alpha1", "alpha2", "alpha3", "alpha4", "beta1", "beta2"), strict=True
-    ):
+    greek = ("alpha1", "alpha2", "alpha3", "alpha4", "beta1", "beta2")
+    for row, name in zip(raw["greek"], greek, strict=True):
         np.testing.assert_array_equal(getattr(result.greek, name), row.reshape((*shape, 9)))
-    for row, name in zip(raw["phase_errors"], ("f11", "f12", "f33", "f34"), strict=True):
-        np.testing.assert_array_equal(getattr(result.error.phase, name), row.reshape((*shape, 7)))
+    for key, outputs in [("phase", result), ("phase_errors", result.error)]:
+        for row, name in zip(raw[key], ("f11", "f12", "f33", "f34"), strict=True):
+            np.testing.assert_array_equal(getattr(outputs.phase, name), row.reshape((*shape, 7)))
     for k, p in enumerate(params):
         for row, name in zip(raw["d"][k], names, strict=True):
             np.testing.assert_array_equal(getattr(result.d(p), name), row.reshape(shape))
-        np.testing.assert_array_equal(
-            result.d(p).greek.beta2, raw["greek_d"][k][5].reshape((*shape, 9))
-        )
+        for row, name in zip(raw["greek_d"][k], greek, strict=True):
+            np.testing.assert_array_equal(
+                getattr(result.d(p).greek, name), row.reshape((*shape, 9))
+            )
     np.testing.assert_array_equal(result.converged, raw["converged"].reshape(shape))
     np.testing.assert_array_equal(result.panels, raw["panels"].reshape(shape))
 
@@ -61,7 +62,8 @@ def test_a_scalar_ensemble_is_the_single_distribution_call():
     r = Ensemble(Sphere(m), size).compute(
         WL, greek=8, mu=MU, derivatives=["mode0.width", "m_imag"], **OPTIONS
     )
-    items = [(size._spec(lambda n, v: float(v)), np.full(4, m), 1.0)]
+    spec = ("multimodal", [(2.0, ("lognormal", 0.1, 1.5)), (1.0, ("gamma", 0.5, 0.1))])
+    items = [(spec, np.full(4, m), 1.0)]
     names = _scatrs.ensemble_parameters(items, False)
     raw = _scatrs.ensemble_compute(
         items,

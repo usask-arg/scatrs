@@ -2,6 +2,7 @@
 
 import threading
 import time
+from dataclasses import FrozenInstanceError
 
 import numpy as np
 import pytest
@@ -203,6 +204,31 @@ def test_results_cannot_be_made_writeable():
     for a in arrays:
         with pytest.raises(ValueError):
             a.flags.writeable = True
+
+
+def test_ensembles_and_mixtures_are_values():
+    e1 = Ensemble(Sphere(1.5), LogNormal(np.array([0.1, 0.2]), 1.5))
+    e2 = Ensemble(Sphere(1.5), LogNormal(np.array([0.1, 0.2]), 1.5))
+    assert e1 == e2 and hash(e1) == hash(e2)
+    assert e1 != Ensemble(Sphere(1.5), LogNormal([0.1, 0.3], 1.5))
+    assert e1 != Ensemble(Sphere(1.6), LogNormal([0.1, 0.2], 1.5))
+    with pytest.raises(FrozenInstanceError):
+        e1.size = LOGNORMAL
+    a1, b1 = Ensemble(Sphere(1.5), LogNormal(0.1, 1.5)), Ensemble(Sphere(1.6), Gamma(1.0, 0.1))
+    a2, b2 = Ensemble(Sphere(1.5), LogNormal(0.1, 1.5)), Ensemble(Sphere(1.6), Gamma(1.0, 0.1))
+    x1, x2 = Mixture([(1, a1), (2.0, b1)]), Mixture([(1.0, a2), (2.0, b2)])
+    assert x1 == x2 and hash(x1) == hash(x2)
+    assert x1 != Mixture([(1.0, a2), (3.0, b2)])
+    assert x1 != Mixture([(1.0, a2), (2.0, Ensemble(Sphere(1.6), Gamma(1.0, 0.2)))])
+    with pytest.raises(FrozenInstanceError):
+        x1.components = ()
+
+    def f(wavelength):
+        return np.full(wavelength.shape, 1.5 + 0j)
+
+    e = Ensemble(Sphere(refractive.Function(f)), LOGNORMAL)
+    assert e == e and hash(e) == hash(e)
+    assert e != Ensemble(Sphere(refractive.Function(f)), LOGNORMAL)
 
 
 def test_buffer_error_when_an_input_is_borrowed_for_writing():

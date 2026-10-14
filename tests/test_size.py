@@ -21,6 +21,15 @@ def test_scalar_parameters_are_floats_and_arrays_read_only_copies():
         LogNormal(0.1 + 1j, 1.5)
 
 
+def test_array_parameters_cannot_be_made_writeable():
+    d = LogNormal([0.1, 0.2], 1.5)
+    with pytest.raises(ValueError):
+        d.median_radius.flags.writeable = True
+    b = MultiModal([([1.0, 2.0], LogNormal(0.1, 1.5)), (1.0, LogNormal(0.2, 1.6))])
+    with pytest.raises(ValueError):
+        b.modes[0][0].flags.writeable = True
+
+
 def test_distributions_are_values():
     t1 = Tabulated(np.array([0.1, 0.5]), [1.0, 2.0])
     t2 = Tabulated([0.1, 0.5], (1.0, 2.0))

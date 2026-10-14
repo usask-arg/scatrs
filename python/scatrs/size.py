@@ -41,9 +41,11 @@ def _param(value: ArrayLike, name: str) -> Param:
     a = _args.real_array(value, name)
     if a.ndim == 0:
         return float(a)
+    # A view of a read-only copy: an array that owns its data can be made writeable again,
+    # a view of a read-only array cannot.
     a = a.copy()
     a.flags.writeable = False
-    return a
+    return a.view()
 
 
 def _key(value: Param) -> Any:

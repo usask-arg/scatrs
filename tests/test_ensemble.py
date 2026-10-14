@@ -130,7 +130,7 @@ def test_gil_is_released_while_computing():
     def worker():
         span["start"] = time.perf_counter()
         ensemble.compute(
-            ensemble.LogNormal(0.3, 1.6), np.linspace(0.3, 1.0, 8), 1.45 + 1e-3j, greek=32
+            ensemble.LogNormal(0.3, 1.6), np.linspace(0.3, 1.0, 64), 1.45 + 1e-3j, greek=32
         )
         span["end"] = time.perf_counter()
 
@@ -145,3 +145,97 @@ def test_gil_is_released_while_computing():
     inside = sum(span["start"] + quarter < t < span["end"] - quarter for t in stamps)
     assert span["end"] - span["start"] > 0.02
     assert inside >= 5
+
+
+def test_results_cannot_be_made_writeable():
+    r = ensemble.compute(LOGNORMAL, [0.4, 0.5], 1.43, greek=4, mu=[0.0], derivatives=["width"])
+    arrays = [
+        r.c_ext,
+        r.converged,
+        r.panels,
+        r.error.g,
+        r.greek.alpha1,
+        r.error.greek.beta1,
+        r.d("width").greek.alpha2,
+        r.d_error("width").phase.f11,
+    ]
+    for a in arrays:
+        with pytest.raises(ValueError):
+            a.flags.writeable = True
+
+
+def test_buffer_error_when_an_input_is_borrowed_for_writing():
+    from scatrs._scatrs import _testing
+
+    wl = np.array([0.4, 0.5])
+    with pytest.raises(BufferError):
+        _testing.with_write_borrow(wl, lambda: ensemble.compute(LOGNORMAL, wl, 1.5))
+
+
+def test_refractive_indices_broadcast_to_the_wavelengths_shape():
+    wl = np.array([[0.4, 0.5], [0.6, 0.7]])
+    m = np.array([1.45, 1.40 + 1e-3j])  # along the last axis
+    r = ensemble.compute(LOGNORMAL, wl, m)
+    for i in range(2):
+        for j in range(2):
+            assert r.c_ext[i, j] == ensemble.compute(LOGNORMAL, wl[i, j], m[j]).c_ext
+    with pytest.raises(ValueError, match="refractive_index of shape"):
+        ensemble.compute(LOGNORMAL, wl, [1.4, 1.5, 1.6])
+    with pytest.raises(ValueError, match="refractive_index of shape"):
+        ensemble.compute(LOGNORMAL, [0.4, 0.5, 0.6, 0.7], m.reshape(2, 1) * np.ones((2, 2)))
+
+
+def test_distributions_are_values():
+    t1 = ensemble.Tabulated(np.array([0.1, 0.5]), [1.0, 2.0])
+    t2 = ensemble.Tabulated([0.1, 0.5], (1.0, 2.0))
+    assert t1 == t2 and hash(t1) == hash(t2)
+    b = ensemble.MultiModal([(1.0, LOGNORMAL), (2.0, t1)])
+    assert hash(b) == hash(ensemble.MultiModal([(1, LOGNORMAL), (2, t2)]))
+    c = ensemble.Component(LOGNORMAL, np.array([1.5]))
+    assert c == c and c != ensemble.Component(LOGNORMAL, np.array([1.5]))
+    with pytest.raises(TypeError, match="must be one of"):
+        ensemble.compute("lognormal", 0.5, 1.5)
+    with pytest.raises(TypeError, match="must be one of"):
+        ensemble.MultiModal([(1.0, "x")])
+
+
+def test_greek_orders_and_parameter_names():
+    empty = ensemble.compute(LOGNORMAL, np.zeros(0), 1.5, greek=7)
+    assert empty.greek.alpha1.shape == (0, 8) and empty.c_ext.shape == (0,)
+    with pytest.raises(InvalidInputError, match="Greek order"):
+        ensemble.compute(LOGNORMAL, 0.5, 1.5, greek=2**63)
+    a = ensemble.compute(ensemble.Monodisperse(0.3), [0.3, 3.0], 1.5, greek="all")
+    n = mie.default_n_max(2 * np.pi * 0.3 / np.array([0.3, 3.0]))
+    assert a.greek.alpha1.shape == (2, 2 * n[0] + 1)
+    assert np.all(a.greek.alpha1[1, 2 * n[1] + 1 :] == 0)
+    for d, names in [
+        (ensemble.Gamma(1.0, 0.1), ("effective_radius", "effective_variance")),
+        (ensemble.ModifiedGamma(2.0, 15.0, 0.5), ("alpha", "b", "gamma")),
+        (ensemble.PowerLaw(3.0, 0.1, 1.0), ("exponent",)),
+        (ensemble.Tabulated([0.1, 1.0], [1.0, 1.0]), ()),
+    ]:
+        assert ensemble.compute(d, 0.5, 1.5, derivatives=True).params == (
+            *names,
+            "m_real",
+            "m_imag",
+        )
+    with pytest.raises(ValueError, match="twice"):
+        ensemble.compute(LOGNORMAL, 0.5, 1.5, derivatives=["width", "width"])
+
+
+def test_error_estimates_of_derivatives_and_convergence_flags():
+    r = ensemble.compute(LOGNORMAL, 0.5, 1.43, derivatives=["median_radius"])
+    e = r.d_error("median_radius")
+    assert e.c_ext >= 0 and e.c_ext < 1e-4 * abs(r.d("median_radius").c_ext)
+    capped = ensemble.compute(ensemble.LogNormal(1.0, 2.0), 0.5, 1.33, max_panels=1)
+    assert not capped.converged and capped.panels > 0
+    with pytest.raises(InvalidInputError, match="MAX_MIE_VALUES"):
+        ensemble.compute(LOGNORMAL, np.full(2**14, 0.5), 1.5, greek=2**15)
+
+
+def test_a_single_distribution_has_one_component():
+    from scatrs import _scatrs
+
+    spec = (LOGNORMAL._spec(), np.array([1.5 + 0j]), 1.0)
+    with pytest.raises(InvalidInputError, match="exactly one component"):
+        _scatrs.ensemble_parameters([spec, spec], False)

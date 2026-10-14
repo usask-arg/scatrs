@@ -246,7 +246,7 @@ split at n_s = ⌊x_L⌋.
 
 - `Component { distribution, particle, weight }`, where `Particle` is a non-exhaustive enum:
   - `Sphere { refractive_index: Vec<Complex<f64>> }`;
-  - `Layered { radius_fractions: Vec<f64>, refractive_index: Vec<Vec<Complex<f64>>> }`, the
+  - `LayeredSphere { radius_fractions: Vec<f64>, refractive_index: Vec<Vec<Complex<f64>>> }`, the
     latter per layer and per wavelength (added in 3c).
 - `Component::new(distribution, refractive_index, weight)` keeps its meaning: a sphere. This
   keeps the common case source-compatible for sasktran2. `Component::with_particle` is added.
@@ -502,3 +502,72 @@ The docs stay user-facing: no phases or development history.
   was verified in mpmath during design. The accuracy maps decide the switch points and whether
   real layers need the χ form for Q_abs.
 - **References by direct interface matching, independent of the algorithm.**
+
+## 14. Changes while planning 3a
+
+- **Groups rather than general directions.** The coefficient view's derivatives come in
+  *groups*. Each group holds the derivatives with respect to one real size parameter and one
+  refractive index, in which the coefficients are holomorphic. This replaces section 3.1's list
+  of real or holomorphic directions.
+  - A sphere has one group, and a layered sphere one per layer (x_l, m_l), so every existing
+    output's derivative code serves both unchanged.
+  - The engine's *directions* are Re m and Im m of each group, in order. Phase 3c appends the
+    real directions of the radius fractions.
+- **One flag deferred to 3b.** Only the group of the outer size parameter carries the
+  −(2/x)·Q term of the efficiencies and the scale of the phase matrix. That flag is added in
+  3b, with its first use.
+- **Correction to section 3.2.** The engine reads m only in the solves and in the number of
+  terms per band. `MAX_DX` is a constant and does not read m, despite its comment's reference
+  to the period π/|m − 1|.
+- **Batch binding.** Until 3c, the batch binding accepts a sphere's particle spec only.
+- **Release notes.** The release-note entry for the `Component` field change is written in
+  3c, with the rest of the release notes.
+
+## 15. Looking ahead to phase 4 (spheroids, T-matrix)
+
+Spheroids and the T-matrix come next (user, 2026-10-14). Phase 3's public API is chosen so that
+phase 4 extends it rather than changes it. The internal engine interface will need one new
+path.
+
+**Already compatible:**
+
+- `Particle` and `ParamKind` are non-exhaustive, so `Particle::Spheroid { … }` and its
+  parameters can be added. In Python, `Ensemble(particle, size)` and `Mixture` take any particle
+  class with an `_engine` hook, including mixtures of spheres and spheroids (main spec §7.2).
+- Phase 3c's real directions (radius fractions) are the mechanism for shape parameters such as
+  the aspect ratio. Their derivatives come from `Dual` through the EBCM as main spec §5.3
+  plans.
+- `scatrs.layered` stands next to a future `scatrs.tmatrix`, as main spec §9 plans.
+- `Outputs.depolarization` and the separate α₂ and α₃ already exist. For spheres they are 0
+  and α₂ = α₃.
+
+**Decided now:**
+
+- **Variant names.** The Rust variant for layered spheres is `Particle::LayeredSphere`
+  (section 3.2; first drafted as `Layered`), matching Python and leaving room for `Spheroid`,
+  `Cylinder` and the other shapes.
+- **Size convention.** A size distribution describes the radius that the particle type
+  defines: the radius for `Sphere`, the outer radius for `LayeredSphere`, and for T-matrix
+  shapes the equal-volume-sphere radius unless phase 4 decides otherwise. The `Ensemble`
+  docstring says this generally rather than for spheres alone.
+
+**For phase 4, not phase 3:**
+
+- **Phase matrix elements.** Randomly oriented non-spherical particles have six independent
+  phase-matrix elements. Phase 4 adds F₂₂ and F₄₄ to `PhaseValues` (non-exhaustive, so this
+  is additive), to `PhaseBuffers`'s ensemble counterpart, and to `EnsemblePhase`, equal to F₁₁
+  and F₃₃ for spheres.
+- **A direct path in the engine.** Spheres and layered spheres give aₙ and bₙ, and the engine
+  builds their phase matrix and Greek coefficients from them (kernel A and the projection
+  bands). A randomly oriented T-matrix particle gives its cross sections and Greek coefficients
+  directly, by Mishchenko's analytic averaging. The engine's `Solver` will therefore return
+  either coefficients or per-node outputs:
+  - Greek coefficients integrate linearly over sizes, beside the band tables.
+  - The phase matrix at the requested cosines comes from the Greek expansion.
+
+  The crate-internal `Optics`/`Solver`/`Solved` interface of 3a is where this goes. Phase 3
+  keeps the coefficient path as is and adds no assumption to the public API that only it can
+  meet.
+- **Distributions over shape parameters**, such as aspect ratio (main spec §7.1). These are a
+  property of the ensemble, not of the particle: phase 3 keeps every `Particle` field a single
+  value per wavelength.

@@ -88,4 +88,5 @@ utilities/legendre-moments
 api
 rust-api
 references
+changelog
 ```

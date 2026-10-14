@@ -192,6 +192,10 @@ jobs:
       # examples are executed.
       - name: Build the documentation
         run: uv run --locked --extra docs sphinx-build -E -W --keep-going -b html docs docs/_build/html
+        env:
+          # The changelog page reads the release notes through the GitHub API; the token
+          # (read-only here) avoids the anonymous rate limit of the shared runners.
+          SPHINX_GITHUB_CHANGELOG_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - name: Check the extension's type stubs (the locked mypy)
         run: uv run --locked --extra docs python -m mypy.stubtest scatrs._scatrs
 

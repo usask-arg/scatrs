@@ -77,13 +77,15 @@ not changed. It also runs `cargo doc` and includes the Rust API reference.
 Every warning fails the build, and every cross-reference must resolve (nitpicky mode). The
 links to the Python and numpy documentation come from inventories that intersphinx downloads.
 Sphinx keeps them in the build directory for five days, so rebuilds soon after an online build
-also work offline. Otherwise, without network access, the download fails and so does the
-build. Set `SCATRS_DOCS_OFFLINE=1` to skip the download:
+also work offline. The {doc}`changelog` page downloads the release notes from GitHub,
+anonymously or with a token from `SPHINX_GITHUB_CHANGELOG_TOKEN`, `GITHUB_TOKEN`, a git
+credential helper or the GitHub CLI. Without network access these downloads fail and so does the
+build. Set `SCATRS_DOCS_OFFLINE=1` to skip them:
 
 ```bash
 SCATRS_DOCS_OFFLINE=1 uv run --extra docs \
     sphinx-build -W --keep-going -b html docs docs/_build/html
 ```
 
-Offline, references to Python and numpy objects appear as plain text. References within
-scatrs are still checked.
+Offline, references to Python and numpy objects appear as plain text, and the changelog page
+links to the GitHub releases. References within scatrs are still checked.

@@ -31,6 +31,7 @@ docs = [
     "numpydoc>=1.8",
     "ipykernel>=6.29",
     "matplotlib>=3.8",
+    "sphinx-github-changelog>=2.3",
 ]
 
 [project.urls]

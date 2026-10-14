@@ -219,3 +219,16 @@ Tests are written first (`tests/`).
 - All four kinds of refractive-index model (user).
 - A bare array is not a refractive index: it means something only with a wavelength grid.
 - Derivatives of grids raise instead of looping point by point; 2c-2 implements them.
+
+## 10. Changes after approval
+
+- **Lists of distributions (user, 2026-10-14).** The reviews found that grids cannot express
+  0.1.0's batches of distributions of different kinds (or many `Tabulated` tables). `size=`
+  also accepts a list (or tuple) of distributions with scalar parameters, stored as a tuple: a
+  batch with one leading axis, computed by `_scatrs.ensemble_compute_batch` like a grid. As for
+  grids: values only (`NotImplementedError` for derivatives), not allowed in a `Mixture`, an
+  empty list is the engine's `InvalidInputError`, and `grid` is empty.
+- **Changelog from GitHub releases (user, 2026-10-14).** As in sasktran2, the release notes of
+  the GitHub releases are the changelog: `CHANGELOG.md` is removed, the docs gain a changelog
+  page (sphinx-github-changelog), and `CONTRIBUTING.md`'s release steps say to write the notes
+  on the release. The breaking changes of this work go in the next release's notes.

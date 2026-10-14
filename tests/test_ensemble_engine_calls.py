@@ -6,7 +6,7 @@ The private bindings are unchanged, so these results are bitwise those of 0.1.0'
 
 import numpy as np
 
-from scatrs import Ensemble, Gamma, LogNormal, Mixture, MultiModal, Sphere, _scatrs
+from scatrs import Ensemble, Gamma, LogNormal, Mixture, MultiModal, Sphere, Tabulated, _scatrs
 
 WL = np.array([[0.35, 0.5], [0.75, 1.0]])
 MU = np.linspace(-1, 1, 7)
@@ -109,3 +109,14 @@ def test_a_mixture_is_the_mixture_call():
         *OPTIONS.values(),
     )
     _equal(raw, r, WL.shape, ("c1.weight",))
+
+
+def test_a_list_is_the_batch_call():
+    m = 1.45 + 2e-3j
+    sizes = [LogNormal(0.1, 1.5), Gamma(0.5, 0.1), Tabulated([0.1, 0.3], [1.0, 1.0])]
+    r = Ensemble(Sphere(m), sizes).compute(WL, greek=8, mu=MU, **OPTIONS)
+    specs = [("lognormal", 0.1, 1.5), ("gamma", 0.5, 0.1), ("tabulated", [0.1, 0.3], [1.0, 1.0])]
+    raw = _scatrs.ensemble_compute_batch(
+        specs, np.full(4, m), WL.reshape(-1), *_engine_options(), *OPTIONS.values()
+    )
+    _equal(raw, r, (3, *WL.shape))

@@ -472,30 +472,58 @@ class Ensemble:
     ----------
     particle : Sphere
         The particle, with its refractive-index model.
-    size : LogNormal, Gamma, ModifiedGamma, PowerLaw, Monodisperse, Tabulated or MultiModal
+    size : LogNormal, Gamma, ModifiedGamma, PowerLaw, Monodisperse, Tabulated, MultiModal or list
         The number size distribution. If its parameters are arrays, the ensemble is a grid
-        of distributions, one per point of their broadcast shape.
+        of distributions, one per point of their broadcast shape. A list (or tuple) of
+        distributions with scalar parameters, of any kinds, is a batch with one axis, one
+        point per distribution; it is stored as a tuple.
 
     Raises
     ------
     TypeError
-        If ``particle`` is not a :class:`~scatrs.Sphere` or ``size`` not a distribution.
+        If ``particle`` is not a :class:`~scatrs.Sphere`, or ``size`` or an element of a
+        list not a distribution.
     ValueError
-        If the distribution's array-valued parameters do not broadcast together.
+        If the distribution's array-valued parameters do not broadcast together, or an
+        element of a list is a grid.
     """
 
     particle: Sphere
-    size: Distribution
+    size: Distribution | tuple[Distribution, ...]
 
     def __post_init__(self) -> None:
         _sphere(self.particle, "particle")
-        _check(self.size, "size")
-        _grid(self.size)
+        if isinstance(self.size, (list, tuple)):
+            sizes = tuple(_check(d, f"size[{i}]") for i, d in enumerate(self.size))
+            for i, d in enumerate(sizes):
+                shape = _grid(d)[0]
+                if shape != ():
+                    raise ValueError(
+                        f"size[{i}] is a grid of shape {shape}; a list takes distributions "
+                        "with scalar parameters"
+                    )
+            object.__setattr__(self, "size", sizes)
+        else:
+            _check(self.size, "size")
+            _grid(self.size)
 
     @property
     def grid_shape(self) -> tuple[int, ...]:
-        """The shape of the grid of distributions: ``()`` if no parameter is an array."""
+        """The shape of the grid of distributions: ``()`` if no parameter is an array, and
+        ``(len(size),)`` for a list."""
+        if isinstance(self.size, tuple):
+            return (len(self.size),)
         return _grid(self.size)[0]
+
+    def _layout(self) -> tuple[tuple[int, ...], dict[str, NDArray[np.float64]], list[tuple]]:
+        """The grid shape, the array-valued parameters broadcast to it, and the engine spec of
+        each point in C order (one for a single distribution)."""
+        if isinstance(self.size, tuple):
+            return (len(self.size),), {}, [_scalar_spec(d) for d in self.size]
+        shape, grid = _grid(self.size)
+        if shape == ():
+            return shape, grid, [_scalar_spec(self.size)]
+        return shape, grid, _specs(self.size, (shape, grid))[1]
 
     def compute(
         self,
@@ -515,19 +543,19 @@ class Ensemble:
         o = _Options.of(
             greek, mu, normalized, rtol, max_panels, allow_unvalidated, refine_backscatter
         )
-        shape, grid = _grid(self.size)
+        shape, grid, specs = self._layout()
         flat_m = np.ascontiguousarray(m.reshape(-1))
         if shape == ():
-            items = [(_scalar_spec(self.size), flat_m, 1.0)]
+            items = [(specs[0], flat_m, 1.0)]
             raw, params = _single(items, False, wl, derivatives, o)
             return _result(raw, wl.shape, o, wl, m, grid, params)
         if not (isinstance(derivatives, (bool, np.bool_)) and not derivatives):
             raise NotImplementedError(
-                "derivatives of a grid of distributions are not supported; compute each point "
-                "as its own Ensemble"
+                "derivatives of a grid or list of distributions are not supported; compute "
+                "each point as its own Ensemble"
             )
         raw = _scatrs.ensemble_compute_batch(
-            _specs(self.size, (shape, grid))[1],
+            specs,
             flat_m,
             np.ascontiguousarray(wl.reshape(-1)),
             o.order,
@@ -546,12 +574,13 @@ Ensemble.compute.__doc__ = _COMPUTE_DOC.format(
     summary="Averages over the ensemble at each wavelength.",
     derivatives='the distribution\'s (``"median_radius"``, …; ``"mode{j}.<name>"`` and '
     '``"mode{j}.weight"`` for a multimodal one), ``"m_real"`` and ``"m_imag"`` (Re m and Im m '
-    "at each wavelength). Not available for a grid.",
-    per="wavelength (shared by a grid's points)",
-    returns="Every array of shape ``grid + wavelength.shape``. A grid's points share their "
-    "size nodes and each meets its own ``rtol``: being at least as refined as on its own, a "
-    "point's values differ from those of its own ensemble within the error estimates.",
-    raises="\n    NotImplementedError\n        For ``derivatives`` of a grid.",
+    "at each wavelength). Not available for a grid or a list.",
+    per="wavelength (shared by the points of a grid or a list)",
+    returns="Every array of shape ``grid + wavelength.shape`` (``grid`` is "
+    ":attr:`grid_shape`). The points of a grid or a list share their size nodes and each "
+    "meets its own ``rtol``: being at least as refined as on its own, a point's values differ "
+    "from those of its own ensemble within the error estimates.",
+    raises="\n    NotImplementedError\n        For ``derivatives`` of a grid or a list.",
 )
 
 
@@ -565,15 +594,15 @@ class Mixture:
     Parameters
     ----------
     components : sequence of (float, Ensemble)
-        The weights wᵢ ≥ 0 (finite, not all zero) and the ensembles, whose distributions
-        must not be grids.
+        The weights wᵢ ≥ 0 (finite, not all zero) and the ensembles, each of one
+        distribution (not a grid or a list).
 
     Raises
     ------
     TypeError
         If a component is not a (weight, Ensemble) pair, or a weight not a real number.
     ValueError
-        If an ensemble is a grid.
+        If an ensemble is a grid or a list.
     """
 
     components: Sequence[tuple[float, Ensemble]]
@@ -594,8 +623,8 @@ class Mixture:
                 )
             if e.grid_shape != ():
                 raise ValueError(
-                    f"the distribution of component {i} is a grid of shape {e.grid_shape}; "
-                    "a mixture needs scalar parameters"
+                    f"the size of component {i} is a grid or list of shape {e.grid_shape}; "
+                    "a mixture needs one distribution with scalar parameters per component"
                 )
             out.append((_weight(w, f"the weight of component {i}"), e))
         object.__setattr__(self, "components", tuple(out))

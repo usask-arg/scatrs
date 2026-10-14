@@ -325,3 +325,18 @@ distribution.
 one = scatrs.Ensemble(scatrs.Sphere(m), scatrs.LogNormal(radii[5], widths[1])).compute([0.35, 0.55, 0.87, 1.6])
 assert np.all(abs(t.c_ext[5, 1] - one.c_ext) <= 2 * (t.error.c_ext[5, 1] + one.error.c_ext))
 ```
+
+Distributions that are not one family's parameters, such as measured size distributions, go in
+a list instead, of any kinds; they share their size nodes in the same way, and the results have
+one axis for the list.
+
+```{code-cell} python
+measured = [
+    scatrs.Tabulated([0.02, 0.08, 0.2, 0.5], [0.0, 3.0, 1.0, 0.0]),
+    scatrs.Tabulated([0.05, 0.1, 0.3, 0.8], [0.0, 2.0, 1.5, 0.0]),
+    scatrs.LogNormal(0.08, 1.6),
+]
+batch = scatrs.Ensemble(scatrs.Sphere(m), measured).compute([0.35, 0.55, 0.87, 1.6])
+print(batch)
+assert batch.c_ext.shape == (3, 4) and batch.converged.all()
+```

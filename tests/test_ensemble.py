@@ -327,7 +327,7 @@ def test_grid_errors():
         grid.compute(0.5, derivatives=True)
     with pytest.raises(NotImplementedError, match="grid"):
         grid.compute(0.5, derivatives=["width"])
-    with pytest.raises(ValueError, match="a mixture needs scalar parameters"):
+    with pytest.raises(ValueError, match="a mixture needs one distribution"):
         Mixture([(1.0, grid)])
     with pytest.raises(InvalidInputError, match="needs a distribution"):
         Ensemble(Sphere(1.5), LogNormal(np.zeros(0), 1.5)).compute(0.5)
@@ -426,3 +426,45 @@ def test_mixture_weights_are_real_scalars():
         Mixture([("1.0", e)])
     w = Mixture([(np.int64(2), e)]).components[0][0]
     assert type(w) is float and w == 2.0
+
+
+def test_a_list_of_distributions_is_a_batch_of_any_kinds():
+    sizes = [
+        LogNormal(0.1, 1.5),
+        Gamma(0.4, 0.1),
+        Tabulated([0.1, 0.2, 0.3], [0.0, 1.0, 0.0]),
+        Tabulated([0.2, 0.4, 0.6], [0.0, 2.0, 0.0]),
+        MultiModal([(2.0, LogNormal(0.1, 1.5)), (1.0, Monodisperse(0.3))]),
+    ]
+    wl = np.array([0.4, 0.6, 0.8])
+    batch = Ensemble(Sphere(1.45 + 1e-3j), sizes)
+    assert batch.size == tuple(sizes) and batch.grid_shape == (5,)
+    assert batch == Ensemble(Sphere(1.45 + 1e-3j), tuple(sizes))
+    assert hash(batch) == hash(Ensemble(Sphere(1.45 + 1e-3j), tuple(sizes)))
+    r = batch.compute(wl, greek=8, mu=[0.5, -0.5])
+    assert r.c_ext.shape == (5, 3) and r.greek.alpha1.shape == (5, 3, 9)
+    assert r.phase.f11.shape == (5, 3, 2) and r.converged.all()
+    assert r.params == () and dict(r.grid) == {}
+    for i, d in enumerate(sizes):
+        a = compute(d, wl, 1.45 + 1e-3j, greek=8)
+        np.testing.assert_array_less(
+            np.abs(r.c_ext[i] - a.c_ext), 2 * (r.error.c_ext[i] + a.error.c_ext) + 1e-15
+        )
+        np.testing.assert_array_less(
+            np.abs(r.greek.alpha1[i] - a.greek.alpha1),
+            2 * (r.error.greek.alpha1[i] + a.error.greek.alpha1) + 1e-13,
+        )
+
+
+def test_list_errors():
+    with pytest.raises(TypeError, match=r"size\[1\] must be one of"):
+        Ensemble(Sphere(1.5), [LOGNORMAL, "lognormal"])
+    with pytest.raises(ValueError, match=r"size\[0\] is a grid of shape \(2,\)"):
+        Ensemble(Sphere(1.5), [LogNormal([0.1, 0.2], 1.5)])
+    batch = Ensemble(Sphere(1.5), [LOGNORMAL, Gamma(0.4, 0.1)])
+    with pytest.raises(NotImplementedError, match="list"):
+        batch.compute(0.5, derivatives=True)
+    with pytest.raises(ValueError, match="a mixture needs one distribution"):
+        Mixture([(1.0, batch)])
+    with pytest.raises(InvalidInputError, match="needs a distribution"):
+        Ensemble(Sphere(1.5), []).compute(0.5)

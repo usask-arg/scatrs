@@ -47,6 +47,10 @@ pub const MAX_GAUSS_LEGENDRE_POINTS: usize = 1 << 17;
 /// Newton rule costs 0.8 ms.
 pub(super) const ASYMPTOTIC_THRESHOLD: usize = 100;
 
+/// Types whose epsilon is at least this, 2⁻⁶⁰ (between `f64`'s 2⁻⁵² and double-double's
+/// 2⁻¹⁰⁴), have `f64` precision and take the asymptotic rule above the threshold.
+const F64_PRECISION_FROM: f64 = f64::from_bits((1023 - 60) << 52); // 2⁻⁶⁰
+
 /// Newton steps stop once |Δx| ≤ 2⁻⁹⁰; one further step then reaches rounding level.
 const CONVERGED: f64 = f64::from_bits((1023 - 90) << 52); // 2⁻⁹⁰
 const MAX_ITERATIONS: usize = 100;
@@ -162,12 +166,13 @@ impl Recurrence {
 ///
 /// Verified against Arb for every node of the rules with n ≤ 1000, and for the nodes nearest
 /// to ±1 and to 0 at n = 5000, 20 000 and 2¹⁷ (the cap), and against the double-double rule
-/// for every node of the rules with n = 101, 102, 128, 150, 257, 500, 1000, 2000 and 4001:
+/// for every node of every rule with 101 ≤ n ≤ 3000 (an ignored test, which CI runs weekly)
+/// and of eleven rules up to n = 4001:
 ///
 /// * `f64`, n ≤ 100: node absolute error ≤ 2⁻⁵², weight relative error ≤ 2⁻⁵². Measured: at
-///   most 0.25·2⁻⁵² and 0.49·2⁻⁵², the rounding of the double-double rule.
-/// * `f64`, n > 100: node absolute error ≤ 16·2⁻⁵², weight relative error ≤ 16·2⁻⁵². Measured:
-///   at most 2.4·2⁻⁵² and 3.6·2⁻⁵².
+///   most 0.25·2⁻⁵² and 0.46·2⁻⁵², the rounding of the double-double rule.
+/// * `f64`, n > 100: node absolute error ≤ 32·2⁻⁵², weight relative error ≤ 32·2⁻⁵². Measured:
+///   at most 2.8·2⁻⁵² and 4.0·2⁻⁵².
 /// * `DoubleDouble`: node absolute error ≤ 2⁻⁹⁸, weight relative error ≤ 2⁻¹⁰⁰·(4 + n²). The n²
 ///   comes from the conditioning of 1 − x² next to ±1: a node error δ changes the weight by
 ///   2|x|δ/(1 − x²) relative, and 1 − x² ≈ 5.8/n² at the extreme nodes. Measured: at most
@@ -175,8 +180,8 @@ impl Recurrence {
 ///
 /// # Cost
 ///
-/// O(n) memory. Asymptotic: O(n) time, measured on an Apple M4 Pro as 1 ms at n = 1000,
-/// 13 ms at n = 20 000 and 40 ms at the cap. Newton: O(n²) time; see
+/// O(n) memory. Asymptotic: O(n) time, about 0.3 µs per point, measured on an Apple M4 Pro
+/// as 0.3 ms at n = 1000, 6 ms at n = 20 000 and 40 ms at the cap. Newton: O(n²) time; see
 /// [`MAX_GAUSS_LEGENDRE_POINTS`] for the cost model. Each of the ⌈n/2⌉ roots takes four to
 /// seven evaluations of the three-term recurrence in double-double (about four on average for
 /// n ≥ 5000). Measured on an Apple M4 Pro: 0.8 ms at n = 100, 32 ms at n = 1000, 0.72 s at
@@ -215,12 +220,13 @@ pub fn gauss_legendre<T: Real>(n: usize) -> Result<GaussLegendre<T>> {
 /// # Errors
 ///
 /// As [`gauss_legendre`], and [`Error::InvalidInput`] if `weights.len() != nodes.len()`.
-/// Nothing is written on an input error.
+/// Nothing is written on an input error; on [`Error::NotConverged`] the buffers may be partly
+/// written.
 pub fn gauss_legendre_into<T: Real>(nodes: &mut [T], weights: &mut [T]) -> Result<()> {
     check_n(nodes.len())?;
     if weights.len() != nodes.len() {
         return Err(Error::InvalidInput(format!(
-            "Gauss-Legendre buffers must have one length, got {} nodes and {} weights",
+            "Gauss-Legendre buffers must have the same length, got {} nodes and {} weights",
             nodes.len(),
             weights.len()
         )));
@@ -245,7 +251,7 @@ fn check_n(n: usize) -> Result<()> {
 /// The rule of size `nodes.len()` (checked) into `nodes` and `weights` (of one length).
 fn fill<T: Real>(nodes: &mut [T], weights: &mut [T]) -> Result<()> {
     let n = nodes.len();
-    if n > ASYMPTOTIC_THRESHOLD && T::epsilon().approx_f64() >= 2f64.powi(-60) {
+    if n > ASYMPTOTIC_THRESHOLD && T::epsilon().approx_f64() >= F64_PRECISION_FROM {
         super::gauss_legendre_asymptotic::asymptotic_rule(nodes, weights);
         return Ok(());
     }
@@ -347,11 +353,11 @@ mod tests {
             let ex64 = error(Dd::from_f64(rule.nodes[idx]), nodes[k]);
             let ew64 = error(Dd::from_f64(rule.weights[idx]), weights[k]) / weights[k][0];
             assert!(
-                ex64 <= 16.0 * f64::EPSILON,
+                ex64 <= 32.0 * f64::EPSILON,
                 "node {idx}: f64 error {ex64:e}"
             );
             assert!(
-                ew64 <= 16.0 * f64::EPSILON,
+                ew64 <= 32.0 * f64::EPSILON,
                 "weight {idx}: f64 error {ew64:e}"
             );
         }

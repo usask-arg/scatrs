@@ -34,11 +34,11 @@ narrative documentation) was not prototyped and is written from the requirements
 
 | What | Measured | Declared |
 |---|---|---|
-| Asymptotic Gauss–Legendre, n ≥ 101 (DD and Arb, up to 2¹⁷) | node 2.4·2⁻⁵², weight 3.6·2⁻⁵² | 16·2⁻⁵² |
-| Asymptotic rule time (Apple M4 Pro) | 1 ms at n = 1000, 13 ms at 20 000, 40 ms at 2¹⁷ | — |
+| Asymptotic Gauss–Legendre, n ≥ 101 (DD and Arb, up to 2¹⁷) | node 2.8·2⁻⁵², weight 4.0·2⁻⁵² (every n ≤ 3000; review) | 32·2⁻⁵² (16 before the review) |
+| Asymptotic rule time (Apple M4 Pro) | 0.3 ms at n = 1000, 6 ms at 20 000, 40 ms at 2¹⁷ | — |
 | Phase matrix, C | 7.4 (map), 0.59 (Arb) | 32 |
 | Phase-matrix derivatives, C | 22 (map) | 128 |
-| Greek coefficients, C | 1.7 (map), 0.72 (Arb), 0.22 (x = 2·10⁴) | 8 |
+| Greek coefficients, C | 1.7 (map), 0.61 (Arb, after the references were regenerated at full precision), 0.22 (x = 2·10⁴) | 8 |
 | Greek derivatives, C | 2.8 (map) | 16 |
 | `DoubleDouble` against Arb (units of 2⁻¹⁰⁴) | phase 0.38, Greek 0.35 | 16× the constants |
 | Greek map (test profile, 12 cores) | 12 s | — |
@@ -4681,7 +4681,7 @@ Expected: all pass (the shared invalid-input and element-naming tests now also c
 
 1. `docs/theory/mie.md`, new sections after "Closed-form derivatives":
    - **The phase matrix.** F₁₁ = (|S₁|² + |S₂|²)/2, F₁₂ = (|S₂|² − |S₁|²)/2, F₃₃ = Re(S₂S₁*), F₃₄ = Im(S₂S₁*), F₂₂ = F₁₁, F₄₄ = F₃₃ (Bohren & Huffman §4.4); normalized by 4/(x²Q_sca) (½∫F₁₁dμ = 1) or 4/x² (per unit geometric cross section, what sums over sizes); derivatives from the amplitude derivatives with ∂/∂(Im m) = i·d/dm, and for the normalized form the derivative of Q_sca.
-   - **Greek coefficients.** The expansion (as in the `GreekCoefficients` rustdoc), with `wigner_d`'s convention (d²₀₂(θ) = (√6/4) sin²θ); c_l = (2l + 1)/2·∫F d_l dμ; each element is a polynomial of degree 2N in μ, so n_q = N + ⌈(L + 1)/2⌉ Gauss–Legendre nodes make the projection exact; orders above 2N vanish (padded with exact zeros); normalization by the projected α₁⁰ (exactly 1), unnormalized = that × Q_sca; streaming (O(n_q·L) time, O(L) memory; storing d at every node would need about 25 GB at x = 10⁴); linearity gives the Jacobians, and `GreekProjector` projects sums over many spheres at once (phase 2).
+   - **Greek coefficients.** The expansion (as in the `GreekCoefficients` rustdoc), with `wigner_d`'s convention (d²₀₂(θ) = (√6/4) sin²θ); c_l = (2l + 1)/2·∫F d_l dμ; each element is a polynomial of degree 2N in μ, so n_q = N + ⌈(L + 1)/2⌉ Gauss–Legendre nodes make the projection exact; orders above 2N vanish (padded with exact zeros); normalization by the projected α₁⁰ (exactly 1), unnormalized = that × Q_sca; streaming (O(n_q·L) time, O(L) memory; storing d at every node would need about 13 GB at x = 10⁴ (25 GB before the review corrected it)); linearity gives the Jacobians, and `GreekProjector` projects sums over many spheres at once (phase 2).
    - **Sign conventions** table: B&H elements → this expansion; the Rayleigh limit α₁ = (1, 0, ½), α₂² = 3, α₄¹ = 3/2, β₁² = −√6/2 (pinned by `rayleigh_limit_pins_the_sign_conventions`), F₁₂ < 0 at 90° so the degree of linear polarization is −F₁₂/F₁₁. Do not claim other codes' conventions (sasktran2's comparison is deferred).
    - **Accuracy model additions** in "The accuracy model": priors κ (phase matrix), κ·max(1, |m|/|m − 1|) (its derivatives), κ + ((L + 1)² + x²)/8 and κ·max(1, |m|/|m − 1|) + ((L + 1)² + x²)/8 (Greek), with the node-rounding explanation of "Measured results" above (C reached 85 and 100 without the term).
    - **Cost**: Greek all orders 0.09 s at x = 10³ and 7.6 s at x = 10⁴; asymptotic Gauss–Legendre makes the rule negligible.

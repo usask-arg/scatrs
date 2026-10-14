@@ -89,17 +89,21 @@ CONTRACTS = [
     ("Gauss-Legendre f64 timing at the cap", "40ms", [GL_RS, SPECIAL_PY, THEORY]),
     (
         "Gauss-Legendre asymptotic bound",
-        "162^-52",
+        "322^-52",
         [GL_RS, SPECIAL_PY, THEORY, LIMITATIONS, QUADRATURE],
     ),
-    ("Gauss-Legendre asymptotic measured", "2.42^-52", [GL_RS, THEORY]),
-    ("Gauss-Legendre asymptotic measured", "3.62^-52", [GL_RS, THEORY]),
-    ("Gauss-Legendre asymptotic measured", "2.4and3.6unitsof2^-52", [SPECIAL_PY, LIMITATIONS]),
+    ("Gauss-Legendre asymptotic measured", "2.82^-52", [GL_RS, THEORY]),
+    ("Gauss-Legendre asymptotic measured", "4.02^-52", [GL_RS, THEORY]),
+    (
+        "Gauss-Legendre asymptotic measured",
+        "2.8and4.0unitsof2^-52",
+        [SPECIAL_PY, LIMITATIONS, "CHANGELOG.md"],
+    ),
     ("Wigner cost", "2.6ns", [WIGNER_RS, THEORY]),
     ("Gauss-Legendre f64 node contract", "nodeabsoluteerror≤2^-52", [GL_RS]),
     ("Gauss-Legendre f64 weight contract", "weightrelativeerror≤2^-52", [GL_RS]),
     ("Gauss-Legendre f64 contract", "|f64,n≤100|≤2^-52|≤2^-52|", [THEORY]),
-    ("Gauss-Legendre asymptotic contract", "|f64,n>100|≤162^-52|≤162^-52|", [THEORY]),
+    ("Gauss-Legendre asymptotic contract", "|f64,n>100|≤322^-52|≤322^-52|", [THEORY]),
     ("Gauss-Legendre double-double weight bound", "2^-100(4+n^2)", [GL_RS, THEORY]),
     ("Python Wigner output limit", "2^28", [SPECIAL_PY, LIMITATIONS]),
     ("Double-double full precision", "2^-969", [DD_RS, SCALARS]),
@@ -210,8 +214,8 @@ def _declared_mie_constants() -> dict[str, float]:
     body = source[source.index("pub fn constant(") :]
     body = body[: body.index("\n    }\n")]
     constants = {}
-    variant = r"MieOutput::\w+(?:\s*\{\s*\.\.\s*\})?"
-    for arm in re.finditer(rf"((?:\s*\|?\s*{variant})+)\s*=>\s*([\d.]+)", body):
+    arm_variant = r"MieOutput::\w+(?:\s*\{\s*\.\.\s*\})?"
+    for arm in re.finditer(rf"((?:\s*\|?\s*{arm_variant})+)\s*=>\s*([\d.]+)", body):
         for variant in re.findall(r"MieOutput::(\w+)", arm.group(1)):
             constants[variant] = float(arm.group(2))
     return constants

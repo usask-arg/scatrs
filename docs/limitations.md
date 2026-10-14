@@ -41,7 +41,7 @@ it, in `docs/plans/phase-0-followups.md` and `docs/plans/phase-1b-followups.md`.
 ## Gauss–Legendre quadrature
 
 - **Accuracy above 100 points.** `f64` rules above 100 points come from asymptotic expansions,
-  within $16\cdot2^{-52}$ (measured: 2.4 and 3.6 units of $2^{-52}$ for nodes and weights)
+  within $32\cdot2^{-52}$ (measured: 2.8 and 4.0 units of $2^{-52}$ for nodes and weights)
   rather than the half ulp of the double-double rule rounded once.
 - **Double-double cost.** Double-double rules use the $O(n^2)$ Newton method at every $n$. On
   an Apple M4 Pro that takes about 11 s at $n$ = 20 000, and an extrapolated 8 minutes at the

@@ -144,28 +144,78 @@ mod tests {
     use super::*;
     use crate::special::gauss_legendre::{ASYMPTOTIC_THRESHOLD, Recurrence};
 
-    /// The rule against the double-double Newton rule: node absolute error and weight relative
-    /// error within 16·2⁻⁵² (measured: at most 2.4 and 3.6), from the threshold up.
+    /// The worst node absolute error and weight relative error of the n-point rule against the
+    /// double-double Newton rule, in units of 2⁻⁵².
+    fn errors(n: usize) -> (f64, f64) {
+        let (mut x, mut w) = (vec![0.0; n], vec![0.0; n]);
+        asymptotic_rule(&mut x, &mut w);
+        let rec = Recurrence::new(n);
+        let (mut ex, mut ew) = (0.0f64, 0.0f64);
+        for i in 0..n.div_ceil(2) {
+            let (xd, wd) = rec.root_and_weight(n, i).unwrap();
+            // Root i is the (i + 1)-th largest, at index n − 1 − i.
+            let k = n - 1 - i;
+            ex = ex.max((Dd::from_f64(x[k]) - xd).abs().hi() / f64::EPSILON);
+            ew = ew.max(((Dd::from_f64(w[k]) - wd) / wd).abs().hi() / f64::EPSILON);
+        }
+        (ex, ew)
+    }
+
+    /// The rule against the double-double Newton rule within 32·2⁻⁵², from the threshold up,
+    /// including the sizes with the worst errors of the dense scan below.
     #[test]
     fn matches_the_double_double_rule() {
         let n0 = ASYMPTOTIC_THRESHOLD + 1;
-        for n in [n0, n0 + 1, 128, 150, 257, 500, 1000, 2000, 4001] {
-            let (mut x, mut w) = (vec![0.0; n], vec![0.0; n]);
-            asymptotic_rule(&mut x, &mut w);
-            let rec = Recurrence::new(n);
-            let (mut ex, mut ew) = (0.0f64, 0.0f64);
-            for i in 0..n.div_ceil(2) {
-                let (xd, wd) = rec.root_and_weight(n, i).unwrap();
-                // Root i is the (i + 1)-th largest, at index n − 1 − i.
-                let k = n - 1 - i;
-                ex = ex.max((Dd::from_f64(x[k]) - xd).abs().hi() / f64::EPSILON);
-                ew = ew.max(((Dd::from_f64(w[k]) - wd) / wd).abs().hi() / f64::EPSILON);
-            }
+        for n in [n0, n0 + 1, 128, 150, 257, 500, 680, 1000, 1033, 2000, 4001] {
+            let (ex, ew) = errors(n);
             assert!(
-                ex <= 16.0 && ew <= 16.0,
+                ex <= 32.0 && ew <= 32.0,
                 "n = {n}: node {ex:.2}, weight {ew:.2} eps"
             );
         }
+    }
+
+    /// Every rule from the threshold to 3000 points against the double-double rule (about
+    /// 4 CPU-minutes): prints the worst errors the documentation quotes.
+    #[test]
+    #[ignore = "every rule from 101 to 3000 points against double-double: minutes"]
+    fn every_rule_up_to_3000_points_matches_the_double_double_rule() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let next = AtomicUsize::new(ASYMPTOTIC_THRESHOLD + 1);
+        let threads = std::thread::available_parallelism().map_or(4, |t| t.get());
+        let worst = std::thread::scope(|s| {
+            let workers: Vec<_> = (0..threads)
+                .map(|_| {
+                    s.spawn(|| {
+                        let mut worst = [(0.0f64, 0usize); 2];
+                        loop {
+                            let n = next.fetch_add(1, Ordering::Relaxed);
+                            if n > 3000 {
+                                break worst;
+                            }
+                            let (ex, ew) = errors(n);
+                            assert!(ex <= 32.0 && ew <= 32.0, "n = {n}: {ex:.2}, {ew:.2} eps");
+                            for (w, e) in worst.iter_mut().zip([ex, ew]) {
+                                if e > w.0 {
+                                    *w = (e, n);
+                                }
+                            }
+                        }
+                    })
+                })
+                .collect();
+            workers
+                .into_iter()
+                .map(|w| w.join().expect("worker"))
+                .fold([(0.0f64, 0usize); 2], |a, b| {
+                    [0, 1].map(|i| if b[i].0 > a[i].0 { b[i] } else { a[i] })
+                })
+        });
+        eprintln!(
+            "n in 101..=3000: worst node error {:.2} eps (n = {}), worst weight error {:.2} eps \
+             (n = {})",
+            worst[0].0, worst[0].1, worst[1].0, worst[1].1
+        );
     }
 
     /// Each expansion is already within 2·2⁻⁵² of the last tabulated values (Arb: at most

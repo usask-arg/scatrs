@@ -382,4 +382,4 @@ on an Apple M4 (not committed):
 | `tanh`, $\lvert x\rvert > 0.55$ | about 2× |
 | `sqrt` | about 4.4× (plain `f64` `sqrt` vectorises across elements) |
 
-These figures will be replaced by benchmarks in phase 1b.
+These figures will be replaced by benchmarks in a later phase.

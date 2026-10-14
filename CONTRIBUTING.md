@@ -68,7 +68,7 @@ Wall-clock benchmarks of the Mie kernel: `cargo bench -p scatrs --bench mie`.
 The slow `#[ignore]` tests take minutes, so CI runs them weekly rather than on every change:
 
 ```bash
-cargo test -p scatrs --release --test gauss_legendre --test mie_greek_accuracy_map -- --ignored
+cargo test -p scatrs --release --lib --test gauss_legendre --test mie_greek_accuracy_map -- --ignored
 ```
 
 ## Continuous integration

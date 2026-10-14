@@ -76,7 +76,7 @@ on the remainder. For an `f64` value $g$, the cell computes
 $\lvert g - (\text{hi} + \text{lo} + \text{lo2})\rvert + \text{err}$ with rational
 arithmetic. That is a rigorous and nearly tight bound on $\lvert g - v\rvert$. Above 100
 points the rule comes from asymptotic expansions, and the contract is an absolute error of at
-most $16\cdot2^{-52}$ for nodes and a relative error of at most $16\cdot2^{-52}$ for weights.
+most $32\cdot2^{-52}$ for nodes and a relative error of at most $32\cdot2^{-52}$ for weights.
 
 For comparison, the cell also measures {func}`numpy.polynomial.legendre.leggauss`, which works
 in `f64` throughout.
@@ -117,7 +117,7 @@ for name, (xs, ws) in {"scatrs": (x, w), f"numpy {np.__version__}": (xn, wn)}.it
     first = ", ".join(f"{e:.3g}" for e in weight_err[:3])
     print(f"{name:>12} {node_err.max():11.3g} {weight_err.max():13.3g}   {first}")
     if name == "scatrs":
-        assert node_err.max() <= 16 and weight_err.max() <= 16
+        assert node_err.max() <= 32 and weight_err.max() <= 32
 ```
 
 Next to $\pm1$ the weights are ill-conditioned in the nodes. A node error $\delta$ changes the

@@ -55,8 +55,8 @@ thread pools, the instruction-count gate, fuzzing, the 1a follow-ups (Jacobian c
 - **Quadrature.** n_q = N + ⌈(L + 1)/2⌉ nodes make every integrand (degree ≤ 2N + L) exact. The
   projector is built for (L, n_q) and holds the rule; `project` takes F tables at its nodes.
 - **Streaming.** For each node the d-function recurrences in l run once and accumulate into the
-  coefficient arrays: O(n_q·L) time, O(L) memory. Storing d at all nodes would need about 25 GB at
-  x = 10⁴.
+  coefficient arrays: O(n_q·L) time, O(L) memory. Storing d at all nodes would need about 13 GB at
+  x = 10⁴ (four functions at 2·10⁴ orders and 2·10⁴ nodes).
 - **Linearity.** Derivative tables project with the same call, giving the Greek Jacobians.
 - **Sign conventions.** A table in the theory page relates Bohren & Huffman's elements, Hovenier's
   and sasktran2's β signs; a test pins it.
@@ -108,9 +108,11 @@ Recorded 2026-10-13, after prototyping (the plan is
 - **Gauss–Legendre.** Bogaert's expansions as in FastGaussQuadrature.jl (MIT), keeping every
   term, with Arb-computed Bessel tables and the double-double sine and cosine (the rule stays
   platform-independent). Threshold 100 points (`ASYMPTOTIC_THRESHOLD`), for `f64` precision
-  only. Declared: node absolute and weight relative error ≤ 16·2⁻⁵² (measured 2.4 and 3.6). No
+  only. Declared: node absolute and weight relative error ≤ 32·2⁻⁵² (measured 2.8 and 4.0 over
+  every n from 101 to 3000; 16 at first, from a sample of n, broke the 4× margin). No
   separate interior and boundary regions were needed. The caller-buffer variant is
-  `gauss_legendre_into`.
+  `gauss_legendre_into`; no accessors were added (the fields stay public, and
+  `#[non_exhaustive]` only stops construction outside the crate).
 - **Orders above 2N.** `greek` returns exact zeros above 2N instead of `InvalidInput`: a batch
   of spheres in Python shares one L, and the zeros are exact, not padding of unknown values.
   `MAX_GREEK_ORDER` = 2²¹ bounds L.

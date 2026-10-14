@@ -31,7 +31,7 @@ All notable changes are documented here. The format follows
 
 ### Changed
 - Gauss–Legendre rules of `f64` precision above 100 points come from the asymptotic
-  expansions, within 32·2⁻⁵² (measured 2.8 and 4.1 units of 2⁻⁵² for nodes and weights),
+  expansions, within 32·2⁻⁵² (measured 2.8 and 4.0 units of 2⁻⁵² for nodes and weights),
   instead of the double-double Newton rule rounded to within half an ulp. The Newton rule
   remains up to 100 points and for double-double precision.
 - `GaussLegendre` is `#[non_exhaustive]`: code outside the crate can no longer build one with a

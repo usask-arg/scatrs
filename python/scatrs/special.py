@@ -59,10 +59,10 @@ def gauss_legendre(n: SupportsIndex) -> tuple[NDArray[np.float64], NDArray[np.fl
     For ``n <= 100`` the rule is computed in double-double arithmetic and rounded once, so
     nodes and weights are accurate to about half an ulp. Above, it comes from Bogaert's (2014)
     asymptotic expansions, with node absolute errors and weight relative errors of at most
-    ``16 * 2**-52`` (measured: 2.4 and 3.6 units of ``2**-52``). Either way the weights next to
+    ``32 * 2**-52`` (measured: 2.8 and 4.0 units of ``2**-52``). Either way the weights next to
     +-1 are as accurate as the others, and the rule is exactly symmetric.
 
-    The cost is ``O(n)``: about 1 ms at n = 1000 and 40 ms at the cap on an Apple M4 Pro. The
+    The cost is ``O(n)``: about 0.3 ms at n = 1000 and 40 ms at the cap on an Apple M4 Pro. The
     call releases the GIL, so other Python threads keep running.
     """
     return _scatrs.gauss_legendre(_args.size(n, "n"))

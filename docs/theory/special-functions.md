@@ -90,15 +90,16 @@ against Arb.
 The tests check the bounds below against Arb for every node of the full reference rules
 ($n$ = 1, 2, 3, 4, 5, 8, 16, 33, 64, 100, 128, 257, 500 and 1000). They also check them for
 the 8 nodes nearest each of $\pm1$ and the 4 nearest 0 at $n$ = 5000, 20 000 and $2^{17}$, the
-cap, and the asymptotic rules against the double-double rules node by node for nine values of
-$n$ from 101 to 4001. The double-double rule at $n$ = 20 000 takes about 11 s, so its check is
-an ignored test, which CI runs weekly. At the cap the test computes only the individual
+cap, and the asymptotic rules against the double-double rules node by node for eleven values
+of $n$ from 101 to 4001, and, in an ignored test, for every $n$ from 101 to 3000. The
+double-double rule at $n$ = 20 000 takes about 11 s, so its check is an ignored test too; CI
+runs the ignored tests weekly. At the cap the test computes only the individual
 double-double roots.
 
 | Type | Nodes: absolute error | Weights: relative error | Measured worst |
 |---|---|---|---|
-| `f64`, $n \le 100$ | $\le 2^{-52}$ | $\le 2^{-52}$ | $0.25\cdot2^{-52}$ for nodes and $0.49\cdot2^{-52}$ for weights: the rounding of the double-double rule |
-| `f64`, $n > 100$ | $\le 16\cdot2^{-52}$ | $\le 16\cdot2^{-52}$ | $2.4\cdot2^{-52}$ for nodes and $3.6\cdot2^{-52}$ for weights |
+| `f64`, $n \le 100$ | $\le 2^{-52}$ | $\le 2^{-52}$ | $0.25\cdot2^{-52}$ for nodes and $0.46\cdot2^{-52}$ for weights: the rounding of the double-double rule |
+| `f64`, $n > 100$ | $\le 32\cdot2^{-52}$ | $\le 32\cdot2^{-52}$ | $2.8\cdot2^{-52}$ for nodes ($n$ = 2958) and $4.0\cdot2^{-52}$ for weights ($n$ = 1033) |
 | `DoubleDouble` | $\le 2^{-98}$ | $\le 2^{-100}(4 + n^2)$ | $0.51\cdot2^{-106}$ for nodes; about $2^{-85}$, $2^{-82}$ and $2^{-80}$ for weights at $n$ = 5000, 20 000 and $2^{17}$ |
 
 The $n^2$ in the double-double weight bound is the same conditioning of $1 - x^2$, now at
@@ -108,7 +109,7 @@ The tests also check that each method finds the right root, whatever its accurac
 inequality, root $j$ lies in its own interval of $\theta$, $(j - \tfrac12)\pi/(n + \tfrac12)
 < \theta_j < j\pi/(n + \tfrac12)$, and these intervals are disjoint. The tests check that
 every root of every `f64` rule with $n \le 300$ lies inside its interval, and so does every
-root of a dozen rules up to the cap; for the Newton method, so do the roots nearest $\pm1$ and
+root of eleven rules up to the cap; for the Newton method, so do the roots nearest $\pm1$ and
 0 for over a hundred values of $n$ up to the cap. An ignored test extends the first check to
 $n \le 3000$. None of these checks has found a rule that fails.
 
@@ -123,7 +124,7 @@ These timings were measured during development; the repository has no benchmarks
 
 | $n$ | 100 | 1000 | 5000 | 20 000 | $2^{17}$ (cap) |
 |---|---|---|---|---|---|
-| `f64`, measured | 0.8 ms | 1 ms | 5 ms | 13 ms | 40 ms |
+| `f64`, measured | 0.8 ms | 0.3 ms | 1.5 ms | 6 ms | 40 ms |
 | `DoubleDouble`, measured | 0.8 ms | 32 ms | 0.72 s | 11 s | about 8 min (extrapolated) |
 
 - **Without FMA.** x86_64 builds without the `fma` target feature take roughly ten times

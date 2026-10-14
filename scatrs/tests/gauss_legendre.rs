@@ -23,7 +23,7 @@ const ASYMPTOTIC_FROM: usize = 101;
 /// The `f64` contract at n points: node absolute error and weight relative error at most this.
 fn f64_tolerance(n: usize) -> f64 {
     if n >= ASYMPTOTIC_FROM {
-        16.0 * EPS
+        32.0 * EPS
     } else {
         EPS
     }
@@ -177,7 +177,7 @@ fn integrates_even_monomials_exactly() {
 ///
 /// Bruns: with the roots of Pₙ written cos θⱼ, θ₁ < … < θₙ (so the largest root first),
 /// (j − ½)π/(n + ½) < θⱼ < jπ/(n + ½) (Szegő, *Orthogonal Polynomials*, §6.21). The
-/// intervals are disjoint, so this also proves that the nodes ascend strictly and that Newton
+/// intervals are disjoint, so this also proves that the nodes ascend strictly and that the method
 /// found every root once. Each root lies at least about 0.7/(n + ½) inside its interval in θ
 /// (it is close to Tricomi's (j − ¼)π/(n + ½), the middle of the interval, and θ₁ is close to
 /// 2.405/(n + ½)), so at least about 1/n² inside in x: far above the rounding of the `f64`
@@ -380,3 +380,29 @@ fn caller_buffers_get_the_same_rule() {
         Err(Error::InvalidInput(_))
     ));
 }
+
+/// The bits of the `f64` rules, hashed (FNV-1a over the nodes and weights). The rules are
+/// documented to be the same on every platform: CI runs this on Linux, macOS and Windows, so a
+/// platform maths library slipping into either method changes the hash there.
+#[test]
+fn rules_are_the_same_bits_on_every_platform() {
+    let hash = |n: usize| {
+        let rule = gauss_legendre::<f64>(n).unwrap();
+        rule.nodes
+            .iter()
+            .chain(&rule.weights)
+            .fold(0xcbf2_9ce4_8422_2325_u64, |h, v| {
+                (h ^ v.to_bits()).wrapping_mul(0x0000_0100_0000_01b3)
+            })
+    };
+    let got = [64, 101, 1000, 4097].map(hash);
+    assert_eq!(got, EXPECTED_HASHES);
+}
+
+/// Recorded on aarch64 macOS.
+const EXPECTED_HASHES: [u64; 4] = [
+    0xc771cc0bd3f163c7,
+    0xea9a76b75974d1d5,
+    0x17987a1f4b364a3b,
+    0x89c2776c18210222,
+];

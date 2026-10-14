@@ -1,10 +1,11 @@
-//! Ensembles of spheres: size distributions, adaptive size integration and external
+//! Ensembles of particles: size distributions, adaptive size integration and external
 //! mixtures.
 //!
 //! [`compute`] averages the optical properties of spheres over a [`SizeDistribution`] at each
-//! wavelength; [`compute_mixture`] averages over several [`Component`]s, and [`compute_batch`]
-//! over each of many distributions of one material (an optics database), sharing their Mie
-//! solutions. The size integral is adaptive (Gauss–Kronrod panels in ln r, refined until the
+//! wavelength, and [`compute_with_particle`] those of any [`Particle`] (a layered sphere's size
+//! is its outer radius, with each interface at a fixed fraction of it); [`compute_mixture`]
+//! averages over several [`Component`]s, and [`compute_batch`] over each of many distributions
+//! of one material (an optics database), sharing their solutions. The size integral is adaptive (Gauss–Kronrod panels in ln r, refined until the
 //! cross sections and g meet `rtol`; the distribution's moments and normalization are
 //! integrated separately), and every output comes with an error estimate and, on request,
 //! derivatives with respect to the distribution parameters, the refractive indices and the
@@ -40,7 +41,8 @@ pub use distribution::SizeDistribution;
 use crate::mie::{GreekCoefficients, MAX_GREEK_ORDER, Normalization};
 use crate::{Error, Result};
 
-/// The particles of a component, given at each wavelength.
+/// The particles of a component, given at each wavelength. A size distribution describes the
+/// radius the particle defines: the radius of a sphere, the outer radius of a layered sphere.
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub enum Particle {
@@ -49,12 +51,46 @@ pub enum Particle {
         /// The refractive index at each wavelength.
         refractive_index: Vec<Complex<f64>>,
     },
+    /// Layered spheres: a core and concentric shells ([`crate::layered`]), with the outer radius
+    /// of each layer but the last a fixed fraction of the particle's.
+    LayeredSphere {
+        /// The outer radius of layers 0, …, L − 2 (the core first) as fractions of the
+        /// particle's radius, nondecreasing in (0, 1]: L − 1 values.
+        radius_fractions: Vec<f64>,
+        /// The refractive index of each layer (the core first) at each wavelength:
+        /// `refractive_index[l][i]` is layer l's at wavelength i.
+        refractive_index: Vec<Vec<Complex<f64>>>,
+    },
 }
 
 impl Particle {
     /// Homogeneous spheres of refractive index `refractive_index[i]` at wavelength i.
     pub fn sphere(refractive_index: Vec<Complex<f64>>) -> Self {
         Particle::Sphere { refractive_index }
+    }
+
+    /// Layered spheres of L layers: layer l's outer radius is `radius_fractions[l]` times the
+    /// particle's (l < L − 1), and its refractive index `refractive_index[l][i]` at wavelength
+    /// i.
+    ///
+    /// ```
+    /// use num_complex::Complex;
+    /// use scatrs::ensemble::Particle;
+    ///
+    /// // Black carbon (core radius 0.6 of the particle's) coated in sulfate, at one wavelength.
+    /// let coated = Particle::layered_sphere(
+    ///     vec![0.6],
+    ///     vec![vec![Complex::new(1.95, 0.79)], vec![Complex::new(1.43, 1e-8)]],
+    /// );
+    /// ```
+    pub fn layered_sphere(
+        radius_fractions: Vec<f64>,
+        refractive_index: Vec<Vec<Complex<f64>>>,
+    ) -> Self {
+        Particle::LayeredSphere {
+            radius_fractions,
+            refractive_index,
+        }
     }
 }
 
@@ -123,6 +159,14 @@ pub enum ParamKind {
     RefrReal,
     /// The imaginary part of the component's refractive index (at each wavelength).
     RefrImag,
+    /// The real part of layer l's refractive index (at each wavelength) of a layered sphere.
+    LayerRefrReal(usize),
+    /// The imaginary part of layer l's refractive index (at each wavelength) of a layered
+    /// sphere.
+    LayerRefrImag(usize),
+    /// The radius fraction of layer l's outer surface of a layered sphere (l < L − 1), at a
+    /// fixed outer radius.
+    RadiusFraction(usize),
     /// The weight of a mixture component (`mode` = `None`) or of a mode of a multimodal
     /// distribution.
     Weight,
@@ -150,14 +194,18 @@ impl EnsembleParam {
         }
     }
 
-    /// Its name: `median_radius`, `m_real`, `m_imag`, `weight`, …, prefixed by `mode{j}.`
-    /// for a mode and, with `mixture`, by `c{i}.` for the component.
+    /// Its name: `median_radius`, `m_real`, `m_imag`, `layer{l}.m_real`, `layer{l}.m_imag`,
+    /// `layer{l}.radius_fraction`, `weight`, …, prefixed by `mode{j}.` for a mode and, with
+    /// `mixture`, by `c{i}.` for the component.
     pub fn name(&self, mixture: bool) -> String {
         let base = match self.kind {
-            ParamKind::Distribution(name) => name,
-            ParamKind::RefrReal => "m_real",
-            ParamKind::RefrImag => "m_imag",
-            ParamKind::Weight => "weight",
+            ParamKind::Distribution(name) => name.to_owned(),
+            ParamKind::RefrReal => "m_real".to_owned(),
+            ParamKind::RefrImag => "m_imag".to_owned(),
+            ParamKind::LayerRefrReal(l) => format!("layer{l}.m_real"),
+            ParamKind::LayerRefrImag(l) => format!("layer{l}.m_imag"),
+            ParamKind::RadiusFraction(l) => format!("layer{l}.radius_fraction"),
+            ParamKind::Weight => "weight".to_owned(),
         };
         let mut out = String::new();
         if mixture {
@@ -166,7 +214,7 @@ impl EnsembleParam {
         if let Some(j) = self.mode {
             out += &format!("mode{j}.");
         }
-        out + base
+        out + &base
     }
 }
 
@@ -204,6 +252,22 @@ fn component_parameters(
             out.push(EnsembleParam::new(index, None, ParamKind::RefrReal));
             out.push(EnsembleParam::new(index, None, ParamKind::RefrImag));
         }
+        Particle::LayeredSphere {
+            radius_fractions,
+            refractive_index,
+        } => {
+            for l in 0..refractive_index.len() {
+                out.push(EnsembleParam::new(index, None, ParamKind::LayerRefrReal(l)));
+                out.push(EnsembleParam::new(index, None, ParamKind::LayerRefrImag(l)));
+            }
+            for l in 0..radius_fractions.len() {
+                out.push(EnsembleParam::new(
+                    index,
+                    None,
+                    ParamKind::RadiusFraction(l),
+                ));
+            }
+        }
     }
     if weight {
         out.push(EnsembleParam::new(index, None, ParamKind::Weight));
@@ -211,9 +275,20 @@ fn component_parameters(
     out
 }
 
-/// Every parameter of a single distribution, for [`compute`].
+/// Every parameter of a single distribution of spheres, for [`compute`].
 pub fn parameters(distribution: &SizeDistribution) -> Vec<EnsembleParam> {
-    component_parameters(0, distribution, &Particle::sphere(Vec::new()), false)
+    parameters_with_particle(distribution, &Particle::sphere(Vec::new()))
+}
+
+/// Every parameter of a single distribution of `particle`s, for [`compute_with_particle`]: the
+/// distribution's, then the particle's (`m_real`, `m_imag` for a sphere; for a layered sphere
+/// `layer{l}.m_real` and `layer{l}.m_imag` of each layer, then `layer{l}.radius_fraction` of
+/// each but the last).
+pub fn parameters_with_particle(
+    distribution: &SizeDistribution,
+    particle: &Particle,
+) -> Vec<EnsembleParam> {
+    component_parameters(0, distribution, particle, false)
 }
 
 /// Every parameter of a mixture, for [`compute_mixture`].
@@ -436,8 +511,49 @@ pub fn compute(
     refractive_index: &[Complex<f64>],
     options: &EnsembleOptions,
 ) -> Result<Vec<EnsembleResult>> {
-    let component = Component::new(distribution.clone(), refractive_index.to_vec(), 1.0);
-    let allowed = parameters(distribution);
+    let particle = Particle::sphere(refractive_index.to_vec());
+    compute_with_particle(distribution, wavelengths, &particle, options)
+}
+
+/// Averages over `distribution` of `particle`s at `wavelengths` (in the unit of the radii), as
+/// [`compute`] does for spheres. For a layered sphere the distribution gives the outer radius.
+///
+/// ```
+/// use num_complex::Complex;
+/// use scatrs::ensemble::{
+///     EnsembleOptions, Particle, SizeDistribution, compute_with_particle,
+///     parameters_with_particle,
+/// };
+///
+/// let size = SizeDistribution::LogNormal { median_radius: 0.1, width: 1.5 };
+/// let coated = Particle::layered_sphere(
+///     vec![0.6],
+///     vec![vec![Complex::new(1.95, 0.79)], vec![Complex::new(1.43, 1e-8)]],
+/// );
+/// // ∂/∂(core fraction), the last parameter.
+/// let fraction = *parameters_with_particle(&size, &coated).last().unwrap();
+/// let options = EnsembleOptions::new().with_derivatives(vec![fraction]);
+/// let r = &compute_with_particle(&size, &[0.55], &coated, &options)?[0];
+/// assert!(r.derivatives[0].c_abs > 0.0); // a larger core absorbs more
+/// # Ok::<(), scatrs::Error>(())
+/// ```
+///
+/// # Errors
+///
+/// As [`compute`], and [`Error::InvalidInput`] for a layered sphere without a layer, with
+/// more than [`crate::layered::MAX_LAYERS`], with fractions that are not nondecreasing in
+/// (0, 1] or not one fewer than the layers, or with a layer's refractive indices not one per
+/// wavelength. With derivatives along the particle's parameters, a layered sphere's size nodes
+/// must be within its derivatives' validated domain
+/// ([`crate::layered::ValidatedDomain::derivative_x_max`]) unless `allow_unvalidated`.
+pub fn compute_with_particle(
+    distribution: &SizeDistribution,
+    wavelengths: &[f64],
+    particle: &Particle,
+    options: &EnsembleOptions,
+) -> Result<Vec<EnsembleResult>> {
+    let component = Component::with_particle(distribution.clone(), particle.clone(), 1.0);
+    let allowed = parameters_with_particle(distribution, particle);
     validate(
         core::slice::from_ref(&component),
         wavelengths,
@@ -486,6 +602,21 @@ pub fn compute_batch(
     refractive_index: &[Complex<f64>],
     options: &EnsembleOptions,
 ) -> Result<Vec<Vec<EnsembleResult>>> {
+    let particle = Particle::sphere(refractive_index.to_vec());
+    compute_batch_with_particle(distributions, wavelengths, &particle, options)
+}
+
+/// As [`compute_batch`], for `particle`s.
+///
+/// # Errors
+///
+/// As [`compute_batch`] and [`compute_with_particle`].
+pub fn compute_batch_with_particle(
+    distributions: &[SizeDistribution],
+    wavelengths: &[f64],
+    particle: &Particle,
+    options: &EnsembleOptions,
+) -> Result<Vec<Vec<EnsembleResult>>> {
     if distributions.is_empty() {
         return Err(invalid("a batch needs a distribution".into()));
     }
@@ -494,10 +625,11 @@ pub fn compute_batch(
             "a batch computes values only: request derivatives from compute".into(),
         ));
     }
-    if refractive_index.len() != wavelengths.len() {
+    particle.validate().map_err(invalid)?;
+    if particle.wavelengths() != wavelengths.len() {
         return Err(invalid(format!(
             "{} refractive indices for {} wavelengths",
-            refractive_index.len(),
+            particle.wavelengths(),
             wavelengths.len()
         )));
     }
@@ -507,7 +639,7 @@ pub fn compute_batch(
     }
     let components: Vec<Component> = distributions
         .iter()
-        .map(|d| Component::new(d.clone(), refractive_index.to_vec(), 1.0))
+        .map(|d| Component::with_particle(d.clone(), particle.clone(), 1.0))
         .collect();
     validate(&components, wavelengths, options, &[])?;
     engine::run_batch(&components, wavelengths, options)
@@ -575,6 +707,9 @@ fn validate(
                 )));
             }
         }
+        c.particle
+            .validate()
+            .map_err(|e| invalid(format!("component {i}: {e}")))?;
         if c.particle.wavelengths() != wavelengths.len() {
             return Err(invalid(format!(
                 "component {i} has {} refractive indices for {} wavelengths",

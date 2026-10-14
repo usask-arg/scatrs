@@ -18,8 +18,8 @@ use super::{
     PhaseValues, kronrod,
 };
 use crate::mie::{
-    Coefficients, EfficiencyJacobian, GreekCoefficients, GreekProjector, MAX_SIZE_PARAMETER,
-    MieOptions, Normalization, PhaseBuffers,
+    Coefficients, GreekCoefficients, GreekProjector, MAX_SIZE_PARAMETER, MieOptions, Normalization,
+    PhaseBuffers,
 };
 use crate::{Error, Result};
 
@@ -93,12 +93,6 @@ impl Part<'_> {
     }
 }
 
-/// The derivative of the efficiencies along direction `k`: Re m or Im m of group k/2.
-fn direction(jacs: &[EfficiencyJacobian<f64>], k: usize) -> &crate::mie::Efficiencies<f64> {
-    let j = &jacs[k / 2];
-    if k % 2 == 0 { &j.m_re } else { &j.m_im }
-}
-
 fn context(e: Error, lambda: f64, r: f64) -> Error {
     let at = format!("at wavelength {lambda:e}, radius {r:e}");
     match e {
@@ -147,6 +141,11 @@ fn parts<'a>(
                     }
                     ParamKind::RefrReal => dir_cols[0] = Some(col),
                     ParamKind::RefrImag => dir_cols[1] = Some(col),
+                    ParamKind::LayerRefrReal(l) => dir_cols[2 * l] = Some(col),
+                    ParamKind::LayerRefrImag(l) => dir_cols[2 * l + 1] = Some(col),
+                    ParamKind::RadiusFraction(l) => {
+                        dir_cols[2 * c.particle.groups() + l] = Some(col);
+                    }
                     _ => {}
                 }
             }
@@ -352,7 +351,7 @@ fn quantities1(
     solver: &mut Solver,
     r: f64,
     lambda: f64,
-    optics: Optics,
+    optics: Optics<'_>,
     opts: &MieOptions,
     refine_order: Option<usize>,
     dirs: &[bool],
@@ -361,7 +360,7 @@ fn quantities1(
     let s = solver
         .solve(optics, x, opts, dirs.iter().any(|&b| b))
         .map_err(|e| context(e, lambda, r))?;
-    let c = s.c;
+    let c = &s.c;
     let q = c.efficiencies();
     let area = PI * r * r;
     let mut out = vec![
@@ -388,7 +387,7 @@ fn quantities1(
         .map(|g| c.efficiencies_jacobian(g))
         .collect();
     for (k, _) in dirs.iter().enumerate().filter(|&(_, &want)| want) {
-        let d = direction(&jacs, k);
+        let d = s.direction(&jacs, k);
         out.extend([
             area * d.q_ext,
             area * d.q_sca,
@@ -415,7 +414,7 @@ fn panel1(
     group: &[&Part<'_>],
     (a, b): (f64, f64),
     lambda: f64,
-    optics: Optics,
+    optics: Optics<'_>,
     opts: &MieOptions,
     refine_order: Option<usize>,
     n_refined: usize,
@@ -505,7 +504,7 @@ fn evaluate(
     panels: &mut Panels1,
     group: &[&Part<'_>],
     lambda: f64,
-    optics: Optics,
+    optics: Optics<'_>,
     opts: &MieOptions,
     refine_order: Option<usize>,
     n_refined: usize,
@@ -650,7 +649,7 @@ fn status(
 fn pass1(
     group: &[&Part<'_>],
     lambda: f64,
-    optics: Optics,
+    optics: Optics<'_>,
     options: &EnsembleOptions,
     mie_opts: &MieOptions,
 ) -> Result<Pass1> {
@@ -878,7 +877,13 @@ fn bucket(n: usize) -> usize {
 
 /// The largest number of terms at the nodes of the panel [a, b] (t = ln r), which chooses the
 /// panel's band.
-fn panel_terms(a: f64, b: f64, lambda: f64, optics: Optics, opts: &MieOptions) -> Result<usize> {
+fn panel_terms(
+    a: f64,
+    b: f64,
+    lambda: f64,
+    optics: Optics<'_>,
+    opts: &MieOptions,
+) -> Result<usize> {
     let mut most = 0;
     for &(t, _, _) in &kronrod::panel(a, b) {
         let r = t.exp();
@@ -932,7 +937,7 @@ fn quantities2(
     solver: &mut Solver,
     r: f64,
     lambda: f64,
-    optics: Optics,
+    optics: Optics<'_>,
     opts: &MieOptions,
     layout: &Layout<'_>,
     g: &mut [f64],
@@ -946,7 +951,7 @@ fn quantities2(
     let s = solver
         .solve(optics, x, opts, derivatives)
         .map_err(|e| context(e, lambda, r))?;
-    let c = s.c;
+    let c = &s.c;
     let area = PI * r * r;
     let q = c.efficiencies();
     g[..SCALARS].copy_from_slice(&[
@@ -973,7 +978,7 @@ fn quantities2(
     }
     let mut tables = vec![(SCALARS, layout.mu)];
     match products {
-        Some((p, k)) => p.set(k, &c, &s.groups),
+        Some((p, k)) => p.set(k, c, &s.groups),
         None => tables.extend(band),
     }
     let segment = band.map(|(start, nodes)| (start, 4 * nodes.len()));
@@ -983,7 +988,7 @@ fn quantities2(
             if n == 0 {
                 continue;
             }
-            phase_into(&c, cosines, &mut g[start..start + 4 * n])
+            phase_into(c, cosines, &mut g[start..start + 4 * n])
                 .map_err(|e| context(e, lambda, r))?;
             g[start..start + 4 * n].iter_mut().for_each(|v| *v *= area);
         }
@@ -1009,13 +1014,13 @@ fn quantities2(
     let k = 2.0 * PI / lambda;
     if let Some(dm) = dm.as_deref_mut() {
         for (dir, d) in dm.iter_mut().enumerate() {
-            d[..SCALARS].copy_from_slice(&scalar_d(direction(&jacs, dir)));
+            d[..SCALARS].copy_from_slice(&scalar_d(&s.direction(&jacs, dir)));
         }
     }
     let mut dr = dr;
     if let Some(dr) = dr.as_deref_mut() {
-        // ∂(πr²Q)/∂r = 2πr Q + πr² (2π/λ) ∂Q/∂x.
-        let dx = scalar_d(&jacs[0].x);
+        // ∂(πr²Q)/∂r = 2πr Q + πr² (2π/λ) ∂Q/∂x, at fixed radius fractions.
+        let dx = scalar_d(&s.size_derivative(&jacs));
         let values = [0.0, q.q_ext, q.q_sca, q.q_sca * q.g, q.q_abs, q.q_back];
         for j in 1..6 {
             dr[j] = 2.0 * PI * r * values[j] + k * dx[j];
@@ -1075,15 +1080,27 @@ fn quantities2(
             .map_err(|e| context(e, lambda, r))?;
         }
         if let Some(dr) = dr.as_deref_mut() {
+            // At fixed radius fractions: Σ_l f_l·∂/∂x_l, from the outer group.
+            let (outer, inner) = d.split_last().expect("a group");
             for (j, o) in span.clone().enumerate() {
-                dr[o] = 2.0 * PI * r * g[o] + area * k * d[0][0][j];
+                let mut dx = outer[0][j];
+                for (f, di) in s.fractions.iter().zip(inner) {
+                    dx += f * di[0][j];
+                }
+                dr[o] = 2.0 * PI * r * g[o] + area * k * dx;
             }
         }
         if let Some(dm) = dm.as_deref_mut() {
+            let groups = d.len();
             for (dir, out) in dm.iter_mut().enumerate() {
-                let buf = &d[dir / 2][1 + dir % 2];
+                // Re m, Im m of each group, then each radius fraction: x_L·∂/∂x_l.
+                let (buf, scale) = if dir < 2 * groups {
+                    (&d[dir / 2][1 + dir % 2], area)
+                } else {
+                    (&d[dir - 2 * groups][0], area * c.x)
+                };
                 for (j, o) in span.clone().enumerate() {
-                    out[o] = area * buf[j];
+                    out[o] = scale * buf[j];
                 }
             }
         }
@@ -1178,7 +1195,7 @@ fn pass2(
     group: &[&Part<'_>],
     panels: &[(f64, f64)],
     lambda: f64,
-    optics: Optics,
+    optics: Optics<'_>,
     opts: &MieOptions,
     layout: &Layout<'_>,
 ) -> Result<Vec<Sums2>> {
@@ -1186,12 +1203,14 @@ fn pass2(
     let common = layout.common();
     let blocks: Vec<usize> = group.iter().map(|p| blocks(p)).collect();
     let derivatives = group.iter().any(|p| p.dir_derivatives());
-    // Every direction of the particle when any is requested.
-    let n_dirs = if derivatives {
-        group[0].dir_cols.len()
+    // Every direction of the particle when any is requested: two per group, then the real
+    // ones.
+    let (n_groups, n_reals) = if derivatives {
+        (group[0].particle.groups(), group[0].particle.reals())
     } else {
-        0
+        (0, 0)
     };
+    let n_dirs = 2 * n_groups + n_reals;
     let rows = Rows::new(group);
     let n_nodes = kronrod::panel(0.0, 1.0).len();
     // Per-thread scratch. A panel touches the common part of the layout and its band's
@@ -1272,13 +1291,16 @@ fn pass2(
                         };
                         let nodes = kronrod::panel(a, b);
                         if let Some(band) = band {
-                            let fits = sc
-                                .products
-                                .as_ref()
-                                .is_some_and(|p| p.fits(&band.tables, nodes.len(), n_dirs / 2));
+                            let fits = sc.products.as_ref().is_some_and(|p| {
+                                p.fits(&band.tables, nodes.len(), n_groups, n_reals)
+                            });
                             if !fits {
-                                sc.products =
-                                    Some(PanelProducts::new(&band.tables, nodes.len(), n_dirs / 2));
+                                sc.products = Some(PanelProducts::new(
+                                    &band.tables,
+                                    nodes.len(),
+                                    n_groups,
+                                    n_reals,
+                                ));
                             }
                         }
                         let (lo, hi) = band.map_or((0, 0), |b| {
@@ -1502,7 +1524,7 @@ fn monodisperse(
     part: &Part<'_>,
     r: f64,
     lambda: f64,
-    optics: Optics,
+    optics: Optics<'_>,
     opts: &MieOptions,
     layout: &Layout<'_>,
 ) -> Result<PartAverages> {

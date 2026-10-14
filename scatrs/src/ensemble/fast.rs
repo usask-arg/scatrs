@@ -49,43 +49,51 @@ impl BandTables {
 }
 
 /// The right-hand sides of a panel's spheres (4 columns each: u and v, real and imaginary
-/// parts; 4 more per derivative group: du/dm, dv/dm) and the products.
+/// parts; 4 more per derivative group: du/dm, dv/dm; and 4 more per real direction: x·du/dx_j,
+/// x·dv/dx_j of group j, the derivatives with respect to a radius fraction) and the products.
 pub(crate) struct PanelProducts {
     per: usize,
+    groups: usize,
+    reals: usize,
     x: Mat,
     ce: Mat,
     co: Mat,
 }
 
 impl PanelProducts {
-    /// Room for `spheres` spheres with `groups` derivative groups each, at the band's orders
-    /// and half nodes.
-    pub(crate) fn new(tables: &BandTables, spheres: usize, groups: usize) -> Self {
-        let per = 4 + 4 * groups;
+    /// Room for `spheres` spheres with `groups` derivative groups and `reals` real directions
+    /// each, at the band's orders and half nodes.
+    pub(crate) fn new(tables: &BandTables, spheres: usize, groups: usize, reals: usize) -> Self {
+        let per = 4 + 4 * (groups + reals);
         let (h, n) = (tables.ge.nrows(), tables.orders());
         Self {
             per,
+            groups,
+            reals,
             x: Mat::zeros(n, per * spheres),
             ce: Mat::zeros(h, per * spheres),
             co: Mat::zeros(h, per * spheres),
         }
     }
 
-    /// Whether this fits `tables` and `spheres` spheres with `groups` derivative groups.
-    pub(crate) fn fits(&self, tables: &BandTables, spheres: usize, groups: usize) -> bool {
+    /// Whether this fits `tables` and `spheres` spheres with `groups` derivative groups and
+    /// `reals` real directions.
+    pub(crate) fn fits(
+        &self,
+        tables: &BandTables,
+        spheres: usize,
+        groups: usize,
+        reals: usize,
+    ) -> bool {
         self.x.nrows() == tables.orders()
             && self.ce.nrows() == tables.ge.nrows()
-            && self.per == 4 + 4 * groups
+            && (self.groups, self.reals) == (groups, reals)
             && self.x.ncols() == self.per * spheres
     }
 
-    /// The number of derivative groups.
-    fn groups(&self) -> usize {
-        (self.per - 4) / 4
-    }
-
-    /// Sphere `k`'s coefficients (zero beyond its number of terms) and daₙ/dm, dbₙ/dm of each
-    /// of the first `self.groups()` of `groups`.
+    /// Sphere `k`'s coefficients (zero beyond its number of terms), daₙ/dm, dbₙ/dm of each of
+    /// the first `self.groups` of `groups`, and x·daₙ/dx_j, x·dbₙ/dx_j of the first
+    /// `self.reals` (x = `c.x`, the outer size parameter).
     pub(crate) fn set(
         &mut self,
         k: usize,
@@ -93,7 +101,8 @@ impl PanelProducts {
         groups: &[Group<'_, f64>],
     ) {
         let (a, b) = (c.a, c.b);
-        let groups = &groups[..self.groups()];
+        let reals = &groups[..self.reals];
+        let groups = &groups[..self.groups];
         let base = k * self.per;
         let n = self.x.nrows();
         let mut put = |row: usize, col: usize, u: Complex<f64>, v: Complex<f64>| {
@@ -114,8 +123,12 @@ impl PanelProducts {
                     let (du, dv) = uv(row, g.d.da_dm[row], g.d.db_dm[row]);
                     put(row, base + 4 + 4 * i, du, dv);
                 }
+                for (j, g) in reals.iter().enumerate() {
+                    let (du, dv) = uv(row, g.d.da_dx[row] * c.x, g.d.db_dx[row] * c.x);
+                    put(row, base + 4 + 4 * (groups.len() + j), du, dv);
+                }
             } else {
-                for i in 0..=groups.len() {
+                for i in 0..=groups.len() + reals.len() {
                     put(row, base + 4 * i, Complex::default(), Complex::default());
                 }
             }
@@ -131,8 +144,9 @@ impl PanelProducts {
     }
 
     /// Sphere `k`'s phase matrix times `scale` at every node of the band (F₁₁, F₁₂, F₃₃, F₃₄,
-    /// each n_q values, into `out`), and its derivatives with respect to Re m and Im m of each
-    /// group into `d` (Re m, Im m of the first group, then of the next; empty for none).
+    /// each n_q values, into `out`), and its derivatives into `d`: with respect to Re m and
+    /// Im m of each group (Re m, Im m of the first group, then of the next), then along each
+    /// real direction (empty for none).
     pub(crate) fn phase(
         &self,
         tables: &BandTables,
@@ -156,17 +170,28 @@ impl PanelProducts {
                 for (e, v) in f.into_iter().enumerate() {
                     out[e * q + node] = scale * v;
                 }
-                for (g, pair) in d.chunks_exact_mut(2).enumerate() {
-                    let col = base + 4 + 4 * g;
+                // dS₁, dS₂ along the derivative columns `col`.
+                let ds = |col: usize| {
                     let (deu, dev) = (c(&self.ce, i, col), c(&self.ce, i, col + 2));
                     let (dou, dov) = (c(&self.co, i, col), c(&self.co, i, col + 2));
-                    let (d1, d2) = (deu + dov * sign, dev + dou * sign);
+                    (deu + dov * sign, dev + dou * sign)
+                };
+                let (pairs, reals) = d.split_at_mut(2 * self.groups);
+                for (g, pair) in pairs.chunks_exact_mut(2).enumerate() {
+                    let (d1, d2) = ds(base + 4 + 4 * g);
                     let fr = element_derivatives(s1, s2, d1, d2);
                     let fi = element_derivatives(s1, s2, i1 * d1, i1 * d2);
                     let [dre, dim] = pair else { unreachable!() };
                     for e in 0..4 {
                         dre[e * q + node] = scale * fr[e];
                         dim[e * q + node] = scale * fi[e];
+                    }
+                }
+                for (j, dx) in reals.iter_mut().enumerate() {
+                    let (d1, d2) = ds(base + 4 + 4 * (self.groups + j));
+                    let fx = element_derivatives(s1, s2, d1, d2);
+                    for e in 0..4 {
+                        dx[e * q + node] = scale * fx[e];
                     }
                 }
             };
@@ -279,7 +304,7 @@ mod tests {
             let nodes = gauss_legendre::<f64>(q).unwrap().nodes;
             let tables = BandTables::new(&nodes, n_max);
             for derivatives in [false, true] {
-                let mut p = PanelProducts::new(&tables, cases.len(), usize::from(derivatives));
+                let mut p = PanelProducts::new(&tables, cases.len(), usize::from(derivatives), 0);
                 for (k, &(x, m)) in cases.iter().enumerate() {
                     let s = if derivatives {
                         mie.compute_with_derivatives(x, m, &opts).unwrap()

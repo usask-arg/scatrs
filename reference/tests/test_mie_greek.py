@@ -37,3 +37,14 @@ def test_records_satisfy_the_identities():
             assert phase[case]["inputs"]["mu"][0] == 1.0
             total = sum(_value(a1, i) for i in range(len(a1["hi"])))
             assert abs(total - _value(f11, 0)) <= 1e-12 * _value(f11, 0), case
+
+
+def test_records_hold_their_full_precision():
+    # Every stored value is good to 2**-150 of its record's scale (the generator certifies
+    # 2**-200; storage as hi + lo + lo2 keeps about 160 bits).
+    for line in (DATA / "mie_greek.jsonl").read_text().splitlines():
+        r = json.loads(line)
+        key = "alpha1" if r["case"].endswith(",greek") else "f11"
+        scale = max(abs(v) for v in r["outputs"][key]["hi"])
+        for name, out in r["outputs"].items():
+            assert max(out["err"]) <= 2**-150 * scale, (r["case"], name)

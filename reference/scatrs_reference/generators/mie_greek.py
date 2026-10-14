@@ -10,7 +10,8 @@ For each case (x, m, N, L) the generator takes a_n, b_n for n = 1..N from
   quadrature on Arb's own Legendre roots (``arb.legendre_p_root``) with n_q = N + ⌈(L + 1)/2⌉
   nodes, which is exact for these polynomial integrands, normalized so that α₁ at l = 0 is 1.
   The Wigner d-functions d⁰⁰, d⁰², d²², d²⁻² come from the three-term recurrence in l in ball
-  arithmetic, seeded with the explicit sum (`wigner_d.d_ref`).
+  arithmetic, seeded with the closed forms at the lowest order (checked against the explicit
+  sum `wigner_d.d_ref` by the tests).
 
 Everything is a finite computation in ball arithmetic, so every record is certified. The
 precision starts at ``PRECISION_BITS`` and doubles until every stored value's radius is below
@@ -24,6 +25,7 @@ import math
 
 from flint import acb, arb, ctx
 
+from scatrs_reference import disk
 from scatrs_reference.generators import mie
 from scatrs_reference.records import record
 
@@ -95,7 +97,7 @@ def wigner_column(m: int, n: int, x: arb, l_max: int) -> list[arb]:
     out = [arb(0)] * (l_max + 1)
     if l_max < l0:
         return out
-    prev, cur = arb(0), d_ref_ball(l0, m, n, x)
+    prev, cur = arb(0), start_value(m, n, x)
     out[l0] = cur
     for l in range(l0, l_max):
         a = (2 * l + 1) * (l * (l + 1) * x - m * n)
@@ -111,19 +113,17 @@ def wigner_column(m: int, n: int, x: arb, l_max: int) -> list[arb]:
     return out
 
 
-def d_ref_ball(l: int, m: int, n: int, x: arb) -> arb:
+def start_value(m: int, n: int, x: arb) -> arb:
     """d^l_{mn}(x) at its lowest order l = max(|m|, |n|), for the four (m, n) used here."""
-    c = ((1 + x) / 2).sqrt()
-    s = ((1 - x) / 2).sqrt()
     if (m, n) == (0, 0):
         return arb(1)
     if (m, n) == (2, 2):
-        return c**4
+        return ((1 + x) / 2) ** 2  # cos⁴(θ/2)
     if (m, n) == (2, -2):
-        return s**4
+        return ((1 - x) / 2) ** 2  # sin⁴(θ/2)
     if (m, n) == (0, 2):
         return arb(6).sqrt() / 4 * (1 - x * x)
-    raise ValueError((l, m, n))
+    raise ValueError((m, n))
 
 
 def greek(s: mie.Solution, order: int) -> dict[str, list[arb]]:
@@ -182,27 +182,29 @@ def _tight(outputs: dict[str, list[arb]], scale: arb) -> bool:
 def case_records(x: float, m_re: float, m_im: float, order: int | None) -> list[dict]:
     n = default_n(x)
     l_max = 2 * n if order is None else order
+    case = f"x={x!r},m=({m_re!r},{m_im!r}),L={l_max}"
+    inputs = {"x": x, "m_re": m_re, "m_im": m_im, "n_terms": n, "order": l_max}
     prec = PRECISION_BITS
-    while True:
+    while prec <= MAX_PRECISION_BITS:
         with ctx.workprec(prec):
-            s = mie.solve(x, m_re, m_im, n)
+            try:
+                s = mie.solve(x, m_re, m_im, n)
+            except disk.DiskContainsZero:  # a disk met a pole of u_k: retry at higher precision
+                prec *= 2
+                continue
             f = phase_matrix(s)
             g = greek(s, l_max)
             f_scale = max(abs(v) for v in f["f11"])
             g_scale = max(abs(v) for v in g["alpha1"])
             if _tight(f, f_scale) and _tight(g, g_scale):
-                break
+                # Built at the working precision: `record` splits each value into hi, lo and
+                # lo2, which needs more than double-double precision.
+                return [
+                    record(GENERATOR, case + ",phase", {**inputs, "mu": list(COSINES)}, f),
+                    record(GENERATOR, case + ",greek", inputs, g),
+                ]
         prec *= 2
-        if prec > MAX_PRECISION_BITS:
-            raise ArithmeticError(
-                f"x={x}, m=({m_re}, {m_im}) needs more than {MAX_PRECISION_BITS} bits"
-            )
-    case = f"x={x!r},m=({m_re!r},{m_im!r}),L={l_max}"
-    inputs = {"x": x, "m_re": m_re, "m_im": m_im, "n_terms": n, "order": l_max}
-    return [
-        record(GENERATOR, case + ",phase", {**inputs, "mu": list(COSINES)}, f),
-        record(GENERATOR, case + ",greek", inputs, g),
-    ]
+    raise ArithmeticError(f"x={x}, m=({m_re}, {m_im}) needs more than {MAX_PRECISION_BITS} bits")
 
 
 def generate() -> tuple[int, list[dict]]:

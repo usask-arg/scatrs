@@ -10,9 +10,11 @@
 //! the derivative measures take seven of them per point, so the grid stops at 10³, where the
 //! map takes about 2 CPU-minutes. The ignored test `large_spheres_are_within_the_tolerances`
 //! (about a minute; CI runs it weekly) checks the values at x = 2·10³ (all orders), 10⁴ and
-//! 2·10⁴ (order 64). `DoubleDouble` is within 16 times the declared constants, in units of
-//! (κ′ + cond)·2⁻¹⁰⁴, of Arb (tests/mie_greek_reference.rs), so it stands in for the exact
-//! values.
+//! 2·10⁴ (order 64). `DoubleDouble` stands in for the exact values: its phase matrix and
+//! Greek coefficients are within 16 times the declared constants, in units of
+//! (κ′ + cond)·2⁻¹⁰⁴, of Arb for the 18 spheres up to x = 200 of tests/mie_greek_reference.rs.
+//! Its derivatives are not compared with Arb; they come from the same double-double amplitude
+//! derivatives as those of tests/mie_reference.rs, which are.
 //!
 //! Each error is reported as C = error/((κ′ + cond)·2⁻⁵²); the test prints the worst C of each
 //! output. With `SCATRS_ACCURACY_MAP=path` it also writes every C as JSON, which the
@@ -28,8 +30,9 @@ mod common;
 use std::fmt::Write as _;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+use common::check::max_nan;
 use common::greek::{
-    greek_derivative_measures, greek_reference, greek_value_measures, solve_greek,
+    GreekOutputs, greek_derivative_measures, greek_reference, greek_value_measures, solve_greek,
 };
 use common::mie::Measure;
 use num_complex::Complex;
@@ -126,7 +129,7 @@ fn array_error(f: &[f64], d: &[Dd]) -> f64 {
     f.iter()
         .zip(d)
         .map(|(&a, &b)| diff(a, b))
-        .fold(0.0, f64::max)
+        .fold(0.0, max_nan)
 }
 
 /// C = error/((κ′ + cond)·2⁻⁵²) of `output` at (x, m); NaN counts as infinite.
@@ -140,16 +143,17 @@ fn constant_of(output: MieOutput, x: f64, m: Complex<f64>, err: f64, measure: Me
     if c.is_nan() { f64::INFINITY } else { c }
 }
 
-/// C of every output at (x, m), ordered as `OUTPUTS`.
-fn point(x: f64, m: Complex<f64>) -> [f64; 4] {
-    let order = order_at(x);
-    let n = default_n_max(x);
-    let f = solve_greek(x, m, &COSINES, None, order, NORMALIZATION);
-    let d = greek_reference(x, m, &COSINES, n, order, NORMALIZATION);
-    let l = f.greek[0].len() - 1;
-    let v = greek_value_measures(x, m, &d);
-    let dm = greek_derivative_measures(x, m, &COSINES, n, l, NORMALIZATION, &d);
-    let mut out = [0.0f64; 4];
+/// C of the phase matrix and of the Greek coefficients (up to order `l`) of `f` at (x, m),
+/// against the double-double solution `d`.
+fn value_constants(
+    x: f64,
+    m: Complex<f64>,
+    l: usize,
+    f: &GreekOutputs<f64>,
+    d: &GreekOutputs<Dd>,
+) -> [f64; 2] {
+    let v = greek_value_measures(x, m, d);
+    let mut out = [0.0f64; 2];
     for j in 0..COSINES.len() {
         for k in 0..4 {
             let err = diff(f.phase[k][j], d.phase[k][j]);
@@ -157,25 +161,30 @@ fn point(x: f64, m: Complex<f64>) -> [f64; 4] {
             out[0] = out[0].max(c);
         }
     }
+    for k in 0..6 {
+        let err = array_error(&f.greek[k], &d.greek[k]);
+        let output = MieOutput::GreekCoefficients { order: l };
+        out[1] = out[1].max(constant_of(output, x, m, err, v.greek[k]));
+    }
+    out
+}
+
+/// C of every output at (x, m), ordered as `OUTPUTS`.
+fn point(x: f64, m: Complex<f64>) -> [f64; 4] {
+    let order = order_at(x);
+    let n = default_n_max(x);
+    let f = solve_greek(x, m, &COSINES, None, order, NORMALIZATION);
+    let d = greek_reference(x, m, &COSINES, n, order, NORMALIZATION);
+    let l = f.greek[0].len() - 1;
+    let dm = greek_derivative_measures(x, m, &COSINES, n, l, NORMALIZATION, &d);
+    let [phase, greek] = value_constants(x, m, l, &f, &d);
+    let mut out = [phase, 0.0, greek, 0.0];
     for p in 0..3 {
         for k in 0..4 {
             let err = array_error(&f.phase_d[p][k], &d.phase_d[p][k]);
             let c = constant_of(MieOutput::PhaseMatrixDerivatives, x, m, err, dm.phase[p][k]);
             out[1] = out[1].max(c);
         }
-    }
-    for k in 0..6 {
-        let err = array_error(&f.greek[k], &d.greek[k]);
-        let c = constant_of(
-            MieOutput::GreekCoefficients { order: l },
-            x,
-            m,
-            err,
-            v.greek[k],
-        );
-        out[2] = out[2].max(c);
-    }
-    for p in 0..3 {
         for k in 0..6 {
             let err = array_error(&f.greek_d[p][k], &d.greek_d[p][k]);
             let output = MieOutput::GreekDerivatives { order: l };
@@ -318,27 +327,7 @@ fn large_spheres_are_within_the_tolerances() {
         let n = default_n_max(x);
         let f = solve_greek(x, m, &COSINES, None, order, NORMALIZATION);
         let d = greek_reference(x, m, &COSINES, n, order, NORMALIZATION);
-        let l = f.greek[0].len() - 1;
-        let v = greek_value_measures(x, m, &d);
-        let mut c = [0.0f64; 2];
-        for j in 0..COSINES.len() {
-            for k in 0..4 {
-                let err = diff(f.phase[k][j], d.phase[k][j]);
-                c[0] = c[0].max(constant_of(
-                    MieOutput::PhaseMatrix,
-                    x,
-                    m,
-                    err,
-                    v.phase[j][k],
-                ));
-            }
-        }
-        for k in 0..6 {
-            let err = array_error(&f.greek[k], &d.greek[k]);
-            let output = MieOutput::GreekCoefficients { order: l };
-            c[1] = c[1].max(constant_of(output, x, m, err, v.greek[k]));
-        }
-        c
+        value_constants(x, m, f.greek[0].len() - 1, &f, &d)
     });
     for ((x, m, _), c) in points.iter().zip(&results) {
         eprintln!(

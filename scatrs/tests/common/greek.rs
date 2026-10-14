@@ -8,6 +8,7 @@ use scatrs::Real;
 use scatrs::mie::{GreekCoefficients, Mie, MieOptions, Normalization, PhaseBuffers};
 use scatrs::scalar::DoubleDouble as Dd;
 
+use super::check::max_nan;
 use super::mie::Measure;
 
 /// The names of the Greek coefficients, as in the reference records.
@@ -133,7 +134,7 @@ fn mean_f11(d: &GreekOutputs<Dd>) -> f64 {
 
 /// A = max over l of |α₁|.
 fn alpha1_size(d: &GreekOutputs<Dd>) -> f64 {
-    d.greek[0].iter().map(|v| v.hi().abs()).fold(0.0, f64::max)
+    d.greek[0].iter().map(|v| v.hi().abs()).fold(0.0, max_nan)
 }
 
 /// Componentwise: x·|∂y/∂x| + |Re m|·|∂y/∂(Re m)| + |Im m|·|∂y/∂(Im m)|.
@@ -147,7 +148,7 @@ pub fn greek_value_measures(x: f64, m: Complex<f64>, d: &GreekOutputs<Dd>) -> Gr
     let greek = std::array::from_fn(|k| {
         let num = (0..d.greek[k].len())
             .map(|l| sensitivity(x, m, std::array::from_fn(|p| d.greek_d[p][k][l].hi())))
-            .fold(0.0, f64::max);
+            .fold(0.0, max_nan);
         Measure {
             scale,
             condition: num / scale,
@@ -222,7 +223,7 @@ pub fn greek_derivative_measures(
             let scale = values
                 .iter()
                 .map(|v| v.hi().abs().max(natural))
-                .fold(0.0, f64::max);
+                .fold(0.0, max_nan);
             let num = (0..values.len())
                 .map(|l| {
                     let g = std::array::from_fn(|q| {
@@ -234,7 +235,7 @@ pub fn greek_derivative_measures(
                     });
                     sensitivity(x, m, g)
                 })
-                .fold(0.0, f64::max);
+                .fold(0.0, max_nan);
             Measure {
                 scale,
                 condition: num / scale,
@@ -249,7 +250,7 @@ pub fn greek_derivative_measures(
                     let natural = d.phase[0][j].hi().max(mean) * phase_of_x / p_sizes[p];
                     d.phase_d[p][k][j].hi().abs().max(natural)
                 })
-                .fold(0.0, f64::max);
+                .fold(0.0, max_nan);
             let num = (0..mu.len())
                 .map(|j| {
                     let g = std::array::from_fn(|q| {
@@ -261,7 +262,7 @@ pub fn greek_derivative_measures(
                     });
                     sensitivity(x, m, g)
                 })
-                .fold(0.0, f64::max);
+                .fold(0.0, max_nan);
             Measure {
                 scale,
                 condition: num / scale,

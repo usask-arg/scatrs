@@ -53,7 +53,8 @@ pub enum MieOutput {
         order: usize,
     },
     /// Each derivative of α₁, …, β₂ with respect to p: max over l of |error| / max over l of
-    /// max(|∂c/∂p|, A·(1 + |m|x)/|p|), with A = max over l of |α₁|.
+    /// max(|∂c/∂p|, A·(1 + |m|x)/|p|), with A = max over l of |α₁| and |p| as for
+    /// [`EfficiencyJacobian`](Self::EfficiencyJacobian).
     GreekDerivatives {
         /// The highest order L.
         order: usize,
@@ -63,7 +64,8 @@ pub enum MieOutput {
 /// The region of inputs whose accuracy has been validated, and the declared tolerances there.
 ///
 /// Inside it, every output of [`Mie::compute`](super::Mie::compute) in `f64`, with the default
-/// truncation or more terms, is within
+/// truncation or more terms, and of the solution's methods (amplitudes, phase matrix, Greek
+/// coefficients, in either [`Normalization`](super::Normalization)), is within
 ///
 /// C·(κ′(x, m) + cond)·2⁻⁵²
 ///
@@ -74,7 +76,8 @@ pub enum MieOutput {
 ///   with s the denominator of the measure (for the measures over an array, the numerator is
 ///   the largest over the array):
 ///   * for the holomorphic aₙ, bₙ, S₁, S₂ and their derivatives, (x·|∂y/∂x| + |m|·|dy/dm|)/s;
-///   * for the real efficiencies, g and their Jacobian, componentwise:
+///   * for the real outputs (the efficiencies, g, the phase matrix, the Greek coefficients
+///     and their derivatives), componentwise:
 ///     (x·|∂y/∂x| + |Re m|·|∂y/∂(Re m)| + |Im m|·|∂y/∂(Im m)|)/s.
 ///
 ///   Rounding x and m to `f64` (each part of m to within 2⁻⁵³ of itself) already perturbs the

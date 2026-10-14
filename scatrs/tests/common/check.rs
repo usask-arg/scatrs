@@ -136,3 +136,13 @@ pub fn records(file: &str, kind: &str) -> Vec<Record> {
     assert!(!records.is_empty(), "no {kind} records in {file}");
     records
 }
+
+/// max(a, b), NaN if either is NaN: `f64::max` would drop a NaN, and a NaN error or scale must
+/// fail the check instead. For folds: `.fold(0.0, max_nan)`.
+pub fn max_nan(a: f64, b: f64) -> f64 {
+    if a.is_nan() || b.is_nan() {
+        f64::NAN
+    } else {
+        a.max(b)
+    }
+}

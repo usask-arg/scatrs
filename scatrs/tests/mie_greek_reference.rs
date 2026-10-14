@@ -11,11 +11,12 @@
 mod common;
 
 use common::Record;
-use common::check::{Parts, Worst, error, records, refractive_index, size_parameter};
+use common::check::{Parts, Worst, error, max_nan, records, refractive_index, size_parameter};
 use common::greek::{
     GREEK_NAMES, GreekOutputs, PHASE_NAMES, greek_reference, greek_value_measures, solve_greek,
 };
 use scatrs::mie::{MieOutput, Normalization, default_n_max};
+use scatrs::scalar::DoubleDouble as Dd;
 
 /// The order L of a record.
 fn order(r: &Record) -> usize {
@@ -36,7 +37,7 @@ fn solve_f64(r: &Record, mu: &[f64]) -> GreekOutputs<f64> {
 }
 
 /// The double-double solution of the case of `r`, with the same number of terms.
-fn solve_dd(r: &Record, mu: &[f64]) -> GreekOutputs<scatrs::scalar::DoubleDouble> {
+fn solve_dd(r: &Record, mu: &[f64]) -> GreekOutputs<Dd> {
     let (x, m) = (size_parameter(r), refractive_index(r));
     let n = r.input_i64("n_terms") as usize;
     greek_reference(x, m, mu, n, Some(order(r)), Normalization::Normalized)
@@ -62,7 +63,7 @@ fn cases() -> Vec<(Record, Record)> {
 /// solution `d`.
 fn check<T: Parts>(
     got: &GreekOutputs<T>,
-    d: &GreekOutputs<scatrs::scalar::DoubleDouble>,
+    d: &GreekOutputs<Dd>,
     g: &Record,
     p: &Record,
     worst_g: &mut Worst,
@@ -75,7 +76,7 @@ fn check<T: Parts>(
         assert_eq!(got.greek[k].len(), order(g) + 1);
         let err = (0..got.greek[k].len())
             .map(|l| error(got.greek[k][l], g, name, l))
-            .fold(0.0, f64::max);
+            .fold(0.0, max_nan);
         worst_g.check(output, err, measures.greek[k], g, name);
     }
     let mu = p.input_f64s("mu");
@@ -114,5 +115,43 @@ fn double_double_phase_matrix_and_greek_coefficients_match_arb() {
         let mu = p.input_f64s("mu");
         let d = solve_dd(&g, &mu);
         check(&d, &d, &g, &p, &mut worst_g, &mut worst_f);
+    }
+}
+
+/// The unnormalized forms (per unit geometric cross section) within the same tolerances, against
+/// double-double: the Arb records hold the normalized forms only.
+#[test]
+fn unnormalized_values_are_within_the_tolerances() {
+    let mut worst_g = Worst::new("unnormalized Greek coefficients");
+    let mut worst_f = Worst::new("unnormalized phase matrix");
+    let diff = |a: f64, b: Dd| (Dd::from_f64(a) - b).hi().abs();
+    for (g, p) in cases() {
+        let (x, m) = (size_parameter(&g), refractive_index(&g));
+        let n = g.input_i64("n_terms") as usize;
+        let mu = p.input_f64s("mu");
+        let norm = Normalization::Unnormalized;
+        let f = solve_greek(x, m, &mu, None, Some(order(&g)), norm);
+        let d = greek_reference(x, m, &mu, n, Some(order(&g)), norm);
+        let measures = greek_value_measures(x, m, &d);
+        let output = MieOutput::GreekCoefficients { order: order(&g) };
+        for (k, name) in GREEK_NAMES.into_iter().enumerate() {
+            let err = (0..f.greek[k].len())
+                .map(|l| diff(f.greek[k][l], d.greek[k][l]))
+                .fold(0.0, max_nan);
+            worst_g.check(output, err, measures.greek[k], &g, name);
+        }
+        for (j, cosine) in mu.iter().enumerate() {
+            for (k, name) in PHASE_NAMES.into_iter().enumerate() {
+                let err = diff(f.phase[k][j], d.phase[k][j]);
+                let detail = format!("{name} at mu = {cosine}");
+                worst_f.check(
+                    MieOutput::PhaseMatrix,
+                    err,
+                    measures.phase[j][k],
+                    &p,
+                    &detail,
+                );
+            }
+        }
     }
 }

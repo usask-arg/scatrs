@@ -99,15 +99,17 @@ describes what the accuracy figures rest on.
   moments take 0.037 s, 0.11 s and 0.20 s at $\lambda$ = 1, 0.5 and 0.3 µm; with the Greek
   coefficients to order 32, 0.093 s, 0.31 s and 0.90 s. See {doc}`theory/ensembles` and
   {doc}`validation/sasktran2`.
-- **Batches compute values only.** `compute_batch` shares the size nodes of many
-  distributions; their derivatives come from `compute`, one distribution at a time.
-- **Memory of batches.** Each distribution of a batch holds sums over every band's tables:
+- **Grids and lists compute values only.** A grid of distributions (array-valued parameters)
+  or a list of distributions shares its size nodes; derivatives come from an
+  {class}`~scatrs.Ensemble` of one distribution at a time. A {class}`~scatrs.Mixture` takes
+  ensembles of one distribution each, not grids or lists.
+- **Memory of grids.** Each distribution of a grid holds sums over every band's tables:
   about 2.5 MB per distribution and wavelength in flight at $\lambda = 0.28$ µm for the
   database grid of {doc}`validation/sasktran2` (2 GB for 800 distributions on one thread; more
-  wavelengths run at once on more threads). Split very large batches.
+  wavelengths run at once on more threads). Split very large grids.
 - **Tables can exceed `max_panels`.** Every radius of a `Tabulated` distribution is a panel
-  edge, so a table of more radii than `max_panels`, or a batch of many tables, takes more
-  panels than `max_panels` (still converging).
+  edge, so a table of more radii than `max_panels` still takes more panels than `max_panels`
+  (and converges).
 - **Distributions over size only.** The particles are spheres, so the distributions are over
   their radius only.
 - **Threads.** The computation runs on all cores, through rayon's global thread pool. Python

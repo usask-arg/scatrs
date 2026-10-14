@@ -3,22 +3,57 @@
 from importlib.metadata import PackageNotFoundError as _PackageNotFoundError
 from importlib.metadata import version as _version
 
-from scatrs import _scatrs, ensemble, mie, special
+from scatrs import _scatrs, ensemble, mie, particles, refractive, size, special
+from scatrs.ensemble import (
+    Ensemble,
+    EnsembleGreek,
+    EnsembleOutputs,
+    EnsemblePhase,
+    EnsembleResult,
+    Mixture,
+)
 from scatrs.errors import (
     InvalidInputError,
     NotConvergedError,
     OutsideValidatedDomainError,
     ScatrsError,
 )
+from scatrs.particles import Sphere
+from scatrs.size import (
+    Gamma,
+    LogNormal,
+    ModifiedGamma,
+    Monodisperse,
+    MultiModal,
+    PowerLaw,
+    Tabulated,
+)
 
 __all__ = [
+    "Ensemble",
+    "EnsembleGreek",
+    "EnsembleOutputs",
+    "EnsemblePhase",
+    "EnsembleResult",
+    "Gamma",
     "InvalidInputError",
+    "LogNormal",
+    "Mixture",
+    "ModifiedGamma",
+    "Monodisperse",
+    "MultiModal",
     "NotConvergedError",
     "OutsideValidatedDomainError",
+    "PowerLaw",
     "ScatrsError",
+    "Sphere",
+    "Tabulated",
     "__version__",
     "ensemble",
     "mie",
+    "particles",
+    "refractive",
+    "size",
     "special",
 ]
 

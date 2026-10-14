@@ -13,7 +13,7 @@ Add it with `cargo add scatrs`. The same reference is on [docs.rs](https://docs.
 | Rust | Python | Contents |
 |---|---|---|
 | {rust}`scatrs::mie` | {mod}`scatrs.mie` | One sphere: coefficients, efficiencies, amplitudes, phase matrix, Greek coefficients and their derivatives. |
-| {rust}`scatrs::ensemble` | {mod}`scatrs.ensemble` | Averages over size distributions, mixtures and batches, with error estimates and derivatives. |
+| {rust}`scatrs::ensemble` | {class}`scatrs.Ensemble`, {class}`scatrs.Mixture` | Averages over size distributions, mixtures and batches (Python: grids), with error estimates and derivatives. |
 | {rust}`scatrs::special` | {mod}`scatrs.special` | Gauss–Legendre quadrature and Wigner d-functions. |
 | {rust}`scatrs::scalar` | | The {rust}`Real <scatrs::scalar::Real>` trait and the double-double and dual-number types. Rust only. |
 | {rust}`scatrs::error` | {mod}`scatrs.errors` | The error type, and the exceptions that mirror it. |

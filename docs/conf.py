@@ -8,10 +8,13 @@ whenever the Rust sources have changed::
 The HTML build also runs ``cargo doc`` and publishes the Rust API reference under ``rustdoc/``;
 the ``{rust}`` role links to it (see ``_rust_role``).
 
-Intersphinx downloads the Python and numpy inventories. Without network access that download
-fails with a warning, which ``-W`` makes fatal: set ``SCATRS_DOCS_OFFLINE=1`` to skip it.
-References to Python and numpy objects are then rendered as plain text, while references to
-scatrs objects are still checked.
+Intersphinx downloads the Python and numpy inventories, and the changelog page the GitHub
+release notes (sphinx-github-changelog: anonymously, or with the token in
+``SPHINX_GITHUB_CHANGELOG_TOKEN``, ``GITHUB_TOKEN``, a git credential helper or the GitHub CLI).
+Without network access those downloads fail, which ``-W`` makes fatal: set
+``SCATRS_DOCS_OFFLINE=1`` to skip them. References to Python and numpy objects are then
+rendered as plain text, while references to scatrs objects are still checked, and the changelog
+page links to the releases instead.
 """
 
 import builtins
@@ -22,10 +25,12 @@ import subprocess
 import sys
 from importlib.metadata import version as _version
 from pathlib import Path
+from typing import ClassVar
 
 from docutils import nodes
+from docutils.parsers.rst import directives
 from sphinx.errors import ExtensionError
-from sphinx.util.docutils import SphinxRole
+from sphinx.util.docutils import SphinxDirective, SphinxRole
 
 project = "scatrs"
 author = "scatrs contributors"
@@ -92,6 +97,8 @@ numpydoc_xref_aliases = {
 numpydoc_xref_ignore = {"optional", "of"}
 
 OFFLINE = os.environ.get("SCATRS_DOCS_OFFLINE", "") not in ("", "0")
+# sphinx-github-changelog may ask git's credential helper for a token: never let git prompt.
+os.environ.setdefault("GIT_TERMINAL_PROMPT", "0")
 
 intersphinx_mapping = (
     {}
@@ -102,6 +109,10 @@ intersphinx_mapping = (
     }
 )
 intersphinx_timeout = 30
+
+# The changelog page shows the GitHub release notes; offline, `_OfflineChangelog` links to them.
+if not OFFLINE:
+    extensions.append("sphinx_github_changelog")
 
 
 # Python targets that the python and numpy inventories resolve: names under numpy or a
@@ -126,7 +137,13 @@ def _external_reference_as_text(app, env, node, contnode):
     domain, target = node.get("refdomain"), node.get("reftarget", "")
     if domain == "py" and _is_external(target):
         return contnode
-    if domain == "std" and node.get("reftype") == "term" and target.startswith("numpy:"):
+    # Glossary terms and labels of the inventories (numpydoc links `bool` and `sequence` to
+    # python:bltin-boolean-values and python:sequence, `array_like` to numpy:array_like).
+    if (
+        domain == "std"
+        and node.get("reftype") in ("term", "ref")
+        and target.startswith(("numpy:", "python:"))
+    ):
         return contnode
     return None
 
@@ -215,6 +232,24 @@ class _RustRole(SphinxRole):
         return index.relative_to(RUSTDOC).as_posix() if index.is_file() else None
 
 
+class _OfflineChangelog(SphinxDirective):
+    """The ``changelog`` directive without network access: a link to the releases."""
+
+    option_spec: ClassVar = {
+        "changelog-url": directives.uri,
+        "github": directives.uri,
+        "pypi": directives.uri,
+    }
+
+    def run(self):
+        url = self.options.get("changelog-url") or self.options["github"]
+        par = nodes.paragraph()
+        par += nodes.Text("The release notes are on ")
+        par += nodes.reference("", "GitHub", refuri=url)
+        par += nodes.Text(" (not downloaded: SCATRS_DOCS_OFFLINE is set).")
+        return [par]
+
+
 def setup(app):
     app.connect("env-get-outdated", _always_reread)
     app.connect("builder-inited", _build_rustdoc)
@@ -222,3 +257,4 @@ def setup(app):
     app.add_role("rust", _RustRole())
     if OFFLINE:
         app.connect("missing-reference", _external_reference_as_text)
+        app.add_directive("changelog", _OfflineChangelog)

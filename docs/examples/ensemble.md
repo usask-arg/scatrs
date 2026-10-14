@@ -8,8 +8,8 @@ kernelspec:
 
 # Example: an aerosol size distribution
 
-{mod}`scatrs.ensemble` averages the optical properties of spheres over a size distribution, at
-many wavelengths, with an error estimate for every output and, on request, derivatives. See
+An {class}`~scatrs.Ensemble` averages the optical properties of spheres over a size
+distribution, at many wavelengths, with an error estimate for every output and, on request, derivatives. See
 {doc}`/theory/ensembles` for the method. This page runs whenever the documentation is built;
 its checks are `assert`s, so a failing check fails the build.
 
@@ -23,12 +23,12 @@ wavelengths share a unit (µm here), so the cross sections are in µm² per part
 import matplotlib.pyplot as plt
 import numpy as np
 
-from scatrs import ensemble
+import scatrs
 
-sulfate = ensemble.LogNormal(median_radius=0.08, width=1.6)
 m = 1.43 + 1e-8j
+sulfate = scatrs.Ensemble(scatrs.Sphere(m), scatrs.LogNormal(median_radius=0.08, width=1.6))
 wavelength = np.array([0.35, 0.40, 0.45, 0.50, 0.55, 0.67, 0.87, 1.0])
-r = ensemble.compute(sulfate, wavelength, m)
+r = sulfate.compute(wavelength)
 print(f"{'λ (µm)':>7}{'C_ext (µm²)':>13}{'1 - ω':>10}{'g':>8}{'panels':>8}")
 for row in zip(wavelength, r.c_ext, 1 - r.ssa, r.g, r.panels, strict=True):
     print("{:7.2f}{:13.4e}{:10.1e}{:8.4f}{:8d}".format(*row))
@@ -56,7 +56,7 @@ and more, so the larger ones dominate the optics.
 
 ```{code-cell} python
 lam = np.geomspace(0.3, 2.0, 60)
-fine_grid = ensemble.compute(sulfate, lam, m)
+fine_grid = sulfate.compute(lam)
 
 radius = np.geomspace(0.005, 1.5, 400)
 number = np.exp(-np.log(radius / 0.08) ** 2 / (2 * np.log(1.6) ** 2))  # dN/d ln r, unnormalized
@@ -102,7 +102,7 @@ its estimate is only indicative ({ref}`ensemble-accuracy`); `refine_backscatter=
 it too.
 
 ```{code-cell} python
-tight = ensemble.compute(sulfate, wavelength, m, rtol=1e-11, max_panels=50_000)
+tight = sulfate.compute(wavelength, rtol=1e-11, max_panels=50_000)
 print(f"{'output':<10}{'largest error/estimate':>24}{'largest relative error':>24}")
 for name in ("c_ext", "c_sca", "g", "ssa", "c_back", "lidar_ratio"):
     value, exact, estimate = getattr(r, name), getattr(tight, name), getattr(r.error, name)
@@ -142,7 +142,7 @@ first few at 0.55 µm. Normalized, $\alpha_1^0 = 1$ and $\alpha_1^1 = 3g$, with 
 asymmetry parameters of the spheres.
 
 ```{code-cell} python
-g = ensemble.compute(sulfate, 0.55, m, greek=32)
+g = sulfate.compute(0.55, greek=32)
 names = ("alpha1", "alpha2", "alpha3", "alpha4", "beta1", "beta2")
 print(f"{'l':>3}" + "".join(f"{name:>11}" for name in names))
 for l in range(6):
@@ -159,7 +159,7 @@ scattering is forward-peaked.
 ```{code-cell} python
 angles = np.linspace(0, 180, 361)
 mu = np.cos(np.radians(angles))
-pm = ensemble.compute(sulfate, [0.35, 0.55, 1.0], m, mu=mu)
+pm = sulfate.compute([0.35, 0.55, 1.0], mu=mu)
 fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(10, 3.6), layout="constrained")
 for i, lam in enumerate([0.35, 0.55, 1.0]):
     ax1.semilogy(angles, pm.phase.f11[i], label=f"λ = {lam} µm")
@@ -180,8 +180,8 @@ C_\text{sca}\rangle$ itself, and its estimate is less than twice that of $\langl
 C_\text{sca}\rangle$.
 
 ```{code-cell} python
-u = ensemble.compute(sulfate, 0.55, m, greek=32, normalized=False)
-exact = ensemble.compute(sulfate, 0.55, m, greek=32, normalized=False, rtol=1e-11, max_panels=50_000)
+u = sulfate.compute(0.55, greek=32, normalized=False)
+exact = sulfate.compute(0.55, greek=32, normalized=False, rtol=1e-11, max_panels=50_000)
 print(f"alpha1[0] = {u.greek.alpha1[0]:.12e}, c_sca = {u.c_sca:.12e}")
 print(f"estimates: alpha1[0] {u.error.greek.alpha1[0]:.1e}, c_sca {u.error.c_sca:.1e}; "
       f"true error {abs(u.greek.alpha1[0] - exact.greek.alpha1[0]):.1e}")
@@ -201,9 +201,8 @@ does not swamp the difference.
 
 ```{code-cell} python
 def run(median_radius, **kwargs):
-    return ensemble.compute(
-        ensemble.LogNormal(median_radius, 1.6), 0.55, m, rtol=1e-11, max_panels=50_000, **kwargs
-    )
+    ens = scatrs.Ensemble(scatrs.Sphere(m), scatrs.LogNormal(median_radius, 1.6))
+    return ens.compute(0.55, rtol=1e-11, max_panels=50_000, **kwargs)
 
 
 d = run(0.08, derivatives=["median_radius"])
@@ -219,24 +218,21 @@ for name in ("c_ext", "g"):
 
 ## A mixture with a coarse mode
 
-{func}`~scatrs.ensemble.compute_mixture` averages over an external mixture of components, each
-a distribution, a refractive index and a weight, its relative number concentration. Here the
+A {class}`~scatrs.Mixture` averages over an external mixture of ensembles, each with a weight,
+its relative number concentration. Here the
 sulfate is mixed with one coarse, weakly absorbing particle per thousand ($r_g = 0.4$ µm,
 $\sigma_g = 1.8$, $m = 1.50 + 10^{-3}i$). Cross sections average with the number fractions
 $w_i/\sum w$; the phase matrix, and so the Greek coefficients, with $w_i\langle
 C_\text{sca}\rangle_i$.
 
 ```{code-cell} python
-coarse = ensemble.LogNormal(median_radius=0.4, width=1.8)
+coarse = scatrs.Ensemble(scatrs.Sphere(1.50 + 1e-3j), scatrs.LogNormal(median_radius=0.4, width=1.8))
 weights = (1.0, 1e-3)
-components = [
-    ensemble.Component(sulfate, m, weights[0]),
-    ensemble.Component(coarse, 1.50 + 1e-3j, weights[1]),
-]
+mixture = scatrs.Mixture([(weights[0], sulfate), (weights[1], coarse)])
 lam = np.array([0.35, 0.55, 1.0])
-mix = ensemble.compute_mixture(components, lam, greek=16, derivatives=["c1.weight"])
-fine = ensemble.compute(sulfate, lam, m, greek=16)
-big = ensemble.compute(coarse, lam, 1.50 + 1e-3j, greek=16)
+mix = mixture.compute(lam, greek=16, derivatives=["c1.weight"])
+fine = sulfate.compute(lam, greek=16)
+big = coarse.compute(lam, greek=16)
 f = np.array(weights) / sum(weights)
 print(f"{'λ (µm)':>7}{'C_ext (µm²)':>13}{'ω':>9}{'g':>8}{'coarse share of C_ext':>23}")
 for i in range(len(lam)):
@@ -257,14 +253,14 @@ Across the spectrum the coarse mode takes over the extinction as the wavelength 
 
 ```{code-cell} python
 lam = np.geomspace(0.3, 2.0, 40)
-mix_l = ensemble.compute_mixture(components, lam)
-fine_l = ensemble.compute(sulfate, lam, m)
-coarse_l = ensemble.compute(coarse, lam, 1.50 + 1e-3j)
+mix_l = mixture.compute(lam)
+fine_l = sulfate.compute(lam)
+coarse_l = coarse.compute(lam)
 at_550 = dict(mu=mu)
 phases = {
-    "sulfate": ensemble.compute(sulfate, 0.55, m, **at_550).phase.f11,
-    "coarse mode": ensemble.compute(coarse, 0.55, 1.50 + 1e-3j, **at_550).phase.f11,
-    "mixture": ensemble.compute_mixture(components, 0.55, **at_550).phase.f11,
+    "sulfate": sulfate.compute(0.55, **at_550).phase.f11,
+    "coarse mode": coarse.compute(0.55, **at_550).phase.f11,
+    "mixture": mixture.compute(0.55, **at_550).phase.f11,
 }
 
 fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(10, 3.6), layout="constrained")
@@ -294,4 +290,53 @@ dw = mix.d("c1.weight").c_ext
 print("d C_ext / d c1.weight:", dw, "relative to C_ext:", dw / mix.c_ext)
 assert np.all((dw / mix.c_ext > 39) & (dw / mix.c_ext < 340))
 assert np.allclose(dw, (big.c_ext - mix.c_ext) / sum(weights), rtol=1e-12, atol=0)
+```
+
+## An optics table
+
+Distribution parameters given as arrays make a grid of distributions, as an optics table
+needs; they broadcast together like NumPy arrays, and the results have the grid's axes before
+the wavelengths'. The grid's distributions share their size nodes, so the whole table costs
+little more than its broadest distribution alone ({doc}`/theory/ensembles`). Here, sulfate
+lognormals over 12 median radii and 3 widths at four wavelengths.
+
+```{code-cell} python
+radii, widths = np.geomspace(0.02, 0.5, 12), np.array([1.4, 1.6, 1.8])
+table = scatrs.Ensemble(scatrs.Sphere(m), scatrs.LogNormal(radii[:, None], widths))
+t = table.compute([0.35, 0.55, 0.87, 1.6], greek=16)
+print(t)
+
+fig, ax = plt.subplots(figsize=(5.5, 3.8), layout="constrained")
+for j, width in enumerate(widths):
+    ax.loglog(radii, t.c_ext[:, j, 1] / (np.pi * t.grid["median_radius"][:, j] ** 2),
+              label=f"$\\sigma_g$ = {width}")
+ax.set(xlabel="median radius $r_g$ (µm)", ylabel="$\\langle C_\\mathrm{ext}\\rangle/(\\pi r_g^2)$ at 0.55 µm")
+ax.legend()
+plt.show()
+assert t.c_ext.shape == (12, 3, 4) and t.greek.alpha1.shape == (12, 3, 4, 17)
+assert t.converged.all()
+```
+
+Each point of the grid meets its own tolerance and differs from its own ensemble within the
+error estimates. A grid computes values only: derivatives come from an ensemble of one
+distribution.
+
+```{code-cell} python
+one = scatrs.Ensemble(scatrs.Sphere(m), scatrs.LogNormal(radii[5], widths[1])).compute([0.35, 0.55, 0.87, 1.6])
+assert np.all(abs(t.c_ext[5, 1] - one.c_ext) <= 2 * (t.error.c_ext[5, 1] + one.error.c_ext))
+```
+
+Distributions that are not one family's parameters, such as measured size distributions, go in
+a list instead, of any kinds; they share their size nodes in the same way, and the results have
+one axis for the list.
+
+```{code-cell} python
+measured = [
+    scatrs.Tabulated([0.02, 0.08, 0.2, 0.5], [0.0, 3.0, 1.0, 0.0]),
+    scatrs.Tabulated([0.05, 0.1, 0.3, 0.8], [0.0, 2.0, 1.5, 0.0]),
+    scatrs.LogNormal(0.08, 1.6),
+]
+batch = scatrs.Ensemble(scatrs.Sphere(m), measured).compute([0.35, 0.55, 0.87, 1.6])
+print(batch)
+assert batch.c_ext.shape == (3, 4) and batch.converged.all()
 ```

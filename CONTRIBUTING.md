@@ -128,14 +128,20 @@ enforces this.
    SemVer form that maturin can convert, `X.Y.Z-alpha.N`, `X.Y.Z-beta.N` or `X.Y.Z-rc.N`:
    the Python package and `scatrs.__version__` get its PEP 440 form (`X.Y.ZaN`, `X.Y.ZbN`,
    `X.Y.ZrcN`), which the tests check.
-2. Update `CHANGELOG.md`, commit, merge to `main`, and tag that commit `v` followed by the
-   Cargo version, such as `v0.1.0` or `v0.1.0-alpha.1`.
+2. Commit, merge to `main`, and tag that commit `v` followed by the Cargo version, such as
+   `v0.1.0` or `v0.1.0-alpha.1`.
 3. Pushing the tag runs the release workflow. Its preflight job checks that the tag is `v` plus
    the Cargo version, that the tagged commit is on `main`, and that `cargo publish --dry-run`
    succeeds. Once the preflight, every build and every wheel test pass, it publishes to PyPI
    (Trusted Publishing, environment `pypi`; versions already there are skipped), then the
    `scatrs` crate (crates.io Trusted Publishing, environment `crates-io`). Each environment
    asks a reviewer to approve.
+4. Once the release workflow has published, publish a GitHub release for the tag. Its notes are the changelog: the documentation's
+   changelog page shows the notes of every release (sphinx-github-changelog), as sasktran2's
+   does. Start from GitHub's generated notes (the merged pull requests) and add what users need,
+   above all every breaking change with its replacement. Then run the "Publish documentation"
+   workflow on `main` (it otherwise runs on the next push to `main`) so the page includes the
+   new release.
 
 For the very first crates.io release, see "crates.io" below.
 

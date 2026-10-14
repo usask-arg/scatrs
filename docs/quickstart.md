@@ -9,7 +9,8 @@ kernelspec:
 # Quick start
 
 scatrs computes the optical properties of spherical particles: single spheres with
-{mod}`scatrs.mie`, and size distributions and mixtures of them with {mod}`scatrs.ensemble`.
+{mod}`scatrs.mie`, and size distributions and mixtures of them with {class}`~scatrs.Ensemble` and
+{class}`~scatrs.Mixture`.
 This page shows the main calls and the conventions to know before using the results. See
 {doc}`installation` to install the package.
 
@@ -21,8 +22,8 @@ in {doc}`/theory/conventions`.
 | Quantity | Convention |
 |---|---|
 | Refractive index | $m = n + ik$, with $k \ge 0$ for absorbing particles (Bohren & Huffman). Codes that write $m = n - ik$, such as MIEV0 and sasktran2, need the complex conjugate. A negative imaginary part raises {class}`~scatrs.errors.InvalidInputError`. |
-| Size | {mod}`scatrs.mie` takes the size parameter $x = 2\pi r/\lambda$. {mod}`scatrs.ensemble` takes radii and wavelengths in any unit, the same unit for both. $\lambda$ and $m$ are relative to the surrounding medium. |
-| Cross sections | {mod}`scatrs.mie` returns efficiencies $Q = C/(\pi r^2)$. {mod}`scatrs.ensemble` returns cross sections per particle, in the square of the length unit. |
+| Size | {mod}`scatrs.mie` takes the size parameter $x = 2\pi r/\lambda$. Ensembles take radii and wavelengths in any unit, the same unit for both. $\lambda$ and $m$ are relative to the surrounding medium. |
+| Cross sections | {mod}`scatrs.mie` returns efficiencies $Q = C/(\pi r^2)$. Ensembles return cross sections per particle, in the square of the length unit. |
 | Angles | Functions of angle take $\mu = \cos\Theta$, with $\Theta$ the scattering angle. |
 | Phase matrix | Normalized so that $\tfrac12\int_{-1}^{1} F_{11}\,d\mu = 1$. The degree of linear polarization is $-F_{12}/F_{11}$. |
 | Greek coefficients | The expansion of Mishchenko, Travis & Lacis (2002), normalized so that $\alpha_1^0 = 1$, and then $\alpha_1^1 = 3g$. $\beta_1$ and $\beta_2$ have the opposite sign to sasktran2's. |
@@ -86,16 +87,20 @@ assert g.alpha1[0] == 1 and abs(g.alpha1[1] - 3 * q.g) < 1e-12
 
 ## A size distribution
 
-{func}`scatrs.ensemble.compute` averages over a size distribution at each wavelength. Every
-output comes with an error estimate, and `converged` says whether the size integration met
-its tolerance (`rtol`, by default $10^{-6}$).
+An {class}`~scatrs.Ensemble` is a particle and a size distribution;
+{meth}`~scatrs.Ensemble.compute` averages over the sizes at each wavelength. Every output comes
+with an error estimate, and `converged` says whether the size integration met its tolerance
+(`rtol`, by default $10^{-6}$).
 
 ```{code-cell} python
-from scatrs import ensemble
+import scatrs
 
-sulfate = ensemble.LogNormal(median_radius=0.08, width=1.6)  # µm
+sulfate = scatrs.Ensemble(
+    scatrs.Sphere(refractive_index=1.43 + 1e-8j),
+    scatrs.LogNormal(median_radius=0.08, width=1.6),  # µm
+)
 wavelengths = np.array([0.35, 0.55, 1.0])  # µm
-r = ensemble.compute(sulfate, wavelengths, 1.43 + 1e-8j, greek=32)
+r = sulfate.compute(wavelengths, greek=32)
 
 for i, lam in enumerate(wavelengths):
     print(f"λ = {lam} µm: C_ext = {r.c_ext[i]:.4e} µm² (± {r.error.c_ext[i]:.0e}), "
@@ -104,9 +109,20 @@ print("converged:", r.converged)
 print("alpha1 at 0.55 µm:", r.greek.alpha1[1, :4])
 ```
 
-Mixtures of several components, each a distribution with its own refractive index, use
-{func}`~scatrs.ensemble.compute_mixture`; many distributions of one material (an optics
-database) use {func}`~scatrs.ensemble.compute_batch`.
+A refractive index that varies with wavelength is a model from {mod}`scatrs.refractive`, such
+as a table of measured values ({doc}`theory/refractive-index`). A {class}`~scatrs.Mixture` combines
+ensembles of different materials. Distribution parameters given as arrays make a grid of
+distributions, computed at once, as an optics table needs:
+
+```{code-cell} python
+table = scatrs.Ensemble(
+    scatrs.Sphere(1.43 + 1e-8j),
+    scatrs.LogNormal(median_radius=np.geomspace(0.05, 0.5, 4)[:, None], width=[1.4, 1.6, 1.8]),
+)
+t = table.compute(wavelengths)
+print(t)
+print("C_ext of r_g = 0.05 µm, σ_g = 1.6:", t.c_ext[0, 1])
+```
 
 ## Derivatives
 
@@ -119,7 +135,7 @@ q = mie.efficiencies(x, m, derivatives=True)
 print("dQ_ext/dx       =", q.d("x").q_ext)
 print("dQ_ext/d(Re m)  =", q.d("m_real").q_ext)
 
-r = ensemble.compute(sulfate, 0.55, 1.43 + 1e-8j, derivatives=["median_radius"])
+r = sulfate.compute(0.55, derivatives=["median_radius"])
 print("dC_ext/dr_g =", r.d("median_radius").c_ext, "µm")
 ```
 

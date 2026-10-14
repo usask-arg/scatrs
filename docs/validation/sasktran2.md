@@ -3,7 +3,7 @@
 scatrs is built out of the scattering core of the radiative transfer model
 [sasktran2](https://github.com/usask-arg/sasktran2), whose own Mie code, through its
 `MieDatabase`, integrates the optical properties of spheres over size distributions. It is a
-separate implementation of the same averages as {mod}`scatrs.ensemble`, so it serves both as
+separate implementation of the same averages as {class}`scatrs.Ensemble`, so it serves both as
 an external check of scatrs's results and as a benchmark of its speed. This page compares the two for accuracy and speed on the same machine.
 The script `benchmarks/compare.py` produces every number here, and the results it wrote are in
 `benchmarks/results/2026-10-13-arm64.json`.
@@ -17,7 +17,8 @@ The script `benchmarks/compare.py` produces every number here, and the results i
   coefficients, without the database's netCDF caching. It builds one radius grid, from QUADPACK's
   panels for an extinction integrand at the shortest wavelength, for every wavelength and
   distribution, and projects the phase matrix on a split Gauss–Legendre grid of 128 cosines.
-- **scatrs** `ensemble.compute_batch` with the Greek coefficients to order 63 (the same 64
+- **scatrs** {class}`~scatrs.Ensemble` with the 50 lognormals as one grid (array-valued
+  parameters), with the Greek coefficients to order 63 (the same 64
   coefficients) at rtol $3\cdot10^{-3}$, $10^{-3}$, $3\cdot10^{-4}$ and $10^{-4}$.
 - **Reference:** scatrs at rtol $10^{-9}$ (converged everywhere).
 - **Conventions:** sasktran2 takes $m = n - ik$, and works in nm and m²; its $\beta_1$ and
@@ -92,7 +93,7 @@ results come without estimates.
 - **What the time buys.** sasktran2's grid is fixed by its settings; scatrs's panels follow the
   requested rtol, so the tables also give its accuracy-against-time curve. scatrs's default rtol,
   $10^{-6}$, is far tighter than these: ask for the accuracy the application needs.
-- **Batches.** W2 uses `compute_batch`, which shares the size nodes of the 50 distributions;
+- **Grids.** W2 computes the 50 distributions as one grid, which shares their size nodes;
   computing them one by one cost about 2.5 times as much on this grid (measured separately, one
   thread, rtol $10^{-3}$).
 - **Reproduce:** `uv run --locked --directory benchmarks python compare.py` (several minutes

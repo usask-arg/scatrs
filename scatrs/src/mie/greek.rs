@@ -28,7 +28,7 @@ pub struct GreekCoefficients<T> {
 }
 
 impl<T: Real> GreekCoefficients<T> {
-    pub(crate) fn zeros(len: usize) -> Self {
+    fn zeros(len: usize) -> Self {
         let z = || vec![T::zero(); len];
         Self {
             alpha1: z(),
@@ -433,6 +433,65 @@ impl<T: Real> MieSolution<'_, T> {
         if normalization == Normalization::Unnormalized {
             let q = self.efficiencies().q_sca;
             g.map(|v| v * q);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The bounds dominate the coefficients of every sign pattern of tables at the bounds.
+    #[test]
+    fn bounds_dominate_signed_tables() {
+        let p = GreekProjector::<f64>::new(12, 20).unwrap();
+        let n = p.nodes().len();
+        let bound: Vec<f64> = (0..n)
+            .map(|k| 1e-3 * (1.0 + (k as f64 * 0.7).sin().abs()))
+            .collect();
+        let b = p
+            .project_bounds(&[PhaseTables {
+                f11: &bound,
+                f12: &bound,
+                f33: &bound,
+                f34: &bound,
+            }])
+            .unwrap()
+            .remove(0);
+        let mut state = 0x9e37_79b9_7f4a_7c15_u64;
+        for _ in 0..50 {
+            let t: [Vec<f64>; 4] = core::array::from_fn(|_| {
+                bound
+                    .iter()
+                    .map(|&x| {
+                        state ^= state << 13;
+                        state ^= state >> 7;
+                        state ^= state << 17;
+                        if state % 2 == 0 { x } else { -x }
+                    })
+                    .collect()
+            });
+            let c = p
+                .project(&[PhaseTables {
+                    f11: &t[0],
+                    f12: &t[1],
+                    f33: &t[2],
+                    f34: &t[3],
+                }])
+                .unwrap()
+                .remove(0);
+            for (x, y) in [
+                (&c.alpha1, &b.alpha1),
+                (&c.alpha2, &b.alpha2),
+                (&c.alpha3, &b.alpha3),
+                (&c.alpha4, &b.alpha4),
+                (&c.beta1, &b.beta1),
+                (&c.beta2, &b.beta2),
+            ] {
+                for l in 0..x.len() {
+                    assert!(x[l].abs() <= y[l] * (1.0 + 1e-12), "order {l}");
+                }
+            }
         }
     }
 }

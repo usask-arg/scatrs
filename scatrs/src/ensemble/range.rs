@@ -10,12 +10,15 @@ pub(crate) const STEP: f64 = 0.5;
 /// At most this many steps on each side: e^(400·½) is far beyond any radius of interest.
 const MAX_STEPS: usize = 400;
 
-/// The moments whose tails bound the range of the Mie integration: the number (every
-/// per-particle average is renormalized over the range, so it moves by the omitted number
-/// fraction) and the area (the extinction of large spheres).
-pub(crate) const MIE_POWERS: &[i32] = &[0, 2];
+/// The moments whose tails bound the range of the Mie integration: the area (the extinction
+/// of large spheres; the cross sections of small spheres fall faster than r², so the area tail
+/// bounds them below). The averages are normalized by the number integral of the moment
+/// integration, whose range bounds the number tail, so the tiny spheres of a long number tail
+/// need no Mie solutions.
+pub(crate) const MIE_POWERS: &[i32] = &[2];
 
-/// The moments whose tails bound the range of the moment integration: also the volume.
+/// The moments whose tails bound the range of the moment integration (and of the
+/// normalization): the number, the area and the volume.
 pub(crate) const MOMENT_POWERS: &[i32] = &[0, 2, 3];
 
 /// The masses ∫ rᵏ u dr, k in `powers`, over [t₀, t₁] in t = ln r (dr = r dt).
@@ -32,7 +35,8 @@ fn masses(d: &Density<'_>, t0: f64, t1: f64, powers: &[i32]) -> Vec<f64> {
 }
 
 /// The range [r_lo, r_hi] outside which each tail holds at most `eps` of each moment rᵏ, k in
-/// `powers`: from `center`, steps of `STEP` in ln r outward, until for each moment the last
+/// `powers`: from `center`, steps of `STEP` in ln r (or half the peak's width, if narrower)
+/// outward, until for each moment the last
 /// step's mass, with the geometric bound q/(1 − q) on the rest (q the ratio of the last two
 /// steps), is below `eps` of the mass found so far.
 ///
@@ -47,18 +51,19 @@ pub(crate) fn cutoffs(
     powers: &[i32],
 ) -> Result<(f64, f64)> {
     let t0 = center.ln();
+    let step = d.max_step(STEP);
     let np = powers.len();
     let mut total = vec![0.0; np];
     let mut ends = [t0, t0];
     let mut last = [vec![f64::INFINITY; np], vec![f64::INFINITY; np]];
     let mut done = [false; 2];
-    for step in 0..MAX_STEPS {
+    for i in 0..MAX_STEPS {
         for (side, sign) in [(0usize, -1.0f64), (1, 1.0)] {
             if done[side] {
                 continue;
             }
             let a = ends[side];
-            let b = a + sign * STEP;
+            let b = a + sign * step;
             let mass = masses(d, a.min(b), a.max(b), powers);
             if mass.iter().any(|m| !m.is_finite()) {
                 return Err(Error::InvalidInput(format!(
@@ -67,7 +72,7 @@ pub(crate) fn cutoffs(
                 )));
             }
             ends[side] = b;
-            let mut small = step >= 1;
+            let mut small = i >= 1;
             for k in 0..np {
                 total[k] += mass[k];
                 let q = mass[k] / last[side][k];
@@ -83,7 +88,7 @@ pub(crate) fn cutoffs(
     }
     Err(Error::InvalidInput(format!(
         "the size distribution is too broad: its tails do not decay within e^{} of r = {center:e}",
-        MAX_STEPS as f64 * STEP
+        MAX_STEPS as f64 * step
     )))
 }
 

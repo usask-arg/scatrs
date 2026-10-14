@@ -303,12 +303,40 @@ impl SizeDistribution {
             Self::ModifiedGamma { alpha, b, gamma } => {
                 (alpha.max(1.0) / (b * gamma)).powf(1.0 / gamma)
             }
-            Self::PowerLaw { min_radius, .. } => min_radius,
+            // The density's largest value is at one of the limits.
+            Self::PowerLaw {
+                exponent,
+                min_radius,
+                max_radius,
+            } => {
+                if exponent >= 0.0 {
+                    min_radius
+                } else {
+                    max_radius
+                }
+            }
             _ => 1.0,
+        };
+        // The width of the peak in ln r: steps and panels must not skip over a narrow one.
+        let log_width = match *self {
+            Self::LogNormal { width, .. } => width.ln(),
+            Self::Gamma {
+                effective_variance: b,
+                ..
+            } => (b / (1.0 - 2.0 * b)).sqrt(),
+            Self::ModifiedGamma { alpha, gamma, .. } => {
+                if alpha > 0.0 {
+                    1.0 / (alpha * gamma).sqrt()
+                } else {
+                    1.0 / gamma
+                }
+            }
+            _ => f64::INFINITY,
         };
         Density {
             dist: self,
             reference,
+            log_width,
         }
     }
 }
@@ -320,6 +348,16 @@ pub(crate) struct Density<'a> {
     /// The radius where the density is scaled to about 1 (and the start of the cut-off
     /// search).
     pub(crate) reference: f64,
+    /// The width of the density's peak in ln r (∞ for finite support).
+    pub(crate) log_width: f64,
+}
+
+impl Density<'_> {
+    /// The largest step in ln r that samples the peak: ½ (`range::STEP`), or half the peak's
+    /// width.
+    pub(crate) fn max_step(&self, step: f64) -> f64 {
+        step.min(0.5 * self.log_width)
+    }
 }
 
 impl Density<'_> {
@@ -368,7 +406,7 @@ impl Density<'_> {
                     grad.iter_mut().for_each(|g| *g = 0.0);
                     return 0.0;
                 }
-                let l = (r / min_radius).ln();
+                let l = (r / r0).ln();
                 (-exponent * l, [-l, 0.0, 0.0])
             }
             SizeDistribution::Monodisperse { .. } => (0.0, [0.0; 3]),
@@ -475,6 +513,7 @@ mod tests {
                         let dens = Density {
                             dist: &other,
                             reference: d.reference,
+                            log_width: d.log_width,
                         };
                         dens.eval(r, &mut vec![0.0; names.len()])
                     };

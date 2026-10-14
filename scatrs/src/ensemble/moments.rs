@@ -4,18 +4,25 @@
 use super::distribution::SizeDistribution;
 use super::kronrod;
 use super::range::STEP;
+use crate::{Error, Result};
 
 /// At most this many panels; far more than smooth densities need.
 const MAX_PANELS: usize = 100_000;
 
 /// ⟨r²⟩ and ⟨r³⟩ with their error estimates, and their derivatives (one per requested
-/// distribution parameter) with error estimates.
+/// distribution parameter) with error estimates; and the normalization Z = ∫u dr of the
+/// unnormalized density over the whole range (number tails included), with its error estimate
+/// and derivatives, which normalizes the Mie averages too.
 #[derive(Clone, Debug)]
 pub(crate) struct Moments {
     pub(crate) v: [f64; 2],
     pub(crate) e: [f64; 2],
     pub(crate) d: Vec<[f64; 2]>,
     pub(crate) de: Vec<[f64; 2]>,
+    pub(crate) z: f64,
+    pub(crate) ez: f64,
+    pub(crate) dz: Vec<f64>,
+    pub(crate) dez: Vec<f64>,
 }
 
 /// The Kronrod sums of [1, r², r³] and of their ∂u/∂θ-weighted forms (θ in `theta`, indices
@@ -48,6 +55,10 @@ fn panel(dist: &SizeDistribution, theta: &[usize], a: f64, b: f64) -> [Vec<f64>;
 
 /// The moments over [lo, hi] (with `breaks` as panel edges), refined until every sum meets
 /// `rtol`; `truncation`·|value| is added to each estimate for the omitted tails.
+///
+/// # Errors
+///
+/// [`Error::InvalidInput`] if the density has no finite, positive mass on the range.
 pub(crate) fn moments(
     dist: &SizeDistribution,
     theta: &[usize],
@@ -55,7 +66,8 @@ pub(crate) fn moments(
     breaks: &[f64],
     rtol: f64,
     truncation: f64,
-) -> Moments {
+) -> Result<Moments> {
+    let step = dist.prepare().max_step(STEP);
     let (t_lo, t_hi) = (lo.ln(), hi.ln());
     let mut edges = vec![t_lo];
     edges.extend(
@@ -67,7 +79,7 @@ pub(crate) fn moments(
     edges.push(t_hi);
     let mut panels: Vec<(f64, f64)> = Vec::new();
     for w in edges.windows(2) {
-        let n = ((w[1] - w[0]) / STEP).ceil().max(1.0) as usize;
+        let n = ((w[1] - w[0]) / step).ceil().max(1.0) as usize;
         let h = (w[1] - w[0]) / n as f64;
         panels.extend((0..n).map(|i| (w[0] + i as f64 * h, w[0] + (i + 1) as f64 * h)));
     }
@@ -115,8 +127,13 @@ pub(crate) fn moments(
 }
 
 /// ⟨r^k⟩ = S_k/S₀ with the quotient rule and first-order error propagation.
-fn averages(s: &[f64], e: &[f64], nt: usize, truncation: f64) -> Moments {
+fn averages(s: &[f64], e: &[f64], nt: usize, truncation: f64) -> Result<Moments> {
     let (z, ez) = (s[0], e[0]);
+    if !(z.is_finite() && z > 0.0) {
+        return Err(Error::InvalidInput(format!(
+            "the size distribution has no finite positive mass on its range (got {z:e})"
+        )));
+    }
     let v = [s[1] / z, s[2] / z];
     let ev = [
         (e[1] + v[0].abs() * ez) / z + truncation * v[0].abs(),
@@ -135,7 +152,18 @@ fn averages(s: &[f64], e: &[f64], nt: usize, truncation: f64) -> Moments {
         d.push(dv);
         de.push(dev);
     }
-    Moments { v, e: ev, d, de }
+    let dz = (0..nt).map(|b| s[3 * (1 + b)]).collect();
+    let dez = (0..nt).map(|b| e[3 * (1 + b)]).collect();
+    Ok(Moments {
+        v,
+        e: ev,
+        d,
+        de,
+        z,
+        ez,
+        dz,
+        dez,
+    })
 }
 
 #[cfg(test)]
@@ -181,7 +209,7 @@ mod tests {
                         cutoffs(&d, d.reference, rtol / 10.0, MOMENT_POWERS).unwrap()
                     }
                 };
-                let m = moments(&dist, &[], range, &[], rtol, 0.2 * rtol);
+                let m = moments(&dist, &[], range, &[], rtol, 0.2 * rtol).unwrap();
                 for (k, (&got, &est)) in m.v.iter().zip(&m.e).enumerate() {
                     let want = dist.moment(2 + k as u32).unwrap();
                     let err = (got - want).abs();

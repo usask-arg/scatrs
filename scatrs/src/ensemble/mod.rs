@@ -3,10 +3,11 @@
 //!
 //! [`compute`] averages the optical properties of spheres over a [`SizeDistribution`] at each
 //! wavelength; [`compute_mixture`] averages over several [`Component`]s. The size integral is
-//! adaptive (Gauss–Kronrod panels in ln r, refined until the cross sections, g and the
-//! distribution moments meet `rtol`), and every output comes with an error estimate and,
-//! on request, derivatives with respect to the distribution parameters, the refractive
-//! indices and the mixture weights. See the theory chapter of the documentation.
+//! adaptive (Gauss–Kronrod panels in ln r, refined until the cross sections and g meet `rtol`;
+//! the distribution's moments and normalization are integrated separately), and every output
+//! comes with an error estimate and, on request, derivatives with respect to the distribution
+//! parameters, the refractive indices and the mixture weights. See the theory chapter of the
+//! documentation.
 //!
 //! ```
 //! use num_complex::Complex;
@@ -369,6 +370,10 @@ pub struct EnsembleResult {
     pub ranges: Vec<(f64, f64)>,
 }
 
+/// The highest [`EnsembleOptions::refine_order`]: pass 1 integrates 6·(L + 1) Greek
+/// coefficients at every size node, for every requested parameter.
+pub const MAX_REFINE_ORDER: usize = 1024;
+
 fn invalid(msg: String) -> Error {
     Error::InvalidInput(msg)
 }
@@ -439,12 +444,15 @@ fn validate(
         Some(GreekOrder::Order(l)) => Some(l),
         _ => None,
     };
-    for order in [options.refine_order, greek_order].into_iter().flatten() {
-        if order > MAX_GREEK_ORDER {
-            return Err(invalid(format!(
-                "the Greek order must be at most {MAX_GREEK_ORDER}, got {order}"
-            )));
-        }
+    if let Some(l) = greek_order.filter(|&l| l > MAX_GREEK_ORDER) {
+        return Err(invalid(format!(
+            "the Greek order must be at most {MAX_GREEK_ORDER}, got {l}"
+        )));
+    }
+    if let Some(l) = options.refine_order.filter(|&l| l > MAX_REFINE_ORDER) {
+        return Err(invalid(format!(
+            "refine_order must be at most {MAX_REFINE_ORDER}, got {l}"
+        )));
     }
     if let Some((j, v)) = options
         .mu
@@ -491,16 +499,32 @@ fn validate(
                 c.weight
             )));
         }
+        if let SizeDistribution::MultiModal { modes } = &c.distribution {
+            let sum: f64 = modes.iter().map(|(w, _)| w).sum();
+            if !sum.is_finite() {
+                return Err(invalid(format!(
+                    "component {i}: the mode weights must have a finite sum"
+                )));
+            }
+        }
         total += c.weight;
     }
-    if total <= 0.0 {
-        return Err(invalid("the mixture weights must not all be 0".into()));
+    if !(total.is_finite() && total > 0.0) {
+        return Err(invalid(format!(
+            "the mixture weights must have a finite, positive sum, got {total}"
+        )));
     }
     let mixture = components.len() > 1
         || allowed
             .iter()
             .any(|p| p.kind == ParamKind::Weight && p.mode.is_none());
-    for p in &options.derivatives {
+    for (k, p) in options.derivatives.iter().enumerate() {
+        if options.derivatives[..k].contains(p) {
+            return Err(invalid(format!(
+                "parameter {} requested twice",
+                p.name(mixture)
+            )));
+        }
         if !allowed.contains(p) {
             return Err(invalid(format!(
                 "no parameter {} here; the parameters are {:?}",

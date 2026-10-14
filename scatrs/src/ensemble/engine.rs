@@ -16,8 +16,8 @@ use super::{
     kronrod,
 };
 use crate::mie::{
-    GreekCoefficients, GreekProjector, Mie, MieOptions, MieSolution, Normalization, PhaseBuffers,
-    PhaseTables, n_terms,
+    GreekCoefficients, GreekProjector, MAX_SIZE_PARAMETER, Mie, MieOptions, MieSolution,
+    Normalization, PhaseBuffers, PhaseTables, n_terms,
 };
 use crate::{Error, Result};
 
@@ -36,12 +36,15 @@ const R2: usize = 6;
 const R3: usize = 7;
 const SCALARS: usize = 8;
 
-/// Pass 1 integrates the per-sphere quantities 1, C_ext, C_sca, C_sca·g and C_back (the first
-/// four at the indices of the flat layout, C_back at 4), then the optional Greek coefficients
-/// (each πr²·α, 6 arrays of `refine_order` + 1) and the refractive-index derivatives (four per
-/// part of m), and refines on all of them but C_back and its derivatives unless
+/// Pass 1 integrates the per-sphere quantities 1, C_ext, C_sca, C_sca·g, C_back and C_abs (the
+/// first four at the indices of the flat layout, C_back at `P1_BACK`, C_abs at 5), then the
+/// optional Greek coefficients (each πr²·α, 6 arrays of `refine_order` + 1) and the
+/// refractive-index derivatives (`M_GROUP` per part of m: C_ext, C_sca, C_sca·g, C_back,
+/// C_abs), and refines on all of them but C_back and its derivatives unless
 /// `refine_backscatter`. The moments r² and r³ come from their own integration (`moments`).
-const N_BASE: usize = 5;
+const N_BASE: usize = 6;
+const P1_BACK: usize = 4;
+const M_GROUP: usize = 5;
 
 /// Panels of pass 2 per parallel task; fixed, so the order of the sums never depends on the
 /// thread count.
@@ -95,6 +98,13 @@ fn context(e: Error, lambda: f64, r: f64) -> Error {
     }
 }
 
+fn component_context(e: Error, component: usize) -> Error {
+    match e {
+        Error::InvalidInput(s) => Error::InvalidInput(format!("component {component}: {s}")),
+        other => other,
+    }
+}
+
 /// Splits the components into parts and maps the requested parameters onto them.
 fn parts<'a>(
     components: &'a [Component],
@@ -140,12 +150,17 @@ fn parts<'a>(
                 Support::Unbounded(center) => {
                     let d = dist.prepare();
                     let mie = range::cutoffs(&d, center, rtol / 10.0, MIE_POWERS)?;
-                    let wide = range::cutoffs(&d, center, rtol / 10.0, MOMENT_POWERS)?;
-                    let m = moments(dist, &gradient, wide, breaks, rtol, 0.2 * rtol);
+                    // No Mie solutions here, so a far smaller tail: the derivatives weight
+                    // the tails by (∂ ln u/∂θ)², about z², 30 at five standard deviations.
+                    let eps = (1e-3 * rtol).max(1e-16);
+                    let wide = range::cutoffs(&d, center, eps, MOMENT_POWERS)?;
+                    let m = moments(dist, &gradient, wide, breaks, rtol, 0.2 * rtol)
+                        .map_err(|e| component_context(e, ci))?;
                     (mie, Some(m))
                 }
                 Support::Finite(lo, hi) => {
-                    let m = moments(dist, &gradient, (lo, hi), breaks, rtol, 0.0);
+                    let m = moments(dist, &gradient, (lo, hi), breaks, rtol, 0.0)
+                        .map_err(|e| component_context(e, ci))?;
                     ((lo, hi), Some(m))
                 }
                 Support::Point(r) => ((r, r), None),
@@ -189,9 +204,18 @@ fn size(r: f64, lambda: f64) -> f64 {
     2.0 * PI * r / lambda
 }
 
-/// The initial panels of [t_lo, t_hi] (t = ln r): at most `STEP` wide and at most `MAX_DX` in
-/// size parameter, with the radii of `breaks` (inside the range) as edges.
-fn initial_panels(t_lo: f64, t_hi: f64, lambda: f64, breaks: &[f64]) -> Vec<(f64, f64)> {
+/// The initial panels of [t_lo, t_hi] (t = ln r): at most `max_step` wide and at most `MAX_DX`
+/// in size parameter, with the radii of `breaks` (inside the range) as edges; if that would
+/// take more than `budget` panels, equal panels between the edges, at least one per interval,
+/// about `budget` in all.
+fn initial_panels(
+    t_lo: f64,
+    t_hi: f64,
+    lambda: f64,
+    breaks: &[f64],
+    max_step: f64,
+    budget: usize,
+) -> Vec<(f64, f64)> {
     let mut edges = vec![t_lo];
     edges.extend(
         breaks
@@ -205,16 +229,32 @@ fn initial_panels(t_lo: f64, t_hi: f64, lambda: f64, breaks: &[f64]) -> Vec<(f64
         let (mut a, b) = (w[0], w[1]);
         while a < b {
             let x = size(a.exp(), lambda);
-            let step = STEP.min((1.0 + MAX_DX / x).ln());
+            let step = max_step.min((1.0 + MAX_DX / x).ln());
             // Equal panels up to b rather than a short last one.
             let n = ((b - a) / step).ceil().max(1.0);
             let h = (b - a) / n;
-            let next = if n <= 1.0 { b } else { a + h };
+            let next = if n <= 1.0 || a + h <= a { b } else { a + h };
             out.push((a, next));
             a = next;
+            if out.len() > budget {
+                break;
+            }
+        }
+        if out.len() > budget {
+            break;
         }
     }
-    out
+    if out.len() <= budget {
+        return out;
+    }
+    let width = t_hi - t_lo;
+    let mut equal = Vec::new();
+    for w in edges.windows(2) {
+        let n = ((w[1] - w[0]) / width * budget as f64).floor().max(1.0) as usize;
+        let h = (w[1] - w[0]) / n as f64;
+        equal.extend((0..n).map(|i| (w[0] + i as f64 * h, w[0] + (i + 1) as f64 * h)));
+    }
+    equal
 }
 
 /// Pass-1 sums of one panel.
@@ -230,8 +270,9 @@ struct Sums1 {
     absv: Vec<f64>,
     /// The largest number of terms at the nodes.
     n_terms: usize,
-    /// u·r·C_ext at the first and the last node (the integrand per unit ln r).
-    edge: [f64; 2],
+    /// The integrands per unit ln r of every quantity (and θ block) at the first and the last
+    /// node.
+    edge: [Vec<f64>; 2],
 }
 
 /// The pass-1 quantities at radius r: 1, C_ext, C_sca, C_sca·g, C_back, then the Greek
@@ -262,6 +303,7 @@ fn quantities1(
         area * q.q_sca,
         area * q.q_sca * q.g,
         area * q.q_back,
+        area * q.q_abs,
     ];
     if let Some(order) = refine_order {
         let g = s
@@ -281,6 +323,7 @@ fn quantities1(
                     area * d.q_sca,
                     area * (d.q_sca * q.g + q.q_sca * d.g),
                     area * d.q_back,
+                    area * d.q_abs,
                 ]);
             }
         }
@@ -288,11 +331,11 @@ fn quantities1(
     Ok((out, s.n_terms()))
 }
 
-/// The number of pass-1 quantities: the base ones, the Greek coefficients, and four
+/// The number of pass-1 quantities: the base ones, the Greek coefficients, and `M_GROUP`
 /// derivatives per requested refractive-index part.
 fn n_refined(refine_order: Option<usize>, part: &Part<'_>) -> usize {
     let md = part.m_cols.iter().filter(|c| c.is_some()).count();
-    N_BASE + refine_order.map_or(0, |l| 6 * (l + 1)) + 4 * md
+    N_BASE + refine_order.map_or(0, |l| 6 * (l + 1)) + M_GROUP * md
 }
 
 /// Evaluates one panel in pass 1.
@@ -317,7 +360,10 @@ fn panel1(
     let mut absv = vec![0.0; n_refined];
     let m_derivatives = [part.m_cols[0].is_some(), part.m_cols[1].is_some()];
     let mut n_max = 0;
-    let mut edge = [0.0; 2];
+    let mut edge = [
+        vec![0.0; (1 + nt) * n_refined],
+        vec![0.0; (1 + nt) * n_refined],
+    ];
     let nodes = kronrod::panel(a, b);
     for (i, &(t, wk, wg)) in nodes.iter().enumerate() {
         let r = t.exp();
@@ -325,22 +371,29 @@ fn panel1(
         let (q, n) = quantities1(mie, r, lambda, m, opts, refine_order, m_derivatives)?;
         n_max = n_max.max(n);
         let base = u * r;
-        if i == 0 {
-            edge[0] = base * q[EXT];
-        }
-        if i == nodes.len() - 1 {
-            edge[1] = base * q[EXT];
-        }
+        let end = if i == 0 {
+            Some(0)
+        } else if i == nodes.len() - 1 {
+            Some(1)
+        } else {
+            None
+        };
         for (j, &qj) in q.iter().enumerate() {
             k[j] += wk * base * qj;
             g[j] += wg * base * qj;
             absv[j] += wk * (base * qj).abs();
+            if let Some(e) = end {
+                edge[e][j] = base * qj;
+            }
             for (b_idx, &(_, gi)) in part.theta.iter().enumerate() {
                 let dw = grad[gi] * r;
                 let o = (1 + b_idx) * n_refined + j;
                 k[o] += wk * dw * qj;
                 g[o] += wg * dw * qj;
                 abs[b_idx * n_refined + j] += wk * (dw * qj).abs();
+                if let Some(e) = end {
+                    edge[e][o] = dw * qj;
+                }
             }
         }
     }
@@ -374,7 +427,8 @@ fn evaluate(
     refine_order: Option<usize>,
     n_refined: usize,
 ) -> Result<()> {
-    panels
+    // Every panel, then the first error in order: an error must not depend on the threads.
+    let results: Vec<Result<()>> = panels
         .par_iter_mut()
         .filter(|(_, s)| s.is_none())
         .map_init(Mie::<f64>::new, |mie, (ab, s)| {
@@ -390,8 +444,8 @@ fn evaluate(
             )?);
             Ok(())
         })
-        .collect::<Result<Vec<()>>>()?;
-    Ok(())
+        .collect();
+    results.into_iter().collect()
 }
 
 /// Pass 1: the adaptive panels of one part at one wavelength.
@@ -412,18 +466,29 @@ fn pass1(
         _ => &[],
     };
     let (mut t_lo, mut t_hi) = (part.cutoffs.0.ln(), part.cutoffs.1.ln());
-    let extendable = matches!(part.support, Support::Unbounded(_));
-    let mut initial = initial_panels(t_lo, t_hi, lambda, breaks);
-    if initial.len() > options.max_panels {
-        // Within the budget: equal panels in ln r.
-        let n = options.max_panels;
-        let h = (t_hi - t_lo) / n as f64;
-        initial = (0..n)
-            .map(|i| (t_lo + i as f64 * h, t_lo + (i + 1) as f64 * h))
-            .collect();
+    // Before any panel: a range whose largest size parameter no Mie solution accepts.
+    let x_hi = size(part.cutoffs.1, lambda);
+    if x_hi > MAX_SIZE_PARAMETER {
+        return Err(context(
+            Error::InvalidInput(format!(
+                "the integration range reaches size parameter {x_hi:e}, above the accepted \
+                 {MAX_SIZE_PARAMETER:e}"
+            )),
+            lambda,
+            part.cutoffs.1,
+        ));
     }
+    let extendable = matches!(part.support, Support::Unbounded(_));
+    let density = part.dist.prepare();
+    let max_step = density.max_step(STEP);
+    // Extensions of the range: `STEP`, or the peak's width for narrower peaks, whose tails fall
+    // off over that width.
+    let ext = STEP.min(density.log_width);
     let mut panels: Vec<((f64, f64), Option<Sums1>)> =
-        initial.into_iter().map(|p| (p, None)).collect();
+        initial_panels(t_lo, t_hi, lambda, breaks, max_step, options.max_panels)
+            .into_iter()
+            .map(|p| (p, None))
+            .collect();
     let mut extensions = [0usize; 2];
     loop {
         evaluate(
@@ -451,7 +516,7 @@ fn pass1(
                 // As for single spheres (`MieOutput::Backscattering`): relative to the larger
                 // of ⟨C_back⟩ and ⟨C_sca⟩, since backscattering by large weakly absorbing
                 // spheres is a sum of narrow glory ripples orders of magnitude below C_sca.
-                4 => total(4).abs().max(c_sca),
+                P1_BACK => total(P1_BACK).abs().max(c_sca),
                 // The refractive-index derivatives can cancel: their absolute integrands.
                 j if j >= n_greek => sums.iter().map(|s| s.absv[j]).sum::<f64>(),
                 j if j >= N_BASE => c_sca,
@@ -463,12 +528,19 @@ fn pass1(
                 target[(1 + b) * n_refined + j] = rtol * abs;
             }
         }
+        // ∫∂u/∂θ·∂C/∂m is no output: no targets for the refractive-index derivatives in the θ
+        // blocks.
+        for b in 1..=nt {
+            for j in n_greek..n_refined {
+                target[b * n_refined + j] = f64::INFINITY;
+            }
+        }
         if !options.refine_backscatter {
-            // C_back and its derivatives (every fourth refractive-index derivative) are only
+            // C_back and its derivatives (the fourth of each refractive-index group) are only
             // integrated.
             for b in 0..=nt {
-                target[b * n_refined + 4] = f64::INFINITY;
-                for j in (n_greek + 3..n_refined).step_by(4) {
+                target[b * n_refined + P1_BACK] = f64::INFINITY;
+                for j in (n_greek + 3..n_refined).step_by(M_GROUP) {
                     target[b * n_refined + j] = f64::INFINITY;
                 }
             }
@@ -476,24 +548,57 @@ fn pass1(
         let errors: Vec<f64> = (0..target.len()).map(err).collect();
         let met = errors.iter().zip(&target).all(|(e, t)| e <= t);
         if met {
-            // Extend the range where the extinction integrand is not negligible at an end.
-            let ext = total(EXT);
-            let first = sums.first().expect("a panel").edge[0];
-            let last = sums.last().expect("a panel").edge[1];
-            let small = |density: f64| density * STEP <= 0.1 * rtol * ext.abs();
+            // Extend the range where an integrand is not negligible at an end: above a tenth
+            // of its target per unit ln r, or per `ext / STEP` units for narrow peaks (the cross
+            // sections of small absorbing spheres and the derivatives can have heavier tails
+            // than the area the cut-offs bound).
+            // The derivative integrals cancel (∂u/∂θ changes sign) while their tails carry
+            // the extra weight of ∂ ln u/∂θ: their ends are compared with the derivative's own
+            // size, floored at 10⁻³ of the absolute integral.
+            let end_target: Vec<f64> = (0..target.len())
+                .map(|o| {
+                    if o < n_refined || target[o].is_infinite() {
+                        target[o]
+                    } else {
+                        let (b, j) = (o / n_refined - 1, o % n_refined);
+                        let abs: f64 = sums.iter().map(|s| s.abs[b * n_refined + j]).sum();
+                        rtol * total(o).abs().max(1e-3 * abs)
+                    }
+                })
+                .collect();
+            let small = |density: &Vec<f64>| {
+                density
+                    .iter()
+                    .zip(&end_target)
+                    .all(|(d, t)| d.abs() * (ext / STEP) <= 0.1 * t)
+            };
+            let small_first = small(&sums.first().expect("a panel").edge[0]);
+            let small_last = small(&sums.last().expect("a panel").edge[1]);
             let mut extended = false;
-            if extendable && !small(first) && extensions[0] < MAX_EXTENSIONS {
-                let fresh = initial_panels(t_lo - STEP, t_lo, lambda, &[]);
-                t_lo -= STEP;
+            let wants = [
+                extendable && !small_first && extensions[0] < MAX_EXTENSIONS,
+                extendable && !small_last && extensions[1] < MAX_EXTENSIONS,
+            ];
+            if wants[0] {
+                let fresh =
+                    initial_panels(t_lo - ext, t_lo, lambda, &[], max_step, options.max_panels);
+                if panels.len() + fresh.len() > options.max_panels {
+                    return Ok(finish(panels, false, (t_lo, t_hi)));
+                }
+                t_lo -= ext;
                 extensions[0] += 1;
                 let mut new: Vec<_> = fresh.into_iter().map(|p| (p, None)).collect();
                 new.append(&mut panels);
                 panels = new;
                 extended = true;
             }
-            if extendable && !small(last) && extensions[1] < MAX_EXTENSIONS {
-                let fresh = initial_panels(t_hi, t_hi + STEP, lambda, &[]);
-                t_hi += STEP;
+            if wants[1] {
+                let fresh =
+                    initial_panels(t_hi, t_hi + ext, lambda, &[], max_step, options.max_panels);
+                if panels.len() + fresh.len() > options.max_panels {
+                    return Ok(finish(panels, false, (t_lo, t_hi)));
+                }
+                t_hi += ext;
                 extensions[1] += 1;
                 panels.extend(fresh.into_iter().map(|p| (p, None)));
                 extended = true;
@@ -560,17 +665,29 @@ fn finish(panels: Vec<((f64, f64), Option<Sums1>)>, converged: bool, t: (f64, f6
     }
 }
 
-/// Greek-coefficient projection groups the size nodes into bands by their number of terms N,
-/// each band with its own exact projector (n_q = N_band + ⌈(L + 1)/2⌉, N_band the band's
-/// largest N): a sphere's amplitudes then cost O(N·(N_band + L)) rather than O(N·N_max), which
-/// matters for broad distributions. The band of N is the first `bucket` value ≥ N, in a
-/// sequence that grows by a factor of 1.25.
+/// Greek-coefficient projection groups the size panels into bands by their largest number of
+/// terms N (`panel_terms`), each band with its own exact projector: orders up to
+/// L_b = min(L, 2·N_band), where a sphere's coefficients vanish, on n_q = N_band + ⌈(L_b + 1)/2⌉
+/// nodes, N_band the band's largest N. A sphere's amplitudes then cost O(N·(N_band + L_b))
+/// rather than O(N·N_max), which matters for broad distributions. The band of N is the first
+/// `bucket` value ≥ N, in a sequence that grows by a factor of 1.25.
 fn bucket(n: usize) -> usize {
     let mut u = 1usize;
     while u < n {
         u = (u as f64 * 1.25).ceil() as usize;
     }
     u
+}
+
+/// The largest number of terms at the nodes of the panel [a, b] (t = ln r), which chooses the
+/// panel's band.
+fn panel_terms(a: f64, b: f64, lambda: f64, m: Complex<f64>, opts: &MieOptions) -> Result<usize> {
+    let mut most = 0;
+    for &(t, _, _) in &kronrod::panel(a, b) {
+        let r = t.exp();
+        most = most.max(n_terms(size(r, lambda), m, opts).map_err(|e| context(e, lambda, r))?);
+    }
+    Ok(most)
 }
 
 /// One band: its largest number of terms, the start of its tables in the flat layout, and
@@ -616,6 +733,7 @@ fn quantities2(
     g: &mut [f64],
     mut dm: Option<[&mut [f64]; 2]>,
     dr: Option<&mut [f64]>,
+    band_terms: usize,
 ) -> Result<Option<(usize, usize)>> {
     let x = size(r, lambda);
     let derivatives = dm.is_some() || dr.is_some();
@@ -637,12 +755,14 @@ fn quantities2(
         r * r,
         r * r * r,
     ]);
-    let band = layout
-        .band(s.n_terms())
-        .map(|b| (b.start, b.projector.nodes()));
+    // The band of the panel (its largest number of terms), so that every node of a panel
+    // fills the same tables: per-node bands would make each band's table a step function
+    // within the panel, and its Kronrod–Gauss difference a measure of the step.
+    let n = band_terms.max(s.n_terms());
+    let band = layout.band(n).map(|b| (b.start, b.projector.nodes()));
     if !layout.bands.is_empty() && band.is_none() {
         return Err(context(
-            Error::InvalidInput(format!("no projector band for {} terms", s.n_terms())),
+            Error::InvalidInput(format!("no projector band for {n} terms")),
             lambda,
             r,
         ));
@@ -807,79 +927,127 @@ fn pass2(
     let nm = if part.m_derivatives() { 2 } else { 0 };
     let blocks = 1 + nt + nm;
     let n_grad = part.dist.parameter_names().len();
-    let chunks: Vec<Result<(Vec<f64>, Vec<f64>)>> = panels
+    // Per-thread scratch: the dense per-panel sums are only touched on the ranges the panel's
+    // nodes fill; each chunk returns its sums of those ranges alone.
+    struct Scratch {
+        mie: Mie<f64>,
+        grad: Vec<f64>,
+        g: Vec<f64>,
+        dmv: Vec<f64>,
+        pk: Vec<f64>,
+        pg: Vec<f64>,
+    }
+    /// A chunk's sums and errors on one range [lo, hi) of the layout, every block.
+    type Segment = ((usize, usize), Vec<f64>, Vec<f64>);
+    let chunks: Vec<Result<Vec<Segment>>> = panels
         .par_chunks(CHUNK)
-        .map(|chunk| {
-            let mut mie = Mie::<f64>::new();
-            let d = part.dist.prepare();
-            let mut grad = vec![0.0; n_grad];
-            let mut sum = vec![0.0; blocks * len];
-            let mut err = vec![0.0; blocks * len];
-            let mut g = vec![0.0; len];
-            let mut dmv = vec![0.0; 2 * len];
-            let (mut pk, mut pg) = (vec![0.0; blocks * len], vec![0.0; blocks * len]);
-            for &(a, b) in chunk {
-                // The ranges of the flat layout this panel touches.
-                let mut ranges = vec![(0, common)];
-                for &(t, wk, wg) in &kronrod::panel(a, b) {
-                    let r = t.exp();
-                    let u = d.eval(r, &mut grad);
-                    let dm = if nm > 0 {
-                        let (re, im) = dmv.split_at_mut(len);
-                        Some([re, im])
+        .map_init(
+            || Scratch {
+                mie: Mie::new(),
+                grad: vec![0.0; n_grad],
+                g: vec![0.0; len],
+                dmv: vec![0.0; 2 * len],
+                pk: vec![0.0; blocks * len],
+                pg: vec![0.0; blocks * len],
+            },
+            |sc, chunk| {
+                let d = part.dist.prepare();
+                let mut segments: Vec<Segment> = Vec::new();
+                for &(a, b) in chunk {
+                    let band_terms = if layout.bands.is_empty() {
+                        0
                     } else {
-                        None
+                        panel_terms(a, b, lambda, m, opts)?
                     };
-                    let segment =
-                        quantities2(&mut mie, r, lambda, m, opts, layout, &mut g, dm, None)?;
-                    if let Some((start, n)) = segment {
-                        if !ranges.contains(&(start, start + n)) {
-                            ranges.push((start, start + n));
+                    let mut ranges = vec![(0, common)];
+                    for &(t, wk, wg) in &kronrod::panel(a, b) {
+                        let r = t.exp();
+                        let u = d.eval(r, &mut sc.grad);
+                        let dm = if nm > 0 {
+                            let (re, im) = sc.dmv.split_at_mut(len);
+                            Some([re, im])
+                        } else {
+                            None
+                        };
+                        let segment = quantities2(
+                            &mut sc.mie,
+                            r,
+                            lambda,
+                            m,
+                            opts,
+                            layout,
+                            &mut sc.g,
+                            dm,
+                            None,
+                            band_terms,
+                        )?;
+                        let band = segment.map(|(s, n)| (s, s + n));
+                        if let Some(range) = band {
+                            if !ranges.contains(&range) {
+                                ranges.push(range);
+                            }
+                        }
+                        let base = u * r;
+                        for (lo, hi) in [Some((0, common)), band].into_iter().flatten() {
+                            for i in lo..hi {
+                                let gi = sc.g[i];
+                                sc.pk[i] += wk * base * gi;
+                                sc.pg[i] += wg * base * gi;
+                                for (bi, &(_, k)) in part.theta.iter().enumerate() {
+                                    let o = (1 + bi) * len + i;
+                                    let dw = sc.grad[k] * r * gi;
+                                    sc.pk[o] += wk * dw;
+                                    sc.pg[o] += wg * dw;
+                                }
+                                for c in 0..nm {
+                                    let o = (1 + nt + c) * len + i;
+                                    let dv = base * sc.dmv[c * len + i];
+                                    sc.pk[o] += wk * dv;
+                                    sc.pg[o] += wg * dv;
+                                }
+                            }
                         }
                     }
-                    let base = u * r;
-                    let node_ranges = [Some((0, common)), segment.map(|(s, n)| (s, s + n))];
-                    for (lo, hi) in node_ranges.into_iter().flatten() {
-                        for i in lo..hi {
-                            let gi = g[i];
-                            pk[i] += wk * base * gi;
-                            pg[i] += wg * base * gi;
-                            for (bi, &(_, k)) in part.theta.iter().enumerate() {
-                                let o = (1 + bi) * len + i;
-                                let dw = grad[k] * r * gi;
-                                pk[o] += wk * dw;
-                                pg[o] += wg * dw;
+                    for &(lo, hi) in &ranges {
+                        let w = hi - lo;
+                        let k = match segments.iter().position(|(rg, _, _)| *rg == (lo, hi)) {
+                            Some(k) => k,
+                            None => {
+                                segments.push((
+                                    (lo, hi),
+                                    vec![0.0; blocks * w],
+                                    vec![0.0; blocks * w],
+                                ));
+                                segments.len() - 1
                             }
-                            for c in 0..nm {
-                                let o = (1 + nt + c) * len + i;
-                                let dv = base * dmv[c * len + i];
-                                pk[o] += wk * dv;
-                                pg[o] += wg * dv;
+                        };
+                        let (_, ssum, serr) = &mut segments[k];
+                        for blk in 0..blocks {
+                            for i in 0..w {
+                                let o = blk * len + lo + i;
+                                ssum[blk * w + i] += sc.pk[o];
+                                serr[blk * w + i] += (sc.pk[o] - sc.pg[o]).abs();
+                                sc.pk[o] = 0.0;
+                                sc.pg[o] = 0.0;
                             }
                         }
                     }
                 }
-                for &(lo, hi) in &ranges {
-                    for blk in 0..blocks {
-                        for i in blk * len + lo..blk * len + hi {
-                            sum[i] += pk[i];
-                            err[i] += (pk[i] - pg[i]).abs();
-                            pk[i] = 0.0;
-                            pg[i] = 0.0;
-                        }
-                    }
-                }
-            }
-            Ok((sum, err))
-        })
+                Ok(segments)
+            },
+        )
         .collect();
     let mut s = vec![0.0; blocks * len];
     let mut err = vec![0.0; blocks * len];
     for c in chunks {
-        let (cs, ce) = c?;
-        for i in 0..blocks * len {
-            s[i] += cs[i];
-            err[i] += ce[i];
+        for ((lo, hi), cs, ce) in c? {
+            let w = hi - lo;
+            for blk in 0..blocks {
+                for i in 0..w {
+                    s[blk * len + lo + i] += cs[blk * w + i];
+                    err[blk * len + lo + i] += ce[blk * w + i];
+                }
+            }
         }
     }
     Ok(Sums2 { s, err, blocks })
@@ -893,17 +1061,18 @@ struct PartAverages {
     d: Vec<(usize, Vec<f64>, Vec<f64>)>,
 }
 
-/// Number averages from the pass-2 integrals: E = S/S[ONE], with the quotient rule for the
-/// θ blocks (the renormalization) and first-order error propagation. Each error estimate also
-/// includes `truncation`·|value| for the cut-offs: they omit at most rtol/10 of the number,
-/// area and volume moments (and the range is extended until the extinction integrand is as
-/// small at both ends), which moves an average by at most about twice that.
+/// Number averages from the pass-2 integrals: E = S/Z, with Z = ∫u dr from the moment
+/// integration (whose range bounds the number tails), the quotient rule for the θ blocks (the
+/// renormalization) and first-order error propagation. Each error estimate also includes
+/// `truncation`·|value| for the cut-offs: the Mie range omits at most rtol/10 of the area (and
+/// is extended until every refined integrand is small at both ends), which moves an average by
+/// at most about twice that.
 fn averages(part: &Part<'_>, sums: &Sums2, len: usize, truncation: f64) -> PartAverages {
     let block = |b: usize| &sums.s[b * len..(b + 1) * len];
     let eblock = |b: usize| &sums.err[b * len..(b + 1) * len];
     let (s0, e0) = (block(0), eblock(0));
-    let z = s0[ONE];
-    let ez = e0[ONE];
+    let mom = part.moments.as_ref().expect("an integrated part");
+    let (z, ez) = (mom.z, mom.ez);
     let v: Vec<f64> = s0.iter().map(|x| x / z).collect();
     let e: Vec<f64> = (0..len)
         .map(|i| (e0[i] + v[i].abs() * ez) / z + truncation * v[i].abs())
@@ -911,11 +1080,11 @@ fn averages(part: &Part<'_>, sums: &Sums2, len: usize, truncation: f64) -> PartA
     let mut d = Vec::new();
     for (bi, &(col, _)) in part.theta.iter().enumerate() {
         let (sb, eb) = (block(1 + bi), eblock(1 + bi));
-        let dz = sb[ONE];
+        let (dz, edz) = (mom.dz[bi], mom.dez[bi]);
         let dv: Vec<f64> = (0..len).map(|i| (sb[i] - v[i] * dz) / z).collect();
         let de: Vec<f64> = (0..len)
             .map(|i| {
-                (eb[i] + v[i].abs() * eb[ONE] + dv[i].abs() * ez + e[i] * dz.abs()) / z
+                (eb[i] + v[i].abs() * edz + dv[i].abs() * ez + e[i] * dz.abs()) / z
                     + truncation * dv[i].abs()
             })
             .collect();
@@ -981,7 +1150,8 @@ fn monodisperse(
             None
         };
         let dr = radius_col.map(|_| drv.as_mut_slice());
-        quantities2(&mut mie, r, lambda, m, opts, layout, &mut g, dm, dr)?;
+        let n = n_terms(size(r, lambda), m, opts).map_err(|e| context(e, lambda, r))?;
+        quantities2(&mut mie, r, lambda, m, opts, layout, &mut g, dm, dr, n)?;
     }
     let zeros = vec![0.0; len];
     let mut d = Vec::new();
@@ -1042,12 +1212,7 @@ fn wavelength(
                 continue;
             }
             for &(a, b) in &p1.panels {
-                for &(t, _, _) in &kronrod::panel(a, b) {
-                    let r = t.exp();
-                    let n = n_terms(size(r, lambda), m, &mie_opts)
-                        .map_err(|e| context(e, lambda, r))?;
-                    uppers.insert(bucket(n));
-                }
+                uppers.insert(bucket(panel_terms(a, b, lambda, m, &mie_opts)?));
             }
         }
     }
@@ -1160,7 +1325,9 @@ fn wavelength(
 /// Every output as a [`Lin`].
 struct LinOutputs {
     scalars: [Lin; 11],
-    greek: Option<[Vec<Lin>; 6]>,
+    /// The Greek coefficients up to the largest band's order (zero above it), and the
+    /// requested order, to which `pick` pads them with zeros.
+    greek: Option<([Vec<Lin>; 6], usize)>,
     phase: Option<[Vec<Lin>; 4]>,
 }
 
@@ -1168,6 +1335,11 @@ impl LinOutputs {
     fn pick(&self, f: impl Fn(&Lin) -> f64) -> Outputs {
         let s: Vec<f64> = self.scalars.iter().map(&f).collect();
         let arr = |v: &Vec<Lin>| v.iter().map(&f).collect::<Vec<f64>>();
+        let padded = |v: &Vec<Lin>, order: usize| {
+            let mut out = arr(v);
+            out.resize(order + 1, 0.0);
+            out
+        };
         Outputs {
             c_ext: s[0],
             c_sca: s[1],
@@ -1180,13 +1352,13 @@ impl LinOutputs {
             effective_radius: s[8],
             mean_area: s[9],
             mean_volume: s[10],
-            greek: self.greek.as_ref().map(|g| GreekCoefficients {
-                alpha1: arr(&g[0]),
-                alpha2: arr(&g[1]),
-                alpha3: arr(&g[2]),
-                alpha4: arr(&g[3]),
-                beta1: arr(&g[4]),
-                beta2: arr(&g[5]),
+            greek: self.greek.as_ref().map(|(g, order)| GreekCoefficients {
+                alpha1: padded(&g[0], *order),
+                alpha2: padded(&g[1], *order),
+                alpha3: padded(&g[2], *order),
+                alpha4: padded(&g[3], *order),
+                beta1: padded(&g[4], *order),
+                beta2: padded(&g[5], *order),
             }),
             phase: self.phase.as_ref().map(|p| PhaseValues {
                 f11: arr(&p[0]),
@@ -1221,6 +1393,17 @@ fn assemble(
         lin(R2),
         lin(R3),
     );
+    // The ratios need non-zero denominators: an ensemble that does not scatter (m = 1) has
+    // no albedo, asymmetry parameter or lidar ratio.
+    for (what, l) in [("<C_ext>", &ext), ("<C_sca>", &sca), ("<C_back>", &back)] {
+        if !(l.v.is_finite() && l.v != 0.0) {
+            return Err(Error::InvalidInput(format!(
+                "the ensemble's {what} is {}, so its ratios (albedo, asymmetry parameter, lidar \
+                 ratio) are undefined (does m = 1?)",
+                l.v
+            )));
+        }
+    }
     let scalars = [
         ext.clone(),
         sca.clone(),
@@ -1249,8 +1432,15 @@ fn assemble(
             ]
         };
         // Sum the bands' coefficients: values and derivatives, and the error bounds.
+        // Up to the largest band's order; `pick` pads to `order` with plain zeros.
+        let top = layout
+            .bands
+            .iter()
+            .map(|b| order.min(2 * b.upper))
+            .max()
+            .unwrap_or(0);
         let mut out: [Vec<Lin>; 6] =
-            core::array::from_fn(|_| vec![Lin::constant(0.0, n_cols); order + 1]);
+            core::array::from_fn(|_| vec![Lin::constant(0.0, n_cols); top + 1]);
         for band in &layout.bands {
             let n_q = band.projector.nodes().len();
             let start = band.start;
@@ -1289,7 +1479,7 @@ fn assemble(
             }
             out[0][0] = Lin::constant(1.0, n_cols);
         }
-        Some(out)
+        Some((out, order))
     };
     let n_mu = layout.mu.len();
     let phase = if n_mu == 0 {

@@ -389,5 +389,13 @@ $m = 1.33 + 10^{-4}i$, at rtol $10^{-6}$ and the other options default:
 | 0.3 | 4092 | 0.20 s | 0.90 s |
 
 All three converge. A narrow fine-mode aerosol takes milliseconds ({doc}`/examples/ensemble`).
+
+Layered spheres cost what their single-particle solutions cost more ({doc}`layered`): the same
+distribution of coated spheres (a $1.95 + 0.79i$ core of 0.6 of the radius) at the three
+wavelengths, Greek coefficients to order 63 and rtol $10^{-4}$ (`cargo bench -p scatrs --bench
+ensemble`), takes 1.8 times the spheres' time, on about as many panels. Derivatives cost more
+per node, and their refinement can take more panels: here the derivative with respect to the
+weakly absorbing shell's $\mathrm{Im}\,m$, like a sphere's, reaches `max_panels` at every
+wavelength, and with every derivative the coated spheres take 3.5 times the spheres' time.
 {doc}`/validation/sasktran2` compares the speed and accuracy with sasktran2's at matched
 accuracy, for one distribution and for a database grid.

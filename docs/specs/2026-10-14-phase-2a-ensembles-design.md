@@ -194,7 +194,9 @@ Recorded 2026-10-14, after prototyping and measuring, and amended after the engi
   renormalizing over it moves every average by the omitted number fraction; with Z from the
   moment integration the tiny spheres of a long number tail need no Mie solutions, and the
   smaller tail of the moment range covers the derivatives, which weight the tails by about
-  (∂ ln u/∂θ)². The cut-offs move each average by at most about 2·rtol/10, which every error
+  (∂ ln u/∂θ)². Pass 1 does not refine on ∫u over the Mie range (*review*: its targets
+  extended the range down the number tail, below the validated domain for a heavy one). The
+  cut-offs move each average by at most about 2·rtol/10, which every error
   estimate includes.
 - **Peak width** (*review*). The march of the cut-offs and the initial panels step by at most
   min(½, ½·w) in ln r, w the width of the density's peak in ln r: ln σ_g (lognormal),
@@ -220,7 +222,7 @@ Recorded 2026-10-14, after prototyping and measuring, and amended after the engi
   ⟨C_ext⟩ (the accuracy of C_ext − C_sca), and its derivatives against the matching C_ext
   integrals: relative to C_abs itself, the absorption resonances of weakly absorbing large
   spheres took the whole panel budget (r_g = 1, σ_g = 2, m = 1.33 + 10⁻⁴i at λ = 0.5: 4096
-  panels, unconverged, against 2634 converged). `refine_order` is at most `MAX_REFINE_ORDER`
+  panels, unconverged, against 2630 converged). `refine_order` is at most `MAX_REFINE_ORDER`
   = 1024.
 - **Projector bands.** One shared projector (n_q = N_max + ⌈(L + 1)/2⌉) made every small sphere
   pay for the largest: 20 s per wavelength for a broad distribution. Bands of the number of
@@ -246,7 +248,7 @@ Recorded 2026-10-14, after prototyping and measuring, and amended after the engi
   outputs and 1.210 for the others.
 - **Measured cost** (Apple M4 Pro, 12 cores, per wavelength, best of 2, lognormal r_g = 1,
   σ_g = 2, m = 1.33 + 10⁻⁴i, rtol 1e-6): cross sections, g and moments 0.035 s at λ = 1
-  (1465 panels), 0.091 s at λ = 0.5 (2634), 0.21 s at λ = 0.3 (4096), all converged; with Greek
+  (1461 panels), 0.091 s at λ = 0.5 (2630), 0.21 s at λ = 0.3 (4092), all converged; with Greek
   coefficients to order 32, 0.62 s, 2.9 s and 10.4 s. The exact Greek coefficients need each
   node's amplitudes at about N + L/2 cosines, O(N²) for large spheres. Recorded as a follow-up
   for the performance phase: Clebsch–Gordan Greek coefficients (O(N·L) per sphere) and shared

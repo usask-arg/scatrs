@@ -454,7 +454,9 @@ _SHARED_DOC = """
     Raises
     ------
     InvalidInputError
-        For invalid distribution parameters, wavelengths, refractive indices or options.
+        For invalid distribution parameters, wavelengths, refractive indices or options, or
+        outputs that would exceed ``2 * MAX_MIE_VALUES`` real values (the bound of
+        :mod:`scatrs.mie`; with ``greek="all"``, known only after the computation).
     OutsideValidatedDomainError
         If a size node is outside the validated domain, unless ``allow_unvalidated``; the
         message names the wavelength and the radius.
@@ -464,8 +466,7 @@ _SHARED_DOC = """
     BufferError
         If another rust-numpy extension holds a writeable borrow of an input.
     MemoryError
-        If the outputs cannot be allocated. They are bounded like those of
-        :mod:`scatrs.mie`: at most ``2 * MAX_MIE_VALUES`` real values.
+        If the outputs cannot be allocated.
 
     Notes
     -----

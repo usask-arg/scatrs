@@ -255,7 +255,7 @@ Two cases are flagged with `converged = false` rather than estimated well:
   resonance ripples, which can take more than `max_panels` panels. For a lognormal with
   $r_g = 1$, $\sigma_g = 2$ and $m = 1.33$ at $\lambda = 0.5$, the integration stops at 4096
   panels with an estimate of about $10^{-5}$ of $\langle C_\text{ext}\rangle$; the true error
-  of the stopped result is $1.0\cdot10^{-6}$. With `max_panels` raised it converges at 5024
+  of the stopped result is $1.0\cdot10^{-6}$. With `max_panels` raised it converges at 5020
   panels, but its true error, $1.1\cdot10^{-6}$ of $\langle C_\text{ext}\rangle$, exceeds its
   estimate, $9.7\cdot10^{-7}$: the estimate relies on the panels resolving the ripples.
 - **Derivatives with respect to $\mathrm{Im}\,m$ at $\mathrm{Im}\,m = 0$** have a spike at every

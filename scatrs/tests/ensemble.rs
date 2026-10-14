@@ -905,3 +905,18 @@ fn narrow_and_extreme_distributions() {
         &EnsembleOptions::new()
     )));
 }
+
+/// The Mie range does not follow the number tail: Z comes from the moment integration, so a
+/// heavy small-sphere number tail needs no Mie solutions below the validated domain.
+#[test]
+fn number_tails_need_no_mie_solutions() {
+    let m = c(1.45, 0.01);
+    let gamma = SizeDistribution::Gamma {
+        effective_radius: 0.5,
+        effective_variance: 0.3,
+    };
+    let r = one(&gamma, 10.0, m, &EnsembleOptions::new());
+    assert!(r.converged && r.ranges[0].0 > 1e-4, "{:?}", r.ranges);
+    let all = EnsembleOptions::new().with_derivatives(parameters(&gamma));
+    assert!(one(&gamma, 0.55, m, &all).converged);
+}

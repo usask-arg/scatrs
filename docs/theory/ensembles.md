@@ -159,7 +159,6 @@ Pass 1 evaluates only the efficiencies, $O(N)$ per radius for $N$ terms (and, wi
 
 | Integral | Target |
 |---|---|
-| $\int u$ over the Mie range | rtol of itself |
 | $\int C_\text{ext}u$, $\int C_\text{sca}u$ | rtol of itself |
 | $\int C_\text{abs}u$ | rtol of $\int C_\text{ext}u$ |
 | $\int C_\text{sca}g\,u$ | rtol of $\int C_\text{sca}u$ |
@@ -175,7 +174,7 @@ C_\text{abs}\rangle$ is refined to rtol of $\langle C_\text{ext}\rangle$, the ac
 $C_\text{ext} - C_\text{sca}$, and its derivatives against the matching $C_\text{ext}$
 integrals: relative to $C_\text{abs}$ itself, the absorption resonances of weakly absorbing
 large spheres took the whole panel budget (for a lognormal with $r_g = 1$, $\sigma_g = 2$ and
-$m = 1.33 + 10^{-4}i$ at $\lambda = 0.5$, unconverged at 4096 panels, against 2634 converged).
+$m = 1.33 + 10^{-4}i$ at $\lambda = 0.5$, unconverged at 4096 panels, against 2630 converged).
 $\langle C_\text{back}\rangle$ is refined only on request: backscattering by large, weakly
 absorbing spheres is a sum of narrow glory ripples (hence the target relative to $\langle
 C_\text{sca}\rangle$, as for single spheres), and refining on it can take far more panels: for
@@ -308,9 +307,9 @@ default:
 
 | $\lambda$ | panels | cross sections, $g$ and moments | with Greek coefficients to order 32 |
 |---|---|---|---|
-| 1 | 1465 | 0.035 s | 0.62 s |
-| 0.5 | 2634 | 0.091 s | 2.9 s |
-| 0.3 | 4096 | 0.21 s | 10.4 s |
+| 1 | 1461 | 0.035 s | 0.62 s |
+| 0.5 | 2630 | 0.091 s | 2.9 s |
+| 0.3 | 4092 | 0.21 s | 10.4 s |
 
 All three converge. The Greek coefficients still take about 10 s per wavelength at
 $\lambda = 0.3$. A narrow fine-mode aerosol takes milliseconds ({doc}`/examples/ensemble`).

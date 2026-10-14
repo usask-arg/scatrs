@@ -538,6 +538,11 @@ fn pass1(
                 target[(1 + b) * n_refined + j] = rtol * abs;
             }
         }
+        // The averages take Z = ∫u and its derivatives from the moment integration: no
+        // targets for ∫u over the Mie range, which would extend it down the number tail.
+        for b in 0..=nt {
+            target[b * n_refined + ONE] = f64::INFINITY;
+        }
         // ∫∂u/∂θ·∂C/∂m is no output: no targets for the refractive-index derivatives in the θ
         // blocks.
         for b in 1..=nt {
@@ -615,7 +620,9 @@ fn pass1(
                 extended = true;
             }
             if !extended {
-                return Ok(finish(panels, true, (t_lo, t_hi)));
+                // Converged unless an end still wants extending after `MAX_EXTENSIONS`.
+                let ends_small = !extendable || (small_first && small_last);
+                return Ok(finish(panels, ends_small, (t_lo, t_hi)));
             }
             continue;
         }

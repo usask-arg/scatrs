@@ -16,6 +16,11 @@ def _model(value: object) -> RefractiveIndex:
     """``value`` as a refractive-index model."""
     if isinstance(value, RefractiveIndex):
         return value
+    if isinstance(value, type):  # callable, but not a model
+        raise TypeError(
+            "refractive_index must be a number, a model or a callable, not the class "
+            f"{value.__name__}; instantiate it, as in scatrs.refractive.Constant(1.5)"
+        )
     if isinstance(value, (bool, np.bool_)):
         raise TypeError("refractive_index must be a number or a model, not a bool")
     if isinstance(value, numbers.Number):

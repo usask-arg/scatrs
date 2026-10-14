@@ -49,6 +49,18 @@ def _absorption(k: object, what: str) -> float:
     return v
 
 
+def _wavelengths(wavelength: ArrayLike) -> NDArray[np.float64]:
+    """``wavelength`` as a float64 array, every element finite and positive."""
+    wl = _args.real_array(wavelength, "wavelength")
+    bad = ~(np.isfinite(wl) & (wl > 0))
+    if bad.any():
+        i = np.unravel_index(np.argmax(bad), bad.shape)
+        raise InvalidInputError(
+            f"invalid input: wavelengths must be finite and positive, got {wl[i]}"
+        )
+    return wl
+
+
 def _finite_sequence(values: Sequence[float], what: str) -> tuple[float, ...]:
     """A one-dimensional sequence of finite floats, as :func:`_finite` for each element."""
     if isinstance(values, (str, bytes)):
@@ -67,9 +79,16 @@ def _finite_sequence(values: Sequence[float], what: str) -> tuple[float, ...]:
     return tuple(_finite(v, f"{what}[{i}]") for i, v in enumerate(values))
 
 
+# Each model implements _m(wavelength) (m, unchecked) and, if it has parameters, parameters
+# and _dm(wavelength) (∂m/∂θ, unchecked); evaluate() and derivatives() check the wavelengths
+# going in and the values coming out.
 class RefractiveIndex(ABC):
-    """The interface of the models: subclasses implement ``_m(wavelength)`` (m, unchecked)
-    and, if they have parameters, :attr:`parameters` and ``_dm(wavelength)`` (∂m/∂θ)."""
+    """A refractive-index model m(λ): the base class of the models in this module.
+
+    :meth:`evaluate` gives m at any wavelengths, :attr:`parameters` names the model's
+    differentiable parameters and :meth:`derivatives` gives ∂m/∂θ for each. Subclassing is not
+    a supported way to add a model; for a custom m(λ) wrap a callable in :class:`Function`.
+    """
 
     @property
     def parameters(self) -> tuple[str, ...]:
@@ -91,10 +110,10 @@ class RefractiveIndex(ABC):
         Raises
         ------
         InvalidInputError
-            If m is not a finite complex array of the wavelengths' shape, or Im m < 0, naming
-            the first wavelength where it fails.
+            If a wavelength is not finite and positive, or m is not a finite complex array of
+            the wavelengths' shape with Im m ≥ 0, naming the first wavelength where it fails.
         """
-        wl = _args.real_array(wavelength, "wavelength")
+        wl = _wavelengths(wavelength)
         m = np.asarray(self._m(wl))
         if m.dtype.kind not in "iufc":
             raise InvalidInputError(
@@ -117,9 +136,32 @@ class RefractiveIndex(ABC):
 
     def derivatives(self, wavelength: ArrayLike) -> NDArray[np.complex128]:
         """∂m/∂θ at ``wavelength`` for each parameter θ of :attr:`parameters`, of shape
-        ``(len(parameters),) + wavelength.shape``."""
-        wl = _args.real_array(wavelength, "wavelength")
-        return np.asarray(self._dm(wl), dtype=complex)
+        ``(len(parameters),) + wavelength.shape``.
+
+        Raises
+        ------
+        InvalidInputError
+            If a wavelength is not finite and positive, the model has no valid value there (as
+            for :meth:`evaluate`), or a derivative is not finite, naming the parameter and the
+            first wavelength where it fails.
+        """
+        wl = _wavelengths(wavelength)
+        dm = np.asarray(self._dm(wl), dtype=complex)
+        expected = (len(self.parameters), *wl.shape)
+        if dm.shape != expected:
+            raise InvalidInputError(
+                f"invalid input: {self!r} returned derivatives of shape {dm.shape} for "
+                f"{len(self.parameters)} parameters and wavelengths of shape {wl.shape}; "
+                f"expected {expected}"
+            )
+        bad = ~np.isfinite(dm)
+        if bad.any():
+            p, *i = np.unravel_index(np.argmax(bad), bad.shape)
+            raise InvalidInputError(
+                f"invalid input: {self!r} gives ∂m/∂{self.parameters[p]} = {dm[p][tuple(i)]} "
+                f"at wavelength {wl[tuple(i)]}; derivatives must be finite"
+            )
+        return dm
 
 
 @dataclass(frozen=True)
@@ -177,6 +219,10 @@ class Table(RefractiveIndex):
             )
         if not (np.all(np.isfinite(wl)) and np.all(np.isfinite(m))):
             raise InvalidInputError("invalid input: a Table's wavelengths and m must be finite")
+        if not np.all(wl > 0):
+            raise InvalidInputError(
+                f"invalid input: a Table's wavelengths must be positive, got {wl.min()}"
+            )
         if not np.all(np.diff(wl) > 0):
             raise InvalidInputError(
                 "invalid input: a Table's wavelengths must be strictly increasing"
@@ -186,10 +232,13 @@ class Table(RefractiveIndex):
                 "invalid input: a Table's interpolation must be 'linear' or 'log_k', not "
                 f"{self.interpolation!r}"
             )
-        floor = 0.0 if self.interpolation == "linear" else np.nextafter(0.0, 1.0)
-        if np.any(m.imag < floor):
-            need = "≥ 0" if self.interpolation == "linear" else "> 0 for log_k interpolation"
-            raise InvalidInputError(f"invalid input: a Table's Im m must be {need}")
+        if self.interpolation == "linear":
+            if np.any(m.imag < 0):
+                raise InvalidInputError("invalid input: a Table's Im m must be ≥ 0")
+        elif np.any(m.imag <= 0):
+            raise InvalidInputError(
+                "invalid input: a Table's Im m must be > 0 for log_k interpolation"
+            )
         # Tuples, so that the table compares and hashes by value.
         object.__setattr__(self, "wavelength", tuple(wl.tolist()))
         object.__setattr__(self, "m", tuple(complex(v) for v in m))
@@ -271,10 +320,12 @@ class Sellmeier(RefractiveIndex):
         terms = range(len(self.B))
         return (*(f"B{i}" for i in terms), *(f"C{i}" for i in terms), "k")
 
+    # λ² overflows for huge λ, and the terms diverge at the poles; _n() and evaluate() report
+    # the values that are not finite, so numpy need not warn.
     def _n(self, wavelength: NDArray[np.float64]) -> NDArray[np.float64]:
-        l2 = wavelength * wavelength
-        n2 = np.ones_like(l2)
-        with np.errstate(divide="ignore", invalid="ignore"):
+        with np.errstate(over="ignore", divide="ignore", invalid="ignore"):
+            l2 = wavelength * wavelength
+            n2 = np.ones_like(l2)
             for b, c in zip(self.B, self.C, strict=True):
                 n2 += b * l2 / (l2 - c)
         bad = ~(n2 > 0) | ~np.isfinite(n2)
@@ -291,12 +342,13 @@ class Sellmeier(RefractiveIndex):
 
     def _dm(self, wavelength: NDArray[np.float64]) -> NDArray[np.complex128]:
         n = self._n(wavelength)
-        l2 = wavelength * wavelength
         terms = len(self.B)
         out = np.empty((2 * terms + 1, *wavelength.shape), dtype=complex)
-        for i, (b, c) in enumerate(zip(self.B, self.C, strict=True)):
-            out[i] = l2 / (l2 - c) / (2 * n)  # ∂n/∂Bᵢ = (∂n²/∂Bᵢ)/(2n)
-            out[terms + i] = b * l2 / (l2 - c) ** 2 / (2 * n)
+        with np.errstate(over="ignore", divide="ignore", invalid="ignore"):
+            l2 = wavelength * wavelength
+            for i, (b, c) in enumerate(zip(self.B, self.C, strict=True)):
+                out[i] = l2 / (l2 - c) / (2 * n)  # ∂n/∂Bᵢ = (∂n²/∂Bᵢ)/(2n)
+                out[terms + i] = b * l2 / (l2 - c) ** 2 / (2 * n)
         out[-1] = 1j
         return out
 

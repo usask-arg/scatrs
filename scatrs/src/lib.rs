@@ -11,7 +11,7 @@
 //! |---|---|
 //! | [`mie`] | One sphere: Mie coefficients, efficiencies, amplitudes, phase matrix and Greek coefficients, with their derivatives. |
 //! | [`layered`] | One layered sphere, a core and concentric shells: the same outputs, with derivatives with respect to every layer. |
-//! | [`ensemble`] | Averages over size distributions, external mixtures and batches of distributions, with error estimates and derivatives. |
+//! | [`ensemble`] | Averages of spheres and layered spheres over size distributions, external mixtures and batches of distributions, with error estimates and derivatives. |
 //! | [`special`] | Gauss–Legendre quadrature and Wigner d-functions. |
 //! | [`scalar`] | The [`Real`] trait the numerical kernels are generic over, and its double-double and dual-number types. |
 //! | [`error`] | The [`Error`] that every fallible function returns. |

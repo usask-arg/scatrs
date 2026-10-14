@@ -257,7 +257,7 @@ rounding errors of the recurrences at the shell's two surfaces are alike from on
 next, so they add up in the forward sum, and the derivatives' domain ends at 1000.
 
 (ensemble-accuracy)=
-## Ensembles of spheres
+## Ensembles
 
 <!-- synced with scatrs/tests/ensemble.rs -->
 
@@ -269,10 +269,11 @@ solutions' own errors, declared above, are far smaller at the tolerances the ens
 and are not included.
 
 The test `error_estimates_bound_the_true_errors` in `scatrs/tests/ensemble.rs` checks the
-estimates for every change. It computes nine distributions at rtol $10^{-6}$ and again at rtol
-$10^{-11}$ (the reference), with backscattering refined, the Greek coefficients to order 24,
-the phase matrix at $\mu = 1, 0.7, 0, -1$, and the derivatives with respect to every parameter
-of the distribution and to $\mathrm{Re}\,m$ and $\mathrm{Im}\,m$:
+estimates for every change. It computes nine distributions of spheres and two of layered
+spheres at rtol $10^{-6}$ and again at rtol $10^{-11}$ (the reference), with backscattering
+refined, the Greek coefficients to order 24, the phase matrix at $\mu = 1, 0.7, 0, -1$, and the
+derivatives with respect to every parameter of the distribution and of the particle
+($\mathrm{Re}\,m$ and $\mathrm{Im}\,m$ of every layer, and the radius fractions):
 
 | Distribution | $m$ | $\lambda$ |
 |---|---|---|
@@ -285,6 +286,8 @@ of the distribution and to $\mathrm{Re}\,m$ and $\mathrm{Im}\,m$:
 | power law, $\alpha = 3.5$ on $[0.01, 5]$ | $1.5 + 0.01i$ | 0.5 |
 | tabulated, $(0.05, 0.1, 0.4, 1)$, densities $(0, 3, 1, 0.2)$ | $2 + 0.5i$ | 0.4 |
 | multimodal: weight 1000, lognormal $r_g = 0.05$, $\sigma_g = 1.5$; weight 1, lognormal $r_g = 1$, $\sigma_g = 1.4$ | $1.53 + 0.005i$ | 0.55 |
+| lognormal, $r_g = 0.1$, $\sigma_g = 1.6$, coated (core fraction 0.6) | core $1.95 + 0.79i$, shell $1.43 + 10^{-8}i$ | 0.55 |
+| gamma, $a = 0.8$, $b = 0.1$, three layers (fractions 0.3, 0.8) | $1.6 + 0.3i$, $2 + 0.05i$, $1.33 + 10^{-6}i$ | 0.5 |
 
 Both results must converge, and the refined cross sections must be within rtol of the
 reference ($g$ within $2\cdot10^{-6}$). The true errors of the refined outputs

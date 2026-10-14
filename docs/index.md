@@ -14,14 +14,14 @@ library for the optical properties of particles. Install it with `pip install sc
 - **Layered spheres** ({mod}`scatrs.layered`): a core and any number of concentric shells,
   coated spheres among them, with the same outputs and derivatives with respect to every
   layer.
-- **Ensembles of spheres** ({class}`scatrs.Ensemble`, {class}`scatrs.Mixture`): averages over
-  seven kinds of size distribution and over external mixtures, at many wavelengths in
-  parallel, with an error estimate for every output, and refractive indices that vary with
+- **Ensembles** of spheres and layered spheres ({class}`scatrs.Ensemble`,
+  {class}`scatrs.Mixture`): averages over seven kinds of size distribution and over external
+  mixtures, at many wavelengths in parallel, with an error estimate for every output, and refractive indices that vary with
   wavelength ({mod}`scatrs.refractive`). Grids of distributions share their Mie solutions, for
   building optics tables.
 - **Derivatives** of every output, in closed form: with respect to a sphere's size parameter
   and refractive index, to every layer's of a layered sphere, and for ensembles, the
-  distribution parameters and the mixture weights.
+  distribution parameters, a layered sphere's radius fractions and the mixture weights.
 - **Validated accuracy.** Every output has a declared accuracy, checked against independent
   reference values with rigorous error bounds across the whole validated domain, and against
   published results. See {doc}`validation/overview`.
@@ -46,6 +46,7 @@ quickstart
 examples/mie
 examples/greek
 examples/ensemble
+examples/coated
 ```
 
 ```{toctree}

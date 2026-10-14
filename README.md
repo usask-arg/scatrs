@@ -12,11 +12,12 @@ library for the optical properties of particles.
   amplitudes, phase matrix and Greek coefficients to every order.
 - **Layered spheres:** a core and any number of concentric shells (coated spheres among them),
   with the same outputs and derivatives with respect to every layer.
-- **Ensembles of spheres:** averages over seven kinds of size distribution, external mixtures
-  and batches of distributions, at many wavelengths in parallel, with an error estimate for
-  every output.
-- **Derivatives** of every output: in closed form for spheres, by dual numbers for layered
-  spheres.
+- **Ensembles of spheres and layered spheres:** averages over seven kinds of size
+  distribution, external mixtures and batches of distributions, at many wavelengths in
+  parallel, with an error estimate for every output.
+- **Derivatives** of every output, in closed form: with respect to the size parameter and
+  every layer's refractive index, and for ensembles the distribution parameters, a layered
+  sphere's radius fractions and the mixture weights.
 - **Validated accuracy:** every output has a declared accuracy, checked against independent
   arbitrary-precision reference values across the validated domain, and against published
   results.

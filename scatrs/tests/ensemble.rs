@@ -9,7 +9,8 @@ use num_complex::Complex;
 use scatrs::Error;
 use scatrs::ensemble::{
     Component, EnsembleOptions, EnsembleParam, EnsembleResult, GreekOrder, Outputs, ParamKind,
-    SizeDistribution, compute, compute_batch, compute_mixture, mixture_parameters, parameters,
+    Particle, SizeDistribution, compute, compute_batch, compute_mixture, compute_with_particle,
+    mixture_parameters, parameters, parameters_with_particle,
 };
 use scatrs::mie::{GreekCoefficients, Mie, MieOptions, Normalization, PhaseBuffers};
 use scatrs::special::gauss_legendre;
@@ -513,6 +514,29 @@ fn error_estimates_bound_the_true_errors() {
             0.55,
         ),
     ];
+    // And layered spheres: black carbon coated in sulfate, and three layers.
+    let layered = [
+        (
+            lognormal(0.1, 1.6),
+            Particle::layered_sphere(vec![0.6], vec![vec![c(1.95, 0.79)], vec![c(1.43, 1e-8)]]),
+            0.55,
+        ),
+        (
+            SizeDistribution::Gamma {
+                effective_radius: 0.8,
+                effective_variance: 0.1,
+            },
+            Particle::layered_sphere(
+                vec![0.3, 0.8],
+                vec![vec![c(1.6, 0.3)], vec![c(2.0, 0.05)], vec![c(1.33, 1e-6)]],
+            ),
+            0.5,
+        ),
+    ];
+    let cases = cases
+        .into_iter()
+        .map(|(d, m, lambda)| (d, Particle::sphere(vec![m]), lambda))
+        .chain(layered);
     let mu = vec![1.0, 0.7, 0.0, -1.0];
     // The worst ratio of true error to estimate, of refined and of other outputs.
     let worst = std::cell::Cell::new([0.0f64; 2]);
@@ -524,21 +548,21 @@ fn error_estimates_bound_the_true_errors() {
         }
         worst.set(w);
     };
-    for (d, m, lambda) in cases {
-        let params = parameters(&d);
+    for (d, p, lambda) in cases {
+        let params = parameters_with_particle(&d, &p);
         // With backscattering refined, so that every estimate is a bound.
         let opts = EnsembleOptions::new()
             .with_greek(GreekOrder::Order(24))
             .with_mu(mu.clone())
             .with_derivatives(params.clone())
             .with_refine_backscatter(true);
-        let a = one(&d, lambda, m, &opts);
-        let b = one(
-            &d,
-            lambda,
-            m,
-            &opts.clone().with_rtol(1e-11).with_max_panels(50_000),
-        );
+        let run = |o: &EnsembleOptions| {
+            compute_with_particle(&d, &[lambda], &p, o)
+                .unwrap()
+                .remove(0)
+        };
+        let a = run(&opts);
+        let b = run(&opts.clone().with_rtol(1e-11).with_max_panels(50_000));
         assert!(a.converged && b.converged, "{d:?}");
         let check = |x: &Outputs, y: &Outputs, e: &Outputs, what: &str| {
             let (xs, ys, es) = (scalars(x), scalars(y), scalars(e));

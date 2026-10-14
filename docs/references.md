@@ -37,6 +37,12 @@
 - O. Peña and U. Pal, "Scattering of electromagnetic radiation by a multilayered sphere",
   *Computer Physics Communications* 180 (2009), 2348–2354. Yang's recursion in the form of
   scattnlay, the code of the comparison.
+- O. B. Toon and T. P. Ackerman, "Algorithms for the calculation of scattering by stratified
+  spheres", *Applied Optics* 20 (1981), 3657–3660. The coated sphere in atmospheric optics,
+  and the stability of its recurrences.
+- T. C. Bond and R. W. Bergstrom, "Light absorption by carbonaceous particles: an
+  investigative review", *Aerosol Science and Technology* 40 (2006), 27–67. The refractive
+  index of black carbon in {doc}`examples/coated`.
 
 **Quadrature**
 

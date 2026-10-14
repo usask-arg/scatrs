@@ -30,6 +30,9 @@ level.
 
 .. autoclass:: scatrs.Sphere
 
+.. autoclass:: scatrs.LayeredSphere
+   :members: coated, layers
+
 .. autoclass:: scatrs.Ensemble
    :members: compute, grid_shape
 

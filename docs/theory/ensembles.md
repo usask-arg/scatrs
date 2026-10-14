@@ -1,17 +1,24 @@
-# Ensembles of spheres
+# Ensembles
 
 This page describes the methods behind {rust}`scatrs::ensemble` (Python: {class}`scatrs.Ensemble`
 and {class}`scatrs.Mixture`): the
 size distributions, their cut-offs, the adaptive size integration, the error estimates, the
 Jacobians and the mixtures. The rustdoc of {rust}`scatrs::ensemble` is the authoritative statement of
-the interface; the single-sphere quantities come from {doc}`mie`.
+the interface; the single-particle quantities come from {doc}`mie` for spheres and from
+{doc}`layered` for layered spheres.
 
 ## Averages
 
 <!-- synced with scatrs/src/ensemble/mod.rs rustdoc -->
 
 Radii and wavelengths are in the same (any) unit, and $x = 2\pi r/\lambda$. Each component of
-an ensemble has one refractive index per wavelength. Every output is a number average,
+an ensemble is a particle given at each wavelength: a sphere, with one refractive index per
+wavelength, or a layered sphere ({rust}`Particle::LayeredSphere
+<scatrs::ensemble::Particle::LayeredSphere>`, Python {class}`scatrs.LayeredSphere`), with one
+per layer and wavelength. The size distribution describes the radius the particle defines: a
+layered sphere's outer radius $r$, with layer $l$'s outer surface at the fixed fraction $f_l$
+of it ($x_l = f_l x$), so a distribution scales the whole particle. Everything below applies to
+either; the text says "sphere" for any particle. Every output is a number average,
 
 $$\langle C\rangle = \frac{\int C(r)\,n(r)\,dr}{\int n(r)\,dr}
 = \frac{\int C(e^t)\,n(e^t)\,e^t\,dt}{\int n(e^t)\,e^t\,dt}, \qquad t = \ln r,$$
@@ -235,13 +242,16 @@ $$S_1(\pm\mu) = G_E u \pm G_O v,\qquad S_2(\pm\mu) = G_E v \pm G_O u$$
 
 at the non-negative nodes $\mu$ (the Gauss–Legendre nodes are exactly symmetric). For the 15
 nodes of a panel these are two real matrix products, $G_E$ and $G_O$ ($n_q/2 \times N$) times
-the nodes' coefficients ($N \times 60$; 120 with the $m$-derivatives $\mathrm{d}a_n/\mathrm{d}m$,
-$\mathrm{d}b_n/\mathrm{d}m$). The products cost $O(N\,n_q)$, like sums sphere by sphere, but
+the nodes' coefficients ($N \times 60$; 60 more for each derivative column:
+$\mathrm{d}a_n/\mathrm{d}m$, $\mathrm{d}b_n/\mathrm{d}m$ of a sphere, of each layer of a
+layered sphere, and $x\,\partial a_n/\partial x_l$, $x\,\partial b_n/\partial x_l$ for each
+of its radius fractions). The products cost $O(N\,n_q)$, like sums sphere by sphere, but
 run far faster, and the tables agree with the per-sphere phase matrix to $10^{-12}$ of its
 largest value (a unit test).
 
 The sums over the nodes are matrix products too: each panel's sums for every part and block
-(values, each $\theta$, $\mathrm{Re}\,m$, $\mathrm{Im}\,m$) are the weights at the nodes
+(values, each $\theta$, each $\mathrm{Re}\,m$, $\mathrm{Im}\,m$ and radius fraction) are the
+weights at the nodes
 (Kronrod and Gauss) times the nodes' values. The projection likewise: a band's matrices
 $\tfrac{2l + 1}{2}w_k d_l(\mu_k)$ times the tables of every mixture (or batch distribution) and
 derivative at once, so the generalized spherical functions are computed once per band.
@@ -288,10 +298,16 @@ has a derivative.
   panels are held fixed within a call.
 - **Monodisperse radius.** $\partial(\pi r^2 Q)/\partial r = 2\pi r\,Q + \pi r^2\,(2\pi/\lambda)
   \,\partial Q/\partial x$, from the single-sphere derivatives with respect to $x$, and likewise
-  for the phase matrix.
-- **$\mathrm{Re}\,m$ and $\mathrm{Im}\,m$** of each component, at each wavelength: from the
-  single-sphere efficiency Jacobian and phase-matrix derivatives, integrated with the same
-  weights ($m$ does not change the density, so no renormalization term).
+  for the phase matrix. For a layered sphere, at fixed fractions, $\partial Q/\partial x =
+  \sum_l f_l\,\partial Q/\partial x_l$ ($f_{L-1} = 1$).
+- **$\mathrm{Re}\,m$ and $\mathrm{Im}\,m$** of each component (of each layer of a layered
+  sphere), at each wavelength: from the single-particle efficiency Jacobian and phase-matrix
+  derivatives, integrated with the same weights ($m$ does not change the density, so no
+  renormalization term).
+- **Radius fractions** of a layered sphere, at a fixed outer radius:
+  $\partial Q/\partial f_l = x\,\partial Q/\partial x_l$, likewise integrated with the same
+  weights. The derivatives with respect to the inner size parameters $x_l$ carry no term of
+  the outputs' scale, which only the outer radius sets.
 - **Weights.** A component $i$ (or mode $j$) enters with the number fraction
   $f = (w_i/\sum w)(v_j/\sum v)$, with $v_j$ the mode weights; its derivatives with respect to
   each weight follow from that product.
@@ -301,13 +317,18 @@ The tests check every scalar output, $\beta_1^l$ up to order 6 and $F_{12}$ at t
 against central differences of the whole computation at rtol $10^{-11}$, for the lognormal and
 gamma parameters, the modified gamma's $b$ and $\gamma$, the power-law exponent, the
 monodisperse radius, $\mathrm{Re}\,m$, $\mathrm{Im}\,m$, a mixture weight, the
-$\mathrm{Re}\,m$ of a mixture's second component, a mode weight and a mode's width.
+$\mathrm{Re}\,m$ of a mixture's second component, a mode weight and a mode's width; and for
+layered spheres $F_{11}$ too, with each layer's $\mathrm{Re}\,m$ and $\mathrm{Im}\,m$ and the
+core fraction of a coated sphere, the middle layer's fraction and $\mathrm{Im}\,m$ of a
+three-layer one, the median radius, the monodisperse radius, and the core fraction of a
+mixture's coated component. An ensemble of one-layer layered spheres is the sphere ensemble
+bitwise, values, estimates and derivatives.
 
 ## Mixtures
 
 {rust}`compute_mixture <scatrs::ensemble::compute_mixture>` (Python {class}`scatrs.Mixture`)
-averages over external mixtures: components, each a distribution, its refractive indices and a
-weight $w_i \ge 0$ (a relative number concentration; their sum finite and positive).
+averages over external mixtures: components, each a distribution, its particle (spheres and
+layered spheres can mix) and a weight $w_i \ge 0$ (a relative number concentration; their sum finite and positive).
 {rust}`compute <scatrs::ensemble::compute>` is a mixture of one component, without the weight
 parameter. Cross sections and moments are averaged with the number fractions $w_i/\sum w$. The phase-matrix
 tables, in $C_\text{sca}$ units, are averaged with the same fractions, so the phase matrices

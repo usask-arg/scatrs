@@ -10,8 +10,8 @@ describes what the accuracy figures rest on.
 
 ## Scope and availability
 
-- scatrs computes homogeneous spheres, single or averaged over size distributions and
-  external mixtures, and single layered spheres (core and shells).
+- scatrs computes homogeneous spheres and layered spheres (a core and concentric shells),
+  single or averaged over size distributions and external mixtures.
 - Python exposes only `f64` results. Double-double precision and the `Dual` derivatives of
   the Rust core are available from Rust only.
 - The tests run on Linux (x86_64), macOS (arm64) and Windows (x86_64) for every change. The
@@ -37,6 +37,15 @@ describes what the accuracy figures rest on.
   `OutsideValidatedDomain` unless `allow_unvalidated` is set.
 - **Cost.** About 2.5 times a sphere of the outer size for a coated sphere, and roughly
   1.5 times more per further layer ({doc}`theory/layered`).
+- **Fixed fractions in ensembles.** A size distribution of layered spheres scales the whole
+  particle: each interface stays at a fixed fraction of the outer radius. A coating of fixed
+  thickness across the sizes, and fractions or layer indices as grid axes, are not available.
+- **Ensemble derivatives up to $x_L = 1000$.** The derivatives of an ensemble of layered
+  spheres with respect to their indices and fractions, and the radius derivative of a
+  monodisperse one, need every size node within the derivatives' domain: a distribution that
+  reaches a larger outer size parameter raises `OutsideValidatedDomain` unless
+  `allow_unvalidated` is set. Its values, and its derivatives with respect to the
+  distribution's own parameters, are validated up to $10^4$.
 
 ## Mie scattering
 

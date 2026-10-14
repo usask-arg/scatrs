@@ -16,8 +16,10 @@ use scatrs::mie::{Mie, MieOptions};
 
 const SIZES: [f64; 5] = [0.1, 1.0, 10.0, 100.0, 1000.0];
 
-/// (name, radius fractions, indices).
-fn particles() -> Vec<(&'static str, Vec<f64>, Vec<Complex<f64>>)> {
+/// A particle: its name, radius fractions and indices.
+type Particle = (&'static str, Vec<f64>, Vec<Complex<f64>>);
+
+fn particles() -> Vec<Particle> {
     let c = Complex::new;
     vec![
         (

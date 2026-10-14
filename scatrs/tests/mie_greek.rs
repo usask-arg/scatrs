@@ -4,7 +4,7 @@
 
 mod common;
 
-use common::greek::{GreekOutputs, greek_arrays, solve_greek};
+use common::greek::{GreekOutputs, buffers, greek_arrays, solve_greek};
 use num_complex::Complex;
 use scatrs::Error;
 use scatrs::mie::{
@@ -31,11 +31,6 @@ const SPHERES: [(f64, Complex<f64>); 7] = [
     (40.0, Complex::new(1.75, 0.44)),
     (150.0, Complex::new(2.5, 1.0)),
 ];
-
-fn bufs(t: &mut [Vec<f64>; 4]) -> PhaseBuffers<'_, f64> {
-    let [f11, f12, f33, f34] = t;
-    PhaseBuffers { f11, f12, f33, f34 }
-}
 
 fn solve(x: f64, m: Complex<f64>, mu: &[f64], normalization: Normalization) -> GreekOutputs<f64> {
     solve_greek(x, m, mu, None, None, normalization)
@@ -411,8 +406,8 @@ fn bad_buffers_tables_and_solutions_are_rejected() {
     let r = s.phase_matrix_with_derivatives(
         &mu,
         Normalization::Normalized,
-        bufs(a),
-        [bufs(b), bufs(cc), bufs(dd)],
+        buffers(a),
+        [buffers(b), buffers(cc), buffers(dd)],
     );
     assert!(matches!(r, Err(Error::InvalidInput(_))), "{r:?}");
     let r = s.greek_with_derivatives(None, Normalization::Normalized);
@@ -444,7 +439,7 @@ fn derivatives_values_match_the_plain_values_bitwise() {
                 let g = plain.greek(order, normalization).unwrap();
                 let mut f: [Vec<f64>; 4] = std::array::from_fn(|_| vec![0.0; mu.len()]);
                 plain
-                    .phase_matrix(&mu, normalization, bufs(&mut f))
+                    .phase_matrix(&mu, normalization, buffers(&mut f))
                     .unwrap();
                 let both = solve_greek(x, m, &mu, None, order, normalization);
                 assert_eq!(both.phase, f, "{normalization:?} x = {x}: phase matrix");

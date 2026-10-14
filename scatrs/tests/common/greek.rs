@@ -42,7 +42,8 @@ pub fn greek_arrays<T: Clone>(g: &GreekCoefficients<T>) -> [Vec<T>; 6] {
     ]
 }
 
-fn buffers<T>(b: &mut [Vec<T>; 4]) -> PhaseBuffers<'_, T> {
+/// Phase-matrix buffers over four vectors.
+pub fn buffers<T>(b: &mut [Vec<T>; 4]) -> PhaseBuffers<'_, T> {
     let [f11, f12, f33, f34] = b;
     PhaseBuffers { f11, f12, f33, f34 }
 }

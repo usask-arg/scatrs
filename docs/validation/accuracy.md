@@ -142,7 +142,7 @@ measures and priors κ′, and a quadrature term for the Greek coefficients
 ({ref}`mie-accuracy-model`). Two more tests enforce them in CI:
 
 - `scatrs/tests/mie_greek_reference.rs` compares them with the Arb reference values
-  ({doc}`reference-suite`): 18 spheres from $x = 0.1$ to 200, where the worst $C$ is 0.59 for
+  ({doc}`reference-suite`): 18 cases (17 spheres, one at two orders) from $x = 0.1$ to 200, where the worst $C$ is 0.59 for
   the phase matrix and 0.61 for the Greek coefficients.
 - `scatrs/tests/mie_greek_accuracy_map.rs` compares `f64` with `DoubleDouble` on a grid of 46
   size parameters from $10^{-6}$ to $10^3$ against the 28 refractive indices of the Mie map,
@@ -154,8 +154,9 @@ The double-double Greek coefficients cost $O(x^2)$ (the amplitudes at about $x$ 
 about $x$ orders at each), and the derivative measures take seven of them per point, so the
 map stops at $x = 10^3$. A test marked `#[ignore]`, which CI runs weekly, checks the values
 beyond it: at $x = 2\cdot10^3$ up to all orders ($m = 1.33$ and $0.3 + 0.6i$), and at
-$x = 10^4$ ($m = 1.5 + 0.01i$) and $2\cdot10^4$ ($m = 1.33$) up to order 64. There the Greek
-coefficients reach $C = 0.22$ at $x = 2\cdot10^4$.
+$x = 10^4$ ($m = 1.5 + 0.01i$) and $2\cdot10^4$ ($m = 1.33$) up to order 64. Its worst $C$ is
+2.7 for the phase matrix (at $x = 2\cdot10^3$, $m = 0.3 + 0.6i$) and 0.22 for the Greek
+coefficients (at $x = 2\cdot10^4$).
 
 The worst values of the map are 7.4 for the phase matrix ($x = 10^3$, $m = 0.5 +
 10^{-4}i$), 22 for its derivatives ($x = 10^{-3}$, same $m$), 1.7 for the Greek coefficients
@@ -184,8 +185,9 @@ no quadrature and needs no such term.
 plot_map(greek, gx, gm, gnames, rows=2, height=7)
 ```
 
-By refractive index, the phase matrix is least accurate for $\lvert m\rvert < 1$ and for
-strongly absorbing spheres, like the amplitudes it is computed from; the Greek coefficients
+By refractive index, the phase matrix is least accurate for $\lvert m\rvert < 1$ and, at about
+half that, for large $\lvert m\rvert$ or strong absorption, like the amplitudes it is computed
+from; the Greek coefficients
 stay within 1.7 everywhere, largest next to $m = 1$.
 
 ```{code-cell} python

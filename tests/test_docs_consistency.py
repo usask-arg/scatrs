@@ -74,6 +74,7 @@ MIE_THEORY = "docs/theory/mie.md"
 MIE_RS = "scatrs/src/mie/mod.rs"
 MIE_PY = "python/scatrs/mie.py"
 MIE_BINDINGS_RS = "scatrs-py/src/mie.rs"
+GREEK_RS = "scatrs/src/mie/greek.rs"
 INSTALLATION = "docs/installation.md"
 CONTRIBUTING = "CONTRIBUTING.md"
 
@@ -123,7 +124,18 @@ CONTRACTS = [
     ("Mie accepted |m|", "|m|in[10^-6,10^3]", [LIMITATIONS]),
     ("Mie accepted x", "xoutside[1e-30,1e6]", [MIE_PY]),
     ("Mie accepted |m|", "|m|outside[1e-6,1e3]", [MIE_PY]),
-    ("Greek all-orders timing", "7.6s", [MIE_THEORY, LIMITATIONS]),
+    (
+        "Greek all-orders timing",
+        "7.6s",
+        [MIE_THEORY, LIMITATIONS, MIE_PY, GREEK_RS, "docs/plans/phase-1b-followups.md"],
+    ),
+    (
+        "Greek all-orders timing",
+        "0.09s",
+        [MIE_THEORY, MIE_PY, GREEK_RS, "docs/plans/phase-1b-followups.md"],
+    ),
+    ("Gauss-Legendre f64 timing", "6ms", [GL_RS, THEORY, MIE_THEORY]),
+    ("Greek node limit", "6.510^4", [GREEK_RS, LIMITATIONS]),
     (
         "Greek quadrature term",
         "((L+1)^2+x^2)/8",

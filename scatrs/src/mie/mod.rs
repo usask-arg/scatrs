@@ -2,7 +2,9 @@
 //!
 //! [`Mie`] is a reusable workspace: [`Mie::compute`] (or [`Mie::compute_with_derivatives`])
 //! solves one sphere and returns a [`MieSolution`], from which the coefficients aₙ, bₙ, the
-//! [`Efficiencies`], their [`EfficiencyJacobian`] and the amplitudes S₁, S₂ are read.
+//! [`Efficiencies`], their [`EfficiencyJacobian`], the amplitudes S₁, S₂, the phase matrix
+//! and its [`GreekCoefficients`] are read. A [`GreekProjector`] projects phase-matrix tables
+//! at its nodes, for example sums over many spheres, onto Greek coefficients.
 //!
 //! ```
 //! use num_complex::Complex;

@@ -578,7 +578,7 @@ greek.__doc__ = (
     )
     + """
     Projecting adds about ``n_terms * L`` operations per sphere to the amplitudes at the
-    ``n_terms + ceil((L + 1)/2)`` nodes: all orders take about 0.1 s at x = 1e3 and 8 s at
-    x = 1e4.
+    ``n_terms + ceil((L + 1)/2)`` nodes: all orders take about 0.09 s at x = 1e3 and
+    7.6 s at x = 1e4.
 """
 )

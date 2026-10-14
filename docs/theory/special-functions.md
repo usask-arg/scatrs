@@ -110,7 +110,7 @@ inequality, root $j$ lies in its own interval of $\theta$, $(j - \tfrac12)\pi/(n
 < \theta_j < j\pi/(n + \tfrac12)$, and these intervals are disjoint. The tests check that
 every root of every `f64` rule with $n \le 300$ lies inside its interval, and so does every
 root of eleven rules up to the cap; for the Newton method, so do the roots nearest $\pm1$ and
-0 for over a hundred values of $n$ up to the cap. An ignored test extends the first check to
+0 for over a hundred values of $n$ up to the cap. A further test extends the first check to
 $n \le 3000$. None of these checks has found a rule that fails.
 
 ### Cost and the cap

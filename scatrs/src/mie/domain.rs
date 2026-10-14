@@ -93,9 +93,9 @@ pub enum MieOutput {
 ///   m² − 1, and the m-derivatives have no factor that cancels. The phase matrix takes κ and
 ///   its derivatives κ·max(1, |m|/|m − 1|), like the efficiencies and their Jacobian (the
 ///   normalized phase matrix divides by Q_sca). The Greek coefficients up to order L add
-///   ((L + 1)² + x²)/8 to those: the quadrature nodes are rounded to `f64`, so the
-///   coefficients are those of a rule with nodes moved by up to half an ulp, and next to μ = 1
-///   such a move changes d_L by about L²·2⁻⁵⁴ and the forward peak of the phase matrix, whose
+///   ((L + 1)² + x²)/8 to those: the coefficients are those of a rule whose `f64` nodes differ
+///   from the exact ones, by about half an ulp next to μ = 1, where it matters; there such a
+///   move changes d_L by about L²·2⁻⁵⁴ and the forward peak of the phase matrix, whose
 ///   slope in μ grows like x⁴ while the weights there shrink like 1/x², by about x²·2⁻⁵⁴ of
 ///   its size.
 /// * C is the output's constant ([`constant`](Self::constant)).

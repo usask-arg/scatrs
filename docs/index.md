@@ -5,7 +5,7 @@ spheres and axisymmetric T-matrix, written in Rust with a Python interface.
 
 ```{warning}
 Pre-alpha. Phase 0 provided the numerical foundations: the scalar types, Gauss–Legendre
-quadrature, Wigner d-functions and the Arb reference suite. Phase 1 adds Mie scattering by
+quadrature, Wigner d-functions and the Arb reference suite. Phase 1a adds Mie scattering by
 homogeneous spheres, with derivatives; phase 1b adds their phase matrix and exact Greek
 coefficients, and $O(n)$ Gauss–Legendre rules. Nothing is published on PyPI or crates.io yet.
 ```

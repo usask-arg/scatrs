@@ -272,14 +272,14 @@ impl<T: Real> MieSolution<'_, T> {
     /// so that it is exactly 1; unnormalized ones are those times Q_sca.
     ///
     /// The cost is the amplitudes at the N + ⌈(L + 1)/2⌉ nodes, O(N²) for L ≈ 2N, and four
-    /// Wigner recurrences up to L at each, O(N·L): for all orders, about 0.1 s at x = 10³ and
-    /// 8 s at x = 10⁴ in `f64` on an Apple M4 Pro.
+    /// Wigner recurrences up to L at each, O(N·L): for all orders, about 0.09 s at x = 10³ and
+    /// 7.6 s at x = 10⁴ in `f64` on an Apple M4 Pro.
     ///
     /// # Errors
     ///
     /// [`Error::InvalidInput`] if `order` > [`MAX_GREEK_ORDER`], or if the rule would need more
-    /// than [`MAX_GAUSS_LEGENDRE_POINTS`] nodes (N + ⌈(min(L, 2N) + 1)/2⌉ > 2¹⁷, so N above
-    /// about 4.4·10⁴ for all orders).
+    /// than [`MAX_GAUSS_LEGENDRE_POINTS`] nodes (N + ⌈(min(L, 2N) + 1)/2⌉ > 2¹⁷, so N ≥ 2¹⁶,
+    /// x above about 6.5·10⁴, for all orders).
     pub fn greek(
         &self,
         order: Option<usize>,

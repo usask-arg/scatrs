@@ -56,7 +56,7 @@ SCATRS_ACCURACY_MAP=$PWD/docs/validation/data/mie-accuracy-map.json \
 ```
 
 `scatrs/tests/mie_greek_accuracy_map.rs` does the same for the phase matrix and the Greek
-coefficients, in about 15 s with all cores; regenerate its map the same way:
+coefficients, in about 12 s with all cores; regenerate its map the same way:
 
 ```bash
 SCATRS_ACCURACY_MAP=$PWD/docs/validation/data/greek-accuracy-map.json \

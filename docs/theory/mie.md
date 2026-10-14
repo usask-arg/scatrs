@@ -260,7 +260,7 @@ $Q_\text{sca}$.
 
 **Streaming.** For each node, the four Wigner recurrences ($d_{00}$, $d_{22}$, $d_{2,-2}$,
 $d_{02}$) run once up to $L$ and accumulate into the coefficient arrays: $O(n_q L)$ time and
-$O(L)$ memory. Storing the d-functions at every node instead would take about 13 GB at
+$O(n_q + L)$ memory (the phase-matrix tables at the nodes and the coefficients). Storing the d-functions at every node instead would take about 13 GB at
 $x = 10^4$ (four functions at about $2\cdot10^4$ nodes and $2\cdot10^4$ orders, in `f64`).
 
 **Linearity.** The projection is linear in $F$, so projecting the derivative tables of the
@@ -280,7 +280,7 @@ $\mu = \cos\Theta$ the expansion uses them as follows.
 
 | Bohren & Huffman | scatrs | Expanded in | Coefficient | Rayleigh limit |
 |---|---|---|---|---|
-| $S_{11}$ | $F_{11} = F_{22}$ | $d^l_{00}$ | $\alpha_1$ | $\alpha_1 = (1, 0, \tfrac12)$ |
+| $S_{11}$ | $F_{11} = F_{22}$ | $d^l_{00}$ | $\alpha_1$ | $\alpha_1^l = 1, 0, \tfrac12$ for $l = 0, 1, 2$ |
 | $S_{11} \pm S_{33}$ | $F_{22} \pm F_{33}$ | $d^l_{22}$, $d^l_{2,-2}$ | $\alpha_2 \pm \alpha_3$ | $\alpha_2^2 = 3$, $\alpha_3 = 0$ |
 | $S_{33}$ | $F_{33} = F_{44}$ | $d^l_{00}$ | $\alpha_4$ | $\alpha_4^1 = 3/2$ |
 | $S_{12}$ | $F_{12}$ | $d^l_{02}$ | $\beta_1$ | $\beta_1^2 = -\sqrt6/2$ |
@@ -344,15 +344,17 @@ Greek coefficient array relative to $\max_l\lvert\alpha_1^l\rvert$. Their priors
   $\kappa\max(1, \lvert m\rvert/\lvert m - 1\rvert) + ((L + 1)^2 + x^2)/8$ for their
   derivatives.
 
-The second term is the quadrature's. The `f64` nodes are the exact Gauss nodes rounded, so the
-computed coefficients are those of a rule whose nodes have moved by up to half an ulp. Next to
-$\mu = 1$ such a move changes $d_L$ by about $L^2\cdot2^{-54}$; and it changes the forward
+The second term is the quadrature's. The computed coefficients are those of a rule whose
+`f64` nodes differ from the exact Gauss nodes; next to $\mu = 1$, where it matters, they are
+within about half an ulp, for the rounded double-double rule and the asymptotic rule alike
+(measured: 0.43 ulp). Next to $\mu = 1$ such a move changes $d_L$ by about $L^2\cdot2^{-54}$; and it changes the forward
 peak of the phase matrix, whose slope in $\mu$ grows like $x^4$ while the weights there shrink
 like $1/x^2$, by about $x^2\cdot2^{-54}$ of its size. Without
 the term the Greek coefficients needed $C = 85$ at $x = 100$ (all orders) and $C = 100$ at
 $x = 2\cdot10^4$ (to order 64), growing with $L^2$ and $x^2$; with it, $C$ is at most 1.7
-everywhere. The error belongs to the rounded rule, not to how it is computed: forcing the
-double-double rule changes nothing, since its nodes rounded to `f64` are the same.
+everywhere it was measured (the map 1.7, the Arb references 0.61, the large spheres 0.22). The
+error belongs to the `f64` nodes, not to how they are computed: forcing the double-double rule
+changes nothing, since its nodes rounded to `f64` are as accurate next to $\mu = 1$.
 
 The constants C are measured, with a margin of at least 4 over the worst case found at every
 Arb reference point and on a dense double-double grid: 16 for the coefficients, efficiencies
@@ -453,5 +455,5 @@ The Greek coefficients for all orders cost the amplitudes at $n_q \approx 2N$ no
 $O(N^2)$, and the four Wigner recurrences up to $L = 2N$ at each node, also $O(N^2)$. In
 `f64` on the same machine they take 0.09 s at $x = 10^3$ and 7.6 s at $x = 10^4$ (measured
 during development, not by the benchmark). The Gauss–Legendre rule itself is negligible: above
-100 points it comes from $O(n)$ asymptotic expansions, 13 ms for the $2\cdot10^4$ nodes of
+100 points it comes from $O(n)$ asymptotic expansions, 6 ms for the $2\cdot10^4$ nodes of
 $x = 10^4$ ({ref}`gauss-legendre`).

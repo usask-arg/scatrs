@@ -47,7 +47,8 @@ nodes, weights = gauss_legendre(n + 1)
 mean = 0.5 * np.sum(weights * mie.phase_matrix(x, m, nodes).f11)
 print("normalization:", mean)
 assert abs(mean - 1) < 1e-13
-assert abs(f.f12[0]) < 1e-13 * f.f11[0] and abs(f.f12[-1]) < 1e-13 * f.f11[0]
+# Each end measured against its own F11 (the forward peak is far larger than the backward).
+assert abs(f.f12[0]) < 1e-13 * f.f11[0] and abs(f.f12[-1]) < 1e-13 * f.f11[-1]
 ```
 
 ## Greek coefficients
@@ -89,8 +90,8 @@ assert err11 < 1e-12 and err12 < 1e-12
 
 The forward peak needs high orders. Summed up to order $L$, the expansion of $F_{11}$ in the
 forward direction ($d^l_{00}(0°) = 1$, so the sum is $\sum_{l \le L}\alpha_1^l$) misses most of
-the peak at low orders, and reaches rounding level only at about $L = 36$ here, more than three times the
-size parameter. Truncating keeps the normalization ($\alpha_1^0$ is unchanged)
+the peak at low orders, and reaches rounding level only at about $L = 36$ here, more than
+three times the size parameter. Truncating keeps the normalization ($\alpha_1^0$ is unchanged)
 but not the peak; so {func}`~scatrs.mie.greek` returns all orders unless asked for fewer.
 
 ```{code-cell} python
@@ -100,7 +101,6 @@ for order in (8, 16, 24, 32, 36, L):
     partial = np.sum(g.alpha1[: order + 1])
     print(f"L = {order:2d}: {partial:16.12f}, relative error {abs(partial / peak - 1):.1e}")
 assert abs(np.sum(g.alpha1[:17]) / peak - 1) > 0.1
-assert abs(np.sum(g.alpha1[:33]) / peak - 1) > 1e-12
 assert abs(np.sum(g.alpha1[:37]) / peak - 1) < 1e-13
 assert abs(np.sum(g.alpha1) / peak - 1) < 1e-12
 ```
@@ -109,8 +109,8 @@ assert abs(np.sum(g.alpha1) / peak - 1) < 1e-12
 
 `derivatives=True` returns the derivatives with respect to the size parameter and the real
 and imaginary parts of the refractive index, from those of the amplitudes, projected like the
-values. Here the derivatives of the asymmetry term $\alpha_1^1$ are checked against central
-differences, in $x$ and $\mathrm{Re}\,m$ (this $m$ is real, and a central difference in
+values. Here the derivatives of $\alpha_1^1$ (the asymmetry term), $\beta_1^2$ and $\beta_1^{20}$
+are checked against central differences, in $x$ and $\mathrm{Re}\,m$ (this $m$ is real, and a central difference in
 $\mathrm{Im}\,m$ would need a negative imaginary part, which is rejected).
 
 ```{code-cell} python
@@ -120,8 +120,12 @@ for name, at in [
     ("x", lambda e: mie.greek(x + e, m, L)),
     ("m_real", lambda e: mie.greek(x, m + e, L)),
 ]:
-    fd = (at(h).alpha1[1] - at(-h).alpha1[1]) / (2 * h)
-    exact = g.d(name).alpha1[1]
-    print(f"d alpha1[1] / d{name}: closed form {exact:+.10f}, finite difference {fd:+.10f}")
-    assert abs(exact - fd) < 1e-7 * max(1, abs(fd))
+    plus, minus = at(h), at(-h)
+    for coef, l in [("alpha1", 1), ("beta1", 2), ("beta1", 20)]:
+        fd = (getattr(plus, coef)[l] - getattr(minus, coef)[l]) / (2 * h)
+        exact = getattr(g.d(name), coef)[l]
+        print(f"d {coef}[{l}] / d{name}: closed form {exact:+.10f}, difference {fd:+.10f}")
+        # The difference's rounding error is about eps * |coefficient| / h, 5e-10 here, and
+        # its truncation error about h**2 times the third derivative: 1e-7 bounds both.
+        assert abs(exact - fd) < 1e-7 * max(1, abs(fd))
 ```

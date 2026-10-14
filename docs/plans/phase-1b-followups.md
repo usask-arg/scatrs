@@ -22,9 +22,9 @@ its heading.
   x = 10⁴, all orders, `f64`, Apple M4 Pro.
 
 ## Accuracy (phase 2 or later)
-- **Remove the node-rounding term.** The `f64` Gauss–Legendre nodes are the exact nodes
-  rounded, so the Greek coefficients are those of a rule with nodes moved by up to half an
-  ulp. Next to μ = 1 that changes d_L by about L²·2⁻⁵⁴ and the forward peak by about x²·2⁻⁵⁴
+- **Remove the node-rounding term.** The `f64` Gauss–Legendre nodes differ from the exact
+  ones by about half an ulp next to μ = 1 (rounded double-double and asymptotic rules alike),
+  so the Greek coefficients are those of a rule with nodes moved that much. Next to μ = 1 that changes d_L by about L²·2⁻⁵⁴ and the forward peak by about x²·2⁻⁵⁴
   of its size, hence the term ((L + 1)² + x²)/8 in κ′ (measured: about 2·10⁻⁹ of max α₁ at
   x = 2·10⁴ with L = 64, and 2·10⁻¹¹ at x = 10³ for all orders).
   - **Fix:** evaluate the amplitudes (π_n, τ_n) and the Wigner d-functions in terms of 1 − μ

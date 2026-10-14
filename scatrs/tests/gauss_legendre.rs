@@ -17,7 +17,7 @@ const EPS: f64 = f64::EPSILON; // 2^-52
 const U2: f64 = 1.232_595_164_407_831e-32;
 
 /// From this many points on, the `f64` rule comes from the asymptotic expansions, within
-/// 16·2⁻⁵²; below, it is the double-double rule rounded, within 2⁻⁵².
+/// 32·2⁻⁵²; below, it is the double-double rule rounded, within 2⁻⁵².
 const ASYMPTOTIC_FROM: usize = 101;
 
 /// The `f64` contract at n points: node absolute error and weight relative error at most this.
@@ -239,8 +239,9 @@ fn every_small_rule_converges_to_the_right_roots() {
     }
 }
 
+/// Every `f64` rule up to 3000 points: the Newton method up to 100 points and the asymptotic
+/// rule above, which takes about 0.2 s for all of them.
 #[test]
-#[ignore = "every rule up to 3000 points: about 6 CPU-minutes, spread over all threads"]
 fn every_rule_up_to_3000_points_converges_to_the_right_roots() {
     let next = AtomicUsize::new(1);
     let threads = std::thread::available_parallelism().map_or(4, |t| t.get());

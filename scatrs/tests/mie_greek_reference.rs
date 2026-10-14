@@ -13,7 +13,8 @@ mod common;
 use common::Record;
 use common::check::{Parts, Worst, error, max_nan, records, refractive_index, size_parameter};
 use common::greek::{
-    GREEK_NAMES, GreekOutputs, PHASE_NAMES, greek_reference, greek_value_measures, solve_greek,
+    GREEK_NAMES, GreekOutputs, PHASE_NAMES, greek_derivative_measures, greek_reference,
+    greek_value_measures, solve_greek,
 };
 use scatrs::mie::{MieOutput, Normalization, default_n_max};
 use scatrs::scalar::DoubleDouble as Dd;
@@ -118,12 +119,15 @@ fn double_double_phase_matrix_and_greek_coefficients_match_arb() {
     }
 }
 
-/// The unnormalized forms (per unit geometric cross section) within the same tolerances, against
-/// double-double: the Arb records hold the normalized forms only.
+/// The unnormalized forms (per unit geometric cross section) and their derivatives within the
+/// same tolerances, against double-double: the Arb records hold the normalized values only, and
+/// the accuracy map is normalized.
 #[test]
-fn unnormalized_values_are_within_the_tolerances() {
+fn unnormalized_values_and_derivatives_are_within_the_tolerances() {
     let mut worst_g = Worst::new("unnormalized Greek coefficients");
     let mut worst_f = Worst::new("unnormalized phase matrix");
+    let mut worst_dg = Worst::new("unnormalized Greek derivatives");
+    let mut worst_df = Worst::new("unnormalized phase-matrix derivatives");
     let diff = |a: f64, b: Dd| (Dd::from_f64(a) - b).hi().abs();
     for (g, p) in cases() {
         let (x, m) = (size_parameter(&g), refractive_index(&g));
@@ -151,6 +155,25 @@ fn unnormalized_values_are_within_the_tolerances() {
                     &p,
                     &detail,
                 );
+            }
+        }
+        let dm = greek_derivative_measures(x, m, &mu, n, order(&g), norm, &d);
+        let output = MieOutput::GreekDerivatives { order: order(&g) };
+        for (q, key) in ["dx", "dm_re", "dm_im"].into_iter().enumerate() {
+            for (k, name) in GREEK_NAMES.into_iter().enumerate() {
+                let err = (0..f.greek_d[q][k].len())
+                    .map(|l| diff(f.greek_d[q][k][l], d.greek_d[q][k][l]))
+                    .fold(0.0, max_nan);
+                let detail = format!("{name}_{key}");
+                worst_dg.check(output, err, dm.greek[q][k], &g, &detail);
+            }
+            for (k, name) in PHASE_NAMES.into_iter().enumerate() {
+                let err = (0..mu.len())
+                    .map(|j| diff(f.phase_d[q][k][j], d.phase_d[q][k][j]))
+                    .fold(0.0, max_nan);
+                let detail = format!("{name}_{key}");
+                let measure = dm.phase[q][k];
+                worst_df.check(MieOutput::PhaseMatrixDerivatives, err, measure, &p, &detail);
             }
         }
     }

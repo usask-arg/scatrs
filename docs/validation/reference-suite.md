@@ -118,7 +118,7 @@ record holds the efficiencies, $g$, and $S_1$, $S_2$ at 9 angles from 0° to 180
 **`mie_derivatives.jsonl`** holds the same for 80 spheres, with the derivatives of each
 output instead of the values.
 
-**`mie_greek.jsonl`** holds two records per sphere, for 18 spheres from $x = 0.1$ to 200, of
+**`mie_greek.jsonl`** holds two records per case, for 18 cases from $x = 0.1$ to 200 (17 spheres, one at two orders), of
 the $N$-term series with the default `f64` truncation $N$. A `,phase` record holds the
 normalized phase matrix $F_{11}$, $F_{12}$, $F_{33}$, $F_{34}$ at 7 angles from 0° to 180°; a
 `,greek` record holds $\alpha_1, \ldots, \alpha_4, \beta_1, \beta_2$ up to all orders $2N$

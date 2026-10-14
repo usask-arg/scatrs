@@ -153,3 +153,39 @@ distributions of one material.
 4. Kernel B and `Auto`.
 5. The comparison, the published results, the docs (theory, accuracy, limitations, CHANGELOG,
    follow-ups).
+
+## 10. Changes during implementation
+
+Recorded 2026-10-14, after measuring:
+
+- **GEMM.** faer 0.24 (MIT, MSRV 1.84, 46 crates without default features, safe API) rather
+  than `matrixmultiply`, whose `dgemm` is an unsafe raw-pointer API that the core's
+  `#![forbid(unsafe_code)]` rules out. On the kernel's shape (316 × 600 × 60) faer reached
+  55 GFLOP/s, `matrixmultiply` 52, a safe hand-blocked loop 20 (Apple M4 Pro).
+- **Kernel A** as in section 3, restricted to each panel's own number of terms. The band tables
+  are built per wavelength (a fraction of a millisecond), not cached across wavelengths.
+- **Kernel B is not adopted, and there is no `greek_method` option.** A numpy prototype
+  confirmed an exact variant without Clebsch–Gordan coefficients: the averaged products
+  ⟨c±ₙc±*ₙ′⟩ (|n − n′| ≤ L) evaluated as banded quadratic forms in wₙ(τₙ ± πₙ) at a band's
+  Gauss nodes, then projected (pairs with |n − n′| > L contribute nothing to orders ≤ L), which
+  matched `mie.greek` to 10⁻¹⁴. But measured per panel of 15 spheres, even with the products
+  as complex GEMMs over tiles of the band, kernel B cost 0.37–1.7 times kernel A (0.37 only at
+  N = 600, L = 32; 1.0 at N = 600, L = 64; 1.7 at N = 150), before doubling for the Kronrod and
+  Gauss sums its error estimates need; and per distribution in a batch it needs N·L
+  accumulators where kernel A needs 4·n_q. It is recorded in `docs/plans/phase-2b-followups.md`.
+- **Pass 2 sums and the projection as matrix products.** Profiling the database grid showed the
+  per-node accumulation into each distribution's sums, then the per-distribution projections
+  (each recomputing the generalized spherical functions), dominating. A panel's sums are now
+  (weights) × (nodes' values), and each band projects every distribution's tables at once with
+  matrices (2l + 1)/2·wₖ·dₗ(μₖ): 13 s → 3.2 s for the grid on one thread.
+- **A greedy split rule was tried and rejected.** Splitting, per unmet target, the panels that
+  hold the excess error took fewer panels (306 against 477 on the grid) but lost more accuracy
+  than time: at rtol 10⁻³, C_ext's error reached 1.3·10⁻³, and the calibration's worst ratios
+  rose to 0.021 and 1.9. The share rule stays.
+- **Matched accuracy** is decided on C_ext, C_sca and the Greek coefficients (section 7 named
+  the co-albedo too). ω and the co-albedo are reported but not matched: both codes integrate
+  C_sca and C_ext on the same nodes, so their errors largely cancel in ω (sasktran2's ω errors on
+  W2 are below 4·10⁻⁷, from that cancellation), and for W2's weak absorbers (co-albedo about
+  10⁻⁶) neither code resolves the co-albedo. Computing ω as 1 − ⟨C_abs⟩/⟨C_ext⟩ (equal up to
+  rounding) would give a tight estimate, but ⟨C_abs⟩'s own estimate fell up to 1.6 times short of
+  its true error on W2, so ω keeps the conservative quotient estimate (follow-up).

@@ -293,6 +293,12 @@ $F_{34} = 0$; the other coefficients vanish. The Rust test
 $\Theta = 90°$, so the degree of linear polarization of scattered unpolarized light, positive
 when it is polarized perpendicular to the scattering plane, is $-F_{12}/F_{11}$.
 
+**sasktran2.** The Greek coefficients of sasktran2's Mie integration (version 2026.10.1,
+`lm_a1` … `lm_b2`) have the same normalization ($\alpha_1^0 = 1$) and the same $\alpha_1$ to
+$\alpha_4$ as scatrs's, and the opposite sign of $\beta_1$ and $\beta_2$; its `num_coeffs`
+coefficients are the orders 0 to `num_coeffs` − 1. Measured on size-averaged coefficients
+({doc}`/validation/sasktran2`); its refractive index is $m = n - ik$.
+
 (mie-accuracy-model)=
 ## The accuracy model
 

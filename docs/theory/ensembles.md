@@ -220,6 +220,33 @@ G_7\rvert$ measures the integration error. The coefficients of the ensemble are 
 bands' projections. With `GreekOrder::All` (Python `greek="all"`), $L = 2N_\text{max}$ for the
 largest $N$ at any node.
 
+### The tables as matrix products
+
+A band's tables need $S_1$ and $S_2$ of every node at the band's $n_q$ cosines, the bulk of the
+cost of ensembles with Greek coefficients. With $w_n = (2n + 1)/(n(n + 1))$,
+$S_1 = \sum_n w_n(a_n\pi_n + b_n\tau_n)$ and $S_2 = \sum_n w_n(a_n\tau_n + b_n\pi_n)$. The
+functions $w_n\pi_n$ and $w_n\tau_n$ at a band's nodes are the same for every sphere, so each
+band tabulates them once, at its non-negative nodes. Since $\pi_n(-\mu) =
+(-1)^{n+1}\pi_n(\mu)$ and $\tau_n(-\mu) = (-1)^n\tau_n(\mu)$, with $G_E$ the table of
+$w_n\pi_n$ for odd $n$ and $w_n\tau_n$ for even $n$, $G_O$ the other two, $u_n = a_n$ (odd $n$)
+or $b_n$ (even $n$) and $v_n$ the other coefficient,
+
+$$S_1(\pm\mu) = G_E u \pm G_O v,\qquad S_2(\pm\mu) = G_E v \pm G_O u$$
+
+at the non-negative nodes $\mu$ (the Gauss–Legendre nodes are exactly symmetric). For the 15
+nodes of a panel these are two real matrix products, $G_E$ and $G_O$ ($n_q/2 \times N$) times
+the nodes' coefficients ($N \times 60$; 120 with the $m$-derivatives $\mathrm{d}a_n/\mathrm{d}m$,
+$\mathrm{d}b_n/\mathrm{d}m$), computed with the [faer](https://docs.rs/faer) crate's matrix product
+on one thread. The products cost what the per-sphere sums did, $O(N\,n_q)$, but run at about
+55 GFLOP/s rather than a few (on an Apple M4 Pro), and the tables agree with the per-sphere
+phase matrix to $10^{-12}$ of its largest value (a unit test).
+
+The sums over the nodes are matrix products too: each panel's sums for every part and block
+(values, each $\theta$, $\mathrm{Re}\,m$, $\mathrm{Im}\,m$) are the weights at the nodes
+(Kronrod and Gauss) times the nodes' values. The projection likewise: a band's matrices
+$\tfrac{2l + 1}{2}w_k d_l(\mu_k)$ times the tables of every mixture (or batch distribution) and
+derivative at once, so the generalized spherical functions are computed once per band.
+
 ## Error estimates
 
 Every output has an estimate of the error of the size integration and of the cut-offs, of the
@@ -287,31 +314,50 @@ tables, in $C_\text{sca}$ units, are averaged with the same fractions, so the ph
 are averaged with $w_i\langle C_\text{sca}\rangle_i$, before one projection of all components.
 A multimodal distribution is a mixture of its modes with one refractive index.
 
+## Batches
+
+`compute_batch` (Python {func}`scatrs.ensemble.compute_batch`) averages over each of many
+distributions of one material, as an optics database needs: a grid of median radii and widths,
+say. The distributions share their size nodes: one set of panels per wavelength covers the
+union of their Mie ranges (and their `Tabulated` breakpoints), and is refined until every
+distribution meets its own targets of pass 1 (a panel splits if it exceeds its share of any
+distribution's target) and extended until every distribution's integrands are negligible at
+both ends. Each node's Mie solution and tables then serve every distribution, weighted by each
+density. The normalizations and moments are integrated per distribution, without Mie
+solutions, and monodisperse distributions on their own.
+
+Each distribution has its own error estimates and `converged` flag. A distribution in a batch is
+at least as refined as alone, so its values differ from `compute`'s within the error estimates
+(a test checks both against references at rtol $10^{-10}$). A batch computes values only: the
+Jacobians come from `compute`. For the database grid of {doc}`/validation/sasktran2` (rtol
+$10^{-3}$, Greek coefficients to order 64, one thread), the batch costs about 1.7 times its
+broadest distribution alone, against 4 times for the 50 distributions one by one.
+
 ## Parallelism and determinism
 
 Wavelengths, the panels of each pass-1 round and chunks of four pass-2 panels run in parallel
 on the current rayon pool (in Rust, a caller can `install` its own); each task owns its Mie
-workspace. Refinement decisions depend only on the values, and the sums are reduced in a fixed
-order, so results are bitwise identical for any number of threads (tested with pools of 1 and
-4). Errors are too: the parallel tasks all finish, and the first error in wavelength, part and
+workspace, and the matrix products run on one thread within a task. Refinement decisions depend
+only on the values, and the sums are reduced in a fixed order (the chunks' sums in windows of
+32 chunks, which bounds the memory of large batches), so results are bitwise identical for any
+number of threads (tested with pools of 1 to 5, mixtures and batches included). Errors are too: the parallel tasks all finish, and the first error in wavelength, part and
 panel order is returned. Python calls release the GIL.
 
 ## Cost
 
-Pass 1, and pass 2 without the Greek coefficients, are cheap. The Greek coefficients are not:
-the exact coefficients need each node's amplitudes at about $N + L/2$ cosines, $O(N^2)$ for
-large spheres. Measured on an Apple M4 Pro (12 cores) per wavelength (best of 2), a lognormal
-with $r_g = 1$, $\sigma_g = 2$ and $m = 1.33 + 10^{-4}i$, at rtol $10^{-6}$ and the other options
-default:
-
+Pass 1, and pass 2 without the Greek coefficients, are cheap. The Greek coefficients cost
+more: the exact coefficients need each node's amplitudes at about $N + L/2$ cosines,
+$O(N^2)$ for large spheres, as matrix products (above). Measured on an Apple M4 Pro
+(12 cores) per wavelength (best of 3), a lognormal with $r_g = 1$, $\sigma_g = 2$ and
+$m = 1.33 + 10^{-4}i$, at rtol $10^{-6}$ and the other options default:
 
 | $\lambda$ | panels | cross sections, $g$ and moments | with Greek coefficients to order 32 |
 |---|---|---|---|
-| 1 | 1461 | 0.035 s | 0.62 s |
-| 0.5 | 2630 | 0.091 s | 2.9 s |
-| 0.3 | 4092 | 0.21 s | 10.4 s |
+| 1 | 1461 | 0.037 s | 0.093 s |
+| 0.5 | 2630 | 0.11 s | 0.31 s |
+| 0.3 | 4092 | 0.20 s | 0.90 s |
 
-All three converge. The Greek coefficients still take about 10 s per wavelength at
-$\lambda = 0.3$. A narrow fine-mode aerosol takes milliseconds ({doc}`/examples/ensemble`).
-Clebsch–Gordan Greek coefficients ($O(N\,L)$ per sphere) and $\pi_n$, $\tau_n$ tables shared
-within a band are planned to reduce the cost of pass 2; see {doc}`/limitations`.
+All three converge. Before the matrix products (phase 2a) the Greek coefficients took 0.62 s,
+2.9 s and 10.4 s. A narrow fine-mode aerosol takes milliseconds ({doc}`/examples/ensemble`).
+{doc}`/validation/sasktran2` compares the speed and accuracy with sasktran2's at matched
+accuracy, for one distribution and for a database grid.

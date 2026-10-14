@@ -76,6 +76,7 @@ theory/scalar-types
 
 validation/reference-suite
 validation/accuracy
+validation/sasktran2
 limitations
 ```
 

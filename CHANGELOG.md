@@ -40,8 +40,17 @@ All notable changes are documented here. The format follows
   optional refinement on the Greek coefficients.
 - `GreekProjector::project_bounds`, which projects bounds on phase-matrix table errors to
   bounds on the Greek coefficients.
+- `ensemble::compute_batch` (Python `scatrs.ensemble.compute_batch`): many distributions of one
+  material on shared size nodes, each with its own error estimates, for optics databases.
+- `benchmarks/compare.py`: accuracy and speed against sasktran2's Mie integration, published in
+  the documentation.
 
 ### Changed
+- Ensembles with Greek coefficients are 7–12 times faster (the lognormal of the theory
+  chapter's cost table, λ = 1 to 0.3): the phase-matrix tables of a panel's
+  spheres come from matrix products against tables of πₙ and τₙ shared by every sphere of a
+  projector band, and the sums and projections are matrix products too. The core crate now
+  depends on `faer` (without default features) for them.
 - Gauss–Legendre rules of `f64` precision above 100 points come from the asymptotic
   expansions, within 32·2⁻⁵² (measured 2.8 and 4.0 units of 2⁻⁵² for nodes and weights),
   instead of the double-double Newton rule rounded to within half an ulp. The Newton rule

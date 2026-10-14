@@ -181,13 +181,20 @@ the same treatment when a kernel needs them.
 ## Ensembles of spheres
 
 - **Cost of the Greek coefficients.** Pass 2 computes each size node's amplitudes at about
-  $N + L/2$ cosines to get exact Greek coefficients, $O(N^2)$ for large spheres, so broad
-  distributions of large spheres are slow. Measured on an Apple M4 Pro (12 cores), per
-  wavelength, a lognormal with $r_g = 1$ µm, $\sigma_g = 2$ and $m = 1.33 + 10^{-4}i$ at rtol
-  $10^{-6}$: the cross sections, $g$ and the moments take 0.035 s, 0.091 s and 0.21 s at
-  $\lambda$ = 1, 0.5 and 0.3 µm; with the Greek coefficients to order 32, 0.62 s, 2.9 s and
-  10.4 s. Clebsch–Gordan Greek coefficients ($O(N\,L)$ per sphere) and $\pi_n$, $\tau_n$
-  tables shared within a projector band are planned. See {doc}`theory/ensembles`.
+  $N + L/2$ cosines to get exact Greek coefficients, $O(N^2)$ for large spheres (as matrix
+  products), whatever the order $L$. Measured on an Apple M4 Pro (12 cores), per wavelength, a
+  lognormal with $r_g = 1$ µm, $\sigma_g = 2$ and $m = 1.33 + 10^{-4}i$ at rtol $10^{-6}$: the
+  cross sections, $g$ and the moments take 0.037 s, 0.11 s and 0.20 s at $\lambda$ = 1, 0.5 and
+  0.3 µm; with the Greek coefficients to order 32, 0.093 s, 0.31 s and 0.90 s. A cheaper method
+  for low orders was measured and not adopted (`docs/plans/phase-2b-followups.md`). See
+  {doc}`theory/ensembles` and {doc}`validation/sasktran2`.
+- **Batches compute values only.** `compute_batch` shares the size nodes of many
+  distributions; their Jacobians come from `compute`, one distribution at a time.
+- **⟨C_abs⟩ of weak absorbers.** ⟨C_abs⟩ is refined to rtol of ⟨C_ext⟩, so for weak absorbers
+  its relative accuracy, and that of the co-albedo, is far worse than rtol, and its estimate is
+  indicative: for the database grid of {doc}`validation/sasktran2` ($m = 1.43 + 10^{-8}i$) it
+  fell up to 1.6 times short of the true error. The single-scattering albedo itself is accurate
+  to about rtol, and its estimate is conservative.
 - **Non-absorbing spheres.** Without absorption the efficiencies of large spheres have narrow
   resonance ripples that the size integration may not resolve within `max_panels` (default
   4096). For the lognormal above with $m = 1.33$ at $\lambda = 0.5$ µm, the result has

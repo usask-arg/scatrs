@@ -5,7 +5,9 @@ Gauss–Legendre rule) and were deliberately deferred. Each belongs to the phase
 its heading.
 
 ## Cross-code comparison (with the sasktran2 comparison)
-- **Greek coefficients against sasktran2.**
+- **Greek coefficients against sasktran2.** Phase 2b compared size-averaged coefficients
+  (`docs/validation/sasktran2.md`): the same α₁ to α₄ and normalization, β₁ and β₂ of opposite
+  sign, now in `docs/theory/mie.md`. The per-sphere comparison and the aliasing remain.
   - **What:** compare scatrs' Greek coefficients with sasktran2's for the same spheres, and
     record sasktran2's conventions (the signs of β₁ and β₂, the d-function convention and the
     normalization) in the sign-convention table of `docs/theory/mie.md`.

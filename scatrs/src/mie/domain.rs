@@ -38,12 +38,34 @@ pub enum MieOutput {
     /// ∂S/∂x and dS/dm: max over μ of |error| / max over μ of
     /// max(|∂S/∂p|, S_rms·(1 + |m|x)/|p|).
     AmplitudeDerivatives,
+    /// F₁₁, F₁₂, F₃₃, F₃₄ at each cosine: |error| / max(F₁₁, F̄), where F̄ = ½∫F₁₁ dμ is 1
+    /// normalized and Q_sca unnormalized, so the deep minima of the angular pattern are measured
+    /// against its mean.
+    PhaseMatrix,
+    /// Each ∂F/∂p of the phase matrix: max over μ of |error| / max over μ of
+    /// max(|∂F/∂p|, max(F₁₁, F̄)·(1 + |m|x)/|p|), with |p| as for
+    /// [`EfficiencyJacobian`](Self::EfficiencyJacobian).
+    PhaseMatrixDerivatives,
+    /// Each of α₁, α₂, α₃, α₄, β₁, β₂ up to `order` L: max over l of |error| / max over l of
+    /// |α₁|.
+    GreekCoefficients {
+        /// The highest order L.
+        order: usize,
+    },
+    /// Each derivative of α₁, …, β₂ with respect to p: max over l of |error| / max over l of
+    /// max(|∂c/∂p|, A·(1 + |m|x)/|p|), with A = max over l of |α₁| and |p| as for
+    /// [`EfficiencyJacobian`](Self::EfficiencyJacobian).
+    GreekDerivatives {
+        /// The highest order L.
+        order: usize,
+    },
 }
 
 /// The region of inputs whose accuracy has been validated, and the declared tolerances there.
 ///
 /// Inside it, every output of [`Mie::compute`](super::Mie::compute) in `f64`, with the default
-/// truncation or more terms, is within
+/// truncation or more terms, and of the solution's methods (amplitudes, phase matrix, Greek
+/// coefficients, in either [`Normalization`](super::Normalization)), is within
 ///
 /// C·(κ′(x, m) + cond)·2⁻⁵²
 ///
@@ -54,7 +76,8 @@ pub enum MieOutput {
 ///   with s the denominator of the measure (for the measures over an array, the numerator is
 ///   the largest over the array):
 ///   * for the holomorphic aₙ, bₙ, S₁, S₂ and their derivatives, (x·|∂y/∂x| + |m|·|dy/dm|)/s;
-///   * for the real efficiencies, g and their Jacobian, componentwise:
+///   * for the real outputs (the efficiencies, g, the phase matrix, the Greek coefficients
+///     and their derivatives), componentwise:
 ///     (x·|∂y/∂x| + |Re m|·|∂y/∂(Re m)| + |Im m|·|∂y/∂(Im m)|)/s.
 ///
 ///   Rounding x and m to `f64` (each part of m to within 2⁻⁵³ of itself) already perturbs the
@@ -67,7 +90,14 @@ pub enum MieOutput {
 ///   the efficiency Jacobian (the derivatives of g lose a second factor |m|/|m − 1| near
 ///   m = 1), and 1 + max(1, |m|)·x for the derivatives of the coefficients and amplitudes,
 ///   which lose nothing near m = 1: m − 1 enters the x-derivatives as an exact factor of
-///   m² − 1, and the m-derivatives have no factor that cancels.
+///   m² − 1, and the m-derivatives have no factor that cancels. The phase matrix takes κ and
+///   its derivatives κ·max(1, |m|/|m − 1|), like the efficiencies and their Jacobian (the
+///   normalized phase matrix divides by Q_sca). The Greek coefficients up to order L add
+///   ((L + 1)² + x²)/8 to those: the coefficients are those of a rule whose `f64` nodes differ
+///   from the exact ones, by about half an ulp next to μ = 1, where it matters; there such a
+///   move changes d_L by about L²·2⁻⁵⁴ and the forward peak of the phase matrix, whose
+///   slope in μ grows like x⁴ while the weights there shrink like 1/x², by about x²·2⁻⁵⁴ of
+///   its size.
 /// * C is the output's constant ([`constant`](Self::constant)).
 ///
 /// Neither term alone is a bound: the accuracy map in the documentation shows outputs that
@@ -120,12 +150,18 @@ impl ValidatedDomain {
     /// the measure of [`MieOutput`], where `condition` is the output's condition number (see
     /// the type documentation for it and for κ′).
     pub fn tolerance(&self, output: MieOutput, x: f64, m: Complex<f64>, condition: f64) -> f64 {
+        let kappa = Self::condition_factor(x, m);
+        let quadrature = |order: usize| ((order as f64 + 1.0).powi(2) + x * x) / 8.0;
         let prior = match output {
             MieOutput::CoefficientDerivatives | MieOutput::AmplitudeDerivatives => {
                 1.0 + m.norm().max(1.0) * x
             }
-            MieOutput::EfficiencyJacobian => Self::condition_factor(x, m) * near_one(m),
-            _ => Self::condition_factor(x, m),
+            MieOutput::EfficiencyJacobian | MieOutput::PhaseMatrixDerivatives => {
+                kappa * near_one(m)
+            }
+            MieOutput::GreekCoefficients { order } => kappa + quadrature(order),
+            MieOutput::GreekDerivatives { order } => kappa * near_one(m) + quadrature(order),
+            _ => kappa,
         };
         Self::constant(output) * (prior + condition) * f64::EPSILON
     }
@@ -139,6 +175,10 @@ impl ValidatedDomain {
     /// | derivatives of S₁, S₂ | 64 |
     /// | efficiency Jacobian | 256 |
     /// | coefficient derivatives | 512 |
+    /// | phase matrix | 32 |
+    /// | derivatives of the phase matrix | 128 |
+    /// | Greek coefficients | 8 |
+    /// | derivatives of the Greek coefficients | 16 |
     pub fn constant(output: MieOutput) -> f64 {
         match output {
             MieOutput::Coefficients
@@ -151,6 +191,10 @@ impl ValidatedDomain {
             MieOutput::AmplitudeDerivatives => 64.0,
             MieOutput::EfficiencyJacobian => 256.0,
             MieOutput::CoefficientDerivatives => 512.0,
+            MieOutput::PhaseMatrix => 32.0,
+            MieOutput::PhaseMatrixDerivatives => 128.0,
+            MieOutput::GreekCoefficients { .. } => 8.0,
+            MieOutput::GreekDerivatives { .. } => 16.0,
         }
     }
 }

@@ -67,11 +67,13 @@ def test_limits_are_exposed():
     assert special.MAX_WIGNER_D_VALUES == _scatrs.MAX_WIGNER_D_VALUES == 2**28
     assert mie.MAX_MIE_ORDER == _scatrs.MAX_MIE_ORDER == 2**20
     assert mie.MAX_MIE_VALUES == _scatrs.MAX_MIE_VALUES == 2**27
+    assert mie.MAX_GREEK_ORDER == _scatrs.MAX_GREEK_ORDER == 2**21
 
 
 def test_test_hooks_live_outside_the_extension_namespace():
     assert set(_scatrs.__all__) == {
         "MAX_GAUSS_LEGENDRE_POINTS",
+        "MAX_GREEK_ORDER",
         "MAX_MIE_ORDER",
         "MAX_MIE_VALUES",
         "MAX_WIGNER_D_VALUES",
@@ -81,6 +83,8 @@ def test_test_hooks_live_outside_the_extension_namespace():
         "mie_coefficients",
         "mie_default_n_max",
         "mie_efficiencies",
+        "mie_greek",
+        "mie_phase_matrix",
         "wigner_d",
     }
     assert not hasattr(_scatrs, "_raise_core_error")

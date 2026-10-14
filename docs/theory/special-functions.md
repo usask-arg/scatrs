@@ -21,8 +21,13 @@ $$w_k = \frac{2}{(1 - x_k^2)\,P_n'(x_k)^2}.$$
 
 <!-- synced with scatrs/src/special/gauss_legendre.rs rustdoc -->
 
-`gauss_legendre::<T>(n)` finds the $\lfloor n/2 \rfloor$ positive roots by Newton iteration in
-double-double arithmetic, and mirrors them. For odd $n$ the middle node is 0.
+`gauss_legendre::<T>(n)` uses one of two methods. Up to 100 points, and at every $n$ for
+double-double precision, it finds the roots by Newton iteration in double-double arithmetic.
+Above 100 points, `f64`-precision rules (`f64` and `Dual<f64, N>`) come from asymptotic
+expansions in $O(n)$. Both compute the $\lceil n/2 \rceil$ nodes nearest $+1$ and mirror
+them; for odd $n$ the middle node is 0.
+
+**Newton iteration** (double-double):
 
 - **Start.** Each root starts from Tricomi's approximation
 
@@ -40,25 +45,43 @@ double-double arithmetic, and mirrors them. For odd $n$ the middle node is 0.
   rounding level. Failing that within 100 iterations returns `NotConverged`.
 - **Weight.** The weight is computed in double-double from the root and $P_n'$ there.
 - **Rounding.** The double-double rule is converted once with `Real::from_f64_pair`, so every
-  type gets the same rule:
-  - the `f64` rule is the double-double rule rounded to nearest;
-  - a `Dual` rule is a constant (zero derivatives), whose values are bitwise those of `f64` or
-    `DoubleDouble`.
+  type gets the same rule: the `f64` rule (for $n \le 100$) is the double-double rule rounded
+  to nearest.
 
-Nodes ascend and the rule is exactly symmetric. The rule uses only IEEE 754 operations and
-fused multiply-adds, with no platform maths library, so its bits are designed not to depend on
-the platform. CI runs the tests on Linux, macOS and Windows.
+**Asymptotic expansions** (Bogaert 2014). With $v = 1/(n + \tfrac12)$, $j_k$ the $k$-th zero
+of the Bessel function $J_0$ and $a_k = j_k v$, the $k$-th node from $+1$ is $\cos\theta_k$
+with
 
-### Why double-double
+$$\theta_k = a_k + v^2 t_1 + v^4 t_2 + v^6 t_3,$$
+
+and its weight is
+
+$$w_k = \frac{2}{J_1(j_k)^2\,(a_k/\sin a_k)\,\bigl(v^{-2} + W_1 + v^2 W_2 + v^4 W_3\bigr)},$$
+
+where $t_i$ and $W_i$ are polynomials in $\cot a_k$ and $1/a_k$. The coefficients are those of
+FastGaussQuadrature.jl, which keeps fewer terms for larger $n$; scatrs keeps them all. The
+first 20 zeros $j_k$ and the first 10 values $J_1(j_k)^2$ are tabulated (computed with Arb);
+beyond them McMahon's expansion and its counterpart for $J_1(j_k)^2$ take over, already
+within $2\cdot2^{-52}$ where the tables end. The weight comes from the angle, not from the
+node, so it does not inherit the conditioning of $1 - x^2$ described below.
+
+`Dual` rules are constants (zero derivatives), whose values are bitwise those of `f64` or
+`DoubleDouble`. Nodes ascend and the rule is exactly symmetric. Both methods use only IEEE 754
+operations and fused multiply-adds, with the double-double sine and cosine instead of the
+platform maths library, so the bits of the rule are designed not to depend on the platform. CI
+runs the tests on Linux, macOS and Windows.
+
+### Why not plain `f64`
 
 Next to $\pm1$ the weights are ill-conditioned in the nodes. A node error $\delta$ changes the
 weight by a relative $2\lvert x\rvert\delta/(1 - x^2)$, and at the extreme nodes
 $1 - x^2 \approx 5.8/n^2$. That is about $n^2/6$ units of $2^{-52}$ per ulp of node error. So
 a weight computed from an `f64` node can be off by up to that much, even when the node is
 correctly rounded: about $7\cdot10^4$ units at $n = 1000$. Next to $+1$ is where the Mie
-forward-scattering peak sits. Computed in double-double and rounded once, the `f64` weights are
-instead within about half an ulp. The {doc}`quadrature example <../examples/quadrature>`
-measures this against Arb.
+forward-scattering peak sits. Computed in double-double and rounded once, the `f64` weights of
+the Newton method are within about half an ulp; the asymptotic weights, computed from the
+angle, within a few. The {doc}`quadrature example <../examples/quadrature>` measures this
+against Arb.
 
 ### Accuracy
 
@@ -67,53 +90,58 @@ measures this against Arb.
 The tests check the bounds below against Arb for every node of the full reference rules
 ($n$ = 1, 2, 3, 4, 5, 8, 16, 33, 64, 100, 128, 257, 500 and 1000). They also check them for
 the 8 nodes nearest each of $\pm1$ and the 4 nearest 0 at $n$ = 5000, 20 000 and $2^{17}$, the
-cap. The $n$ = 20 000 rule takes about 11 s, so its check is an ignored test, which CI runs
-weekly. At the cap the test computes only the individual roots. Other values of $n$ are not
-individually checked against Arb.
+cap, and the asymptotic rules against the double-double rules node by node for eleven values
+of $n$ from 101 to 4001, and, in an ignored test, for every $n$ from 101 to 3000. The
+double-double rule at $n$ = 20 000 takes about 11 s, so its check is an ignored test too; CI
+runs the ignored tests weekly. At the cap the test computes only the individual
+double-double roots.
 
 | Type | Nodes: absolute error | Weights: relative error | Measured worst |
 |---|---|---|---|
-| `f64` | $\le 2^{-52}$ | $\le 2^{-52}$ | $0.25\cdot2^{-52}$ for nodes and $0.49\cdot2^{-52}$ for weights: the rounding of the double-double rule |
+| `f64`, $n \le 100$ | $\le 2^{-52}$ | $\le 2^{-52}$ | $0.25\cdot2^{-52}$ for nodes and $0.46\cdot2^{-52}$ for weights: the rounding of the double-double rule |
+| `f64`, $n > 100$ | $\le 32\cdot2^{-52}$ | $\le 32\cdot2^{-52}$ | $2.8\cdot2^{-52}$ for nodes ($n$ = 2958) and $4.0\cdot2^{-52}$ for weights ($n$ = 1033) |
 | `DoubleDouble` | $\le 2^{-98}$ | $\le 2^{-100}(4 + n^2)$ | $0.51\cdot2^{-106}$ for nodes; about $2^{-85}$, $2^{-82}$ and $2^{-80}$ for weights at $n$ = 5000, 20 000 and $2^{17}$ |
 
 The $n^2$ in the double-double weight bound is the same conditioning of $1 - x^2$, now at
 double-double precision.
 
-The tests also check that Newton finds the right root, whatever its accuracy. By Bruns's
+The tests also check that each method finds the right root, whatever its accuracy. By Bruns's
 inequality, root $j$ lies in its own interval of $\theta$, $(j - \tfrac12)\pi/(n + \tfrac12)
 < \theta_j < j\pi/(n + \tfrac12)$, and these intervals are disjoint. The tests check that
-every root of every rule with $n \le 300$ lies inside its interval, and so do the roots nearest
-$\pm1$ and 0 for over a hundred values of $n$ up to the cap. An ignored test extends the first
-check to $n \le 3000$. None of these checks has found a rule that fails to converge.
+every root of every `f64` rule with $n \le 300$ lies inside its interval, and so does every
+root of eleven rules up to the cap; for the Newton method, so do the roots nearest $\pm1$ and
+0 for over a hundred values of $n$ up to the cap. A further test extends the first check to
+$n \le 3000$. None of these checks has found a rule that fails.
 
 ### Cost and the cap
 
 <!-- synced with scatrs/src/special/gauss_legendre.rs rustdoc -->
 
-The method is $O(n^2)$ in time and $O(n)$ in memory. Each root takes four to seven
-evaluations of the recurrence, about four on average for $n \ge 5000$. On an Apple M4 Pro
-this comes to about $28\,\text{ns}\cdot n^2$ for large $n$. These timings were measured
-during development; the repository has no benchmarks yet.
+The asymptotic method is $O(n)$ in time and memory; the Newton method is $O(n^2)$ in time.
+Each Newton root takes four to seven evaluations of the recurrence, about four on average for
+$n \ge 5000$. On an Apple M4 Pro this comes to about $28\,\text{ns}\cdot n^2$ for large $n$.
+These timings were measured during development; the repository has no benchmarks for them.
 
 | $n$ | 100 | 1000 | 5000 | 20 000 | $2^{17}$ (cap) |
 |---|---|---|---|---|---|
-| Time, measured | 0.8 ms | 32 ms | 0.72 s | 11 s | about 8 min (extrapolated) |
+| `f64`, measured | 0.8 ms | 0.3 ms | 1.5 ms | 6 ms | 40 ms |
+| `DoubleDouble`, measured | 0.8 ms | 32 ms | 0.72 s | 11 s | about 8 min (extrapolated) |
 
 - **Without FMA.** x86_64 builds without the `fma` target feature take roughly ten times
-  longer, because every double-double operation then calls a software `mul_add`.
-- **Memory.** A call takes `(32 + 2·size_of::<T>())·n` bytes, 32 bytes per point of
-  recurrence coefficients besides the rule itself: 6.3 MB for `f64` at the cap, and 277 MB
-  for `Dual<DoubleDouble, 64>`.
+  longer in double-double, because every double-double operation then calls a software
+  `mul_add`.
+- **Memory.** A double-double call takes `(32 + 2·size_of::<T>())·n` bytes, 32 bytes per point
+  of recurrence coefficients besides the rule itself: 277 MB for `Dual<DoubleDouble, 64>` at
+  the cap.
 - **No interruption.** A call cannot be interrupted. In Python it releases the GIL, but Ctrl+C
   takes effect only when it returns.
 
 `MAX_GAUSS_LEGENDRE_POINTS` caps $n$ at $2^{17} = 131\,072$; a larger $n$ returns
 `InvalidInput`. That is about three times the roughly $4\cdot10^4$ points that Mie quadrature
-needs at size parameter $2\cdot10^4$. The cap will be raised, never lowered, when an $O(n)$
-method replaces the present one.
+needs at size parameter $2\cdot10^4$. The cap may be raised, never lowered.
 
-Compute a rule once and reuse it. A rule that is exact to degree $D$ is also exact for every
-lower degree.
+A rule that is exact to degree $D$ is also exact for every lower degree, so a double-double
+rule is worth computing once and reusing.
 
 (wigner-d)=
 ## Wigner d-functions

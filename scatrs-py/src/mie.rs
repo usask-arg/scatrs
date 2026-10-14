@@ -9,23 +9,23 @@
 //! Broadcasting makes outputs far larger than inputs, so every output is bounded by
 //! `MAX_MIE_VALUES` before anything is allocated, and then allocated and filled without the GIL.
 
-use numpy::ndarray::{Array2, Array3, ArrayViewD};
+use numpy::ndarray::{Array2, Array3, Array4, ArrayViewD};
 use numpy::{
-    Complex64, IntoPyArray, PyArray1, PyArray2, PyArray3, PyArrayDyn, PyArrayMethods,
+    Complex64, IntoPyArray, PyArray1, PyArray2, PyArray3, PyArray4, PyArrayDyn, PyArrayMethods,
     PyReadonlyArrayDyn, PyUntypedArrayMethods,
 };
 use pyo3::exceptions::{PyBufferError, PyMemoryError, PyRuntimeError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use scatrs::mie::{
-    AmplitudeBuffers, MAX_MIE_ORDER, MAX_SIZE_PARAMETER, MIN_SIZE_PARAMETER, Mie, MieOptions,
-    MieSolution, n_terms,
+    AmplitudeBuffers, GreekCoefficients, MAX_GREEK_ORDER, MAX_MIE_ORDER, MAX_SIZE_PARAMETER,
+    MIN_SIZE_PARAMETER, Mie, MieOptions, MieSolution, Normalization, PhaseBuffers, n_terms,
 };
 
 use crate::errors::to_pyerr;
 
-/// The most complex values one call returns, counting derivatives, 2²⁷ (2 GiB); the
-/// efficiencies, which are real, may have twice as many. Larger requests raise
-/// `InvalidInputError`, as in `special.rs`.
+/// The most complex values one call returns, counting derivatives, 2²⁷ (2 GiB); the real
+/// outputs (efficiencies, phase matrix, Greek coefficients) may have twice as many. Larger
+/// requests raise `InvalidInputError`, as in `special.rs`.
 pub const MAX_MIE_VALUES: usize = 1 << 27;
 
 /// An error raised without the GIL: a core error, converted to its `scatrs.errors` class once
@@ -132,6 +132,19 @@ fn solve<'m>(
     r.map_err(at(i))
 }
 
+/// Checks every element and returns the largest number of terms, before anything is allocated.
+fn largest_n_terms(
+    x: &ArrayViewD<'_, f64>,
+    m: &ArrayViewD<'_, Complex64>,
+    opts: &MieOptions,
+) -> scatrs::Result<usize> {
+    let mut most = 0;
+    for (i, (&xi, &mi)) in x.iter().zip(m.iter()).enumerate() {
+        most = most.max(n_terms(xi, mi, opts).map_err(at(i))?);
+    }
+    Ok(most)
+}
+
 /// `count` (`None` if it overflowed) values of `kind`, unless that exceeds `limit` (named
 /// `limit_name` in the message).
 fn bounded(
@@ -168,6 +181,46 @@ fn complex_values(what: &str, count: Option<usize>, derivatives: bool) -> scatrs
         MAX_MIE_VALUES,
         "MAX_MIE_VALUES",
     )
+}
+
+/// `count` real values, at most 2·`MAX_MIE_VALUES` (the bytes of `MAX_MIE_VALUES` complex
+/// values).
+fn real_values(what: &str, count: Option<usize>, derivatives: bool) -> scatrs::Result<usize> {
+    bounded(
+        what,
+        count,
+        "real values",
+        derivatives,
+        2 * MAX_MIE_VALUES,
+        "2 * MAX_MIE_VALUES",
+    )
+}
+
+fn normalization(normalized: bool) -> Normalization {
+    if normalized {
+        Normalization::Normalized
+    } else {
+        Normalization::Unnormalized
+    }
+}
+
+/// The cosines `mu` as a vector, every one in [−1, 1] (checked here too, so that an empty x
+/// does not hide a bad cosine).
+fn cosines(py: Python<'_>, mu: &PyReadonlyArrayDyn<'_, f64>) -> PyResult<Vec<f64>> {
+    let mu: Vec<f64> = mu.as_array().iter().copied().collect();
+    if let Some((j, v)) = mu
+        .iter()
+        .enumerate()
+        .find(|&(_, v)| !(-1.0..=1.0).contains(v))
+    {
+        return Err(to_pyerr(
+            py,
+            invalid(format!(
+                "element {j} of mu: a cosine of the scattering angle must be in [-1, 1], got {v}"
+            )),
+        ));
+    }
+    Ok(mu)
 }
 
 /// A zeroed vector of `len` values, or `MemoryError`.
@@ -304,11 +357,7 @@ pub fn mie_coefficients<'py>(
         .map_err(|e| to_pyerr(py, e))?;
     let (terms, a, b, d, width) = py
         .detach(|| -> Result<_, Failure> {
-            // Check every element and find the largest number of terms, before allocating.
-            let mut width = 0;
-            for (i, (&xi, &mi)) in xv.iter().zip(mv.iter()).enumerate() {
-                width = width.max(n_terms(xi, mi, &opts).map_err(at(i))?);
-            }
+            let width = largest_n_terms(&xv, &mv, &opts)?;
             let count = len.checked_mul(width).and_then(|v| v.checked_mul(arrays));
             let per_array = complex_values("the coefficients", count, derivatives)? / arrays;
             let mut terms = zeros::<u64>(len, "the numbers of terms")?;
@@ -379,20 +428,7 @@ pub fn mie_amplitudes<'py>(
     let (x, m, mu) = (borrow(&x, "x")?, borrow(&m, "m")?, borrow(&mu, "mu")?);
     let (xv, mv) = (x.as_array(), m.as_array());
     let opts = prepare(py, &xv, &mv, n_max, allow_unvalidated)?;
-    let mu: Vec<f64> = mu.as_array().iter().copied().collect();
-    // The core checks the cosines too; checking here also covers an empty x.
-    if let Some((j, v)) = mu
-        .iter()
-        .enumerate()
-        .find(|&(_, v)| !(-1.0..=1.0).contains(v))
-    {
-        return Err(to_pyerr(
-            py,
-            invalid(format!(
-                "element {j} of mu: a cosine of the scattering angle must be in [-1, 1], got {v}"
-            )),
-        ));
-    }
+    let mu = cosines(py, &mu)?;
     let (len, n_mu) = (xv.len(), mu.len());
     let arrays = if derivatives { 6 } else { 2 };
     // At least one angle, so that an empty mu does not leave the number of spheres (each still
@@ -454,4 +490,197 @@ pub fn mie_amplitudes<'py>(
         None
     };
     Ok((s.into_pyarray(py), d))
+}
+
+type PhaseArrays<'py> = (Bound<'py, PyArray3<f64>>, Option<Bound<'py, PyArray4<f64>>>);
+
+/// F₁₁, F₁₂, F₃₃, F₃₄ (4, len, n_mu) at the cosines `mu`, normalized or not, and with
+/// `derivatives` their derivatives with respect to x, Re m and Im m (3, 4, len, n_mu).
+#[pyfunction]
+#[allow(clippy::too_many_arguments)]
+pub fn mie_phase_matrix<'py>(
+    py: Python<'py>,
+    x: Bound<'py, PyArrayDyn<f64>>,
+    m: Bound<'py, PyArrayDyn<Complex64>>,
+    mu: Bound<'py, PyArrayDyn<f64>>,
+    n_max: Option<usize>,
+    derivatives: bool,
+    allow_unvalidated: bool,
+    normalized: bool,
+) -> PyResult<PhaseArrays<'py>> {
+    let (x, m, mu) = (borrow(&x, "x")?, borrow(&m, "m")?, borrow(&mu, "mu")?);
+    let (xv, mv) = (x.as_array(), m.as_array());
+    let opts = prepare(py, &xv, &mv, n_max, allow_unvalidated)?;
+    let mu = cosines(py, &mu)?;
+    let (len, n_mu) = (xv.len(), mu.len());
+    let arrays = if derivatives { 16 } else { 4 };
+    // At least one angle, as in `mie_amplitudes`.
+    let count = len
+        .checked_mul(n_mu.max(1))
+        .and_then(|v| v.checked_mul(arrays));
+    real_values("the phase matrix", count, derivatives).map_err(|e| to_pyerr(py, e))?;
+    let per_array = len * n_mu;
+    let norm = normalization(normalized);
+    let (f, d) = py
+        .detach(|| -> Result<_, Failure> {
+            let mut f = zeros::<f64>(4 * per_array, "the phase matrix")?;
+            let mut d = zeros::<f64>(if derivatives { 12 * per_array } else { 0 }, "derivatives")?;
+            let mut mie = Mie::<f64>::new();
+            for (i, (&xi, &mi)) in xv.iter().zip(mv.iter()).enumerate() {
+                if n_mu == 0 {
+                    // Nothing to compute, but the inputs are still checked.
+                    n_terms(xi, mi, &opts).map_err(at(i))?;
+                    continue;
+                }
+                let sol = solve(&mut mie, i, xi, mi, &opts, derivatives)?;
+                let row = i * n_mu..(i + 1) * n_mu;
+                let values = phase_buffers(&mut f, per_array, row.clone());
+                if derivatives {
+                    let (dx, rest) = d.split_at_mut(4 * per_array);
+                    let (dr, di) = rest.split_at_mut(4 * per_array);
+                    sol.phase_matrix_with_derivatives(
+                        &mu,
+                        norm,
+                        values,
+                        [
+                            phase_buffers(dx, per_array, row.clone()),
+                            phase_buffers(dr, per_array, row.clone()),
+                            phase_buffers(di, per_array, row.clone()),
+                        ],
+                    )
+                    .map_err(at(i))?;
+                } else {
+                    sol.phase_matrix(&mu, norm, values).map_err(at(i))?;
+                }
+            }
+            Ok((f, d))
+        })
+        .map_err(|f| f.into_pyerr(py))?;
+    let f = Array3::from_shape_vec((4, len, n_mu), f).map_err(shape_error)?;
+    let d = if derivatives {
+        let d = Array4::from_shape_vec((3, 4, len, n_mu), d).map_err(shape_error)?;
+        Some(d.into_pyarray(py))
+    } else {
+        None
+    };
+    Ok((f.into_pyarray(py), d))
+}
+
+/// The rows `row` of the four consecutive arrays of `per_array` values in `buf`, as
+/// phase-matrix buffers.
+fn phase_buffers(
+    buf: &mut [f64],
+    per_array: usize,
+    row: std::ops::Range<usize>,
+) -> PhaseBuffers<'_, f64> {
+    let (f11, rest) = buf.split_at_mut(per_array);
+    let (f12, rest) = rest.split_at_mut(per_array);
+    let (f33, f34) = rest.split_at_mut(per_array);
+    PhaseBuffers {
+        f11: &mut f11[row.clone()],
+        f12: &mut f12[row.clone()],
+        f33: &mut f33[row.clone()],
+        f34: &mut f34[row],
+    }
+}
+
+type GreekArrays<'py> = (
+    Bound<'py, PyArray1<u64>>,
+    Bound<'py, PyArray3<f64>>,
+    Option<Bound<'py, PyArray4<f64>>>,
+);
+
+/// The arrays of `g` in the order α₁, α₂, α₃, α₄, β₁, β₂.
+fn greek_arrays(g: &GreekCoefficients<f64>) -> [&[f64]; 6] {
+    [
+        &g.alpha1, &g.alpha2, &g.alpha3, &g.alpha4, &g.beta1, &g.beta2,
+    ]
+}
+
+/// The number of terms of each element (len), the Greek coefficients α₁, α₂, α₃, α₄, β₁, β₂
+/// (6, len, L + 1) up to `order` (by default the largest 2N, each sphere zero-padded above its
+/// own 2N), normalized or not, and with `derivatives` their derivatives with respect to x,
+/// Re m and Im m (3, 6, len, L + 1).
+#[pyfunction]
+#[allow(clippy::too_many_arguments)]
+pub fn mie_greek<'py>(
+    py: Python<'py>,
+    x: Bound<'py, PyArrayDyn<f64>>,
+    m: Bound<'py, PyArrayDyn<Complex64>>,
+    order: Option<usize>,
+    n_max: Option<usize>,
+    derivatives: bool,
+    allow_unvalidated: bool,
+    normalized: bool,
+) -> PyResult<GreekArrays<'py>> {
+    let (x, m) = (borrow(&x, "x")?, borrow(&m, "m")?);
+    let (xv, mv) = (x.as_array(), m.as_array());
+    let opts = prepare(py, &xv, &mv, n_max, allow_unvalidated)?;
+    if let Some(l) = order.filter(|&l| l > MAX_GREEK_ORDER) {
+        return Err(to_pyerr(
+            py,
+            invalid(format!(
+                "the Greek order must be at most {MAX_GREEK_ORDER}, got {l}"
+            )),
+        ));
+    }
+    let len = xv.len();
+    let arrays = if derivatives { 24 } else { 6 };
+    // Every sphere has at least order 0, so this bounds the sizing pass below.
+    real_values(
+        "the Greek coefficients",
+        len.checked_mul(arrays),
+        derivatives,
+    )
+    .map_err(|e| to_pyerr(py, e))?;
+    let norm = normalization(normalized);
+    let (terms, g, d, width) = py
+        .detach(|| -> Result<_, Failure> {
+            let most = largest_n_terms(&xv, &mv, &opts)?;
+            let width = order.unwrap_or(2 * most) + 1;
+            let count = len.checked_mul(width).and_then(|v| v.checked_mul(arrays));
+            let per_array = real_values("the Greek coefficients", count, derivatives)? / arrays;
+            let mut terms = zeros::<u64>(len, "the numbers of terms")?;
+            let mut g = zeros::<f64>(6 * per_array, "the Greek coefficients")?;
+            let mut d = zeros::<f64>(if derivatives { 18 * per_array } else { 0 }, "derivatives")?;
+            let mut mie = Mie::<f64>::new();
+            for (i, (&xi, &mi)) in xv.iter().zip(mv.iter()).enumerate() {
+                let s = solve(&mut mie, i, xi, mi, &opts, derivatives)?;
+                // `n_terms` above made the same checks and choice, unless x or m changed since.
+                if order.is_none() && s.n_terms() > most {
+                    return Err(
+                        invalid(format!("element {i}: x or m changed during the call")).into(),
+                    );
+                }
+                terms[i] = s.n_terms() as u64;
+                let row = i * width..(i + 1) * width;
+                let put = |out: &mut [f64], first: usize, c: &GreekCoefficients<f64>| {
+                    for (k, src) in greek_arrays(c).into_iter().enumerate() {
+                        let off = (first + k) * per_array;
+                        out[off + row.start..off + row.end].copy_from_slice(src);
+                    }
+                };
+                if derivatives {
+                    let (values, jac) = s
+                        .greek_with_derivatives(Some(width - 1), norm)
+                        .map_err(at(i))?;
+                    put(&mut g, 0, &values);
+                    for (p, c) in jac.iter().enumerate() {
+                        put(&mut d, 6 * p, c);
+                    }
+                } else {
+                    put(&mut g, 0, &s.greek(Some(width - 1), norm).map_err(at(i))?);
+                }
+            }
+            Ok((terms, g, d, width))
+        })
+        .map_err(|f| f.into_pyerr(py))?;
+    let g = Array3::from_shape_vec((6, len, width), g).map_err(shape_error)?;
+    let d = if derivatives {
+        let d = Array4::from_shape_vec((3, 6, len, width), d).map_err(shape_error)?;
+        Some(d.into_pyarray(py))
+    } else {
+        None
+    };
+    Ok((PyArray1::from_vec(py, terms), g.into_pyarray(py), d))
 }

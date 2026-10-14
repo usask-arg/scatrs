@@ -31,8 +31,8 @@
   Publications 23 (1975), Theorem 6.21.2. Bruns's inequality for the zeros of $P_n$, used by
   the tests.
 - I. Bogaert, "Iteration-free computation of Gauss–Legendre quadrature nodes and weights",
-  *SIAM Journal on Scientific Computing* 36(3) (2014), A1008–A1026. The planned $O(n)$
-  method.
+  *SIAM Journal on Scientific Computing* 36(3) (2014), A1008–A1026. The $O(n)$ method
+  of the `f64` rules above 100 points.
 - L. N. Trefethen, *Approximation Theory and Approximation Practice*, SIAM (2013), Theorem
   19.3. The error bound for Gauss quadrature of analytic functions, used in
   {doc}`examples/henyey-greenstein`. The theorem is stated for rules with $n + 1$ points.
@@ -41,13 +41,15 @@
 
 - M. I. Mishchenko, L. D. Travis and A. A. Lacis, *Scattering, Absorption, and Emission of
   Light by Small Particles*, Cambridge University Press (2002), Appendix B. The convention of
-  the Wigner d-functions, and the recurrence of Eq. B.22.
+  the Wigner d-functions, the recurrence of Eq. B.22, and the expansion of the phase matrix in
+  Greek coefficients (Eqs. 4.75–4.80) that scatrs follows.
 - J. Stoer and R. Bulirsch, *Introduction to Numerical Analysis*, 3rd ed., Springer (2002),
   the section on the algorithms of Goertzel and Reinsch. Reinsch's difference form, the idea
   behind the difference forms that scatrs uses next to the poles.
 - J. W. Hovenier, C. van der Mee and H. Domke, *Transfer of Polarized Light in Planetary
   Atmospheres: Basic Concepts and Practical Methods*, Kluwer Academic Publishers (2004). The
-  convention for the Greek coefficients, which arrive in phase 1b.
+  expansion of the phase matrix in generalized spherical functions, behind the Greek
+  coefficients.
 - L. G. Henyey and J. L. Greenstein, "Diffuse radiation in the Galaxy", *Astrophysical
   Journal* 93 (1941), 70–83. The Henyey–Greenstein phase function.
 

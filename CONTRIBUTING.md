@@ -55,12 +55,20 @@ SCATRS_ACCURACY_MAP=$PWD/docs/validation/data/mie-accuracy-map.json \
     cargo test -p scatrs --release --test mie_accuracy_map -- --nocapture
 ```
 
+`scatrs/tests/mie_greek_accuracy_map.rs` does the same for the phase matrix and the Greek
+coefficients, in about 12 s with all cores; regenerate its map the same way:
+
+```bash
+SCATRS_ACCURACY_MAP=$PWD/docs/validation/data/greek-accuracy-map.json \
+    cargo test -p scatrs --release --test mie_greek_accuracy_map -- --nocapture
+```
+
 Wall-clock benchmarks of the Mie kernel: `cargo bench -p scatrs --bench mie`.
 
 The slow `#[ignore]` tests take minutes, so CI runs them weekly rather than on every change:
 
 ```bash
-cargo test -p scatrs --release --test gauss_legendre -- --ignored
+cargo test -p scatrs --release --lib --test gauss_legendre --test mie_greek_accuracy_map -- --ignored
 ```
 
 ## Continuous integration

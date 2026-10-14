@@ -74,9 +74,9 @@ The {doc}`reference suite <../validation/reference-suite>` stores the 1000-point
 with Arb. Each value $v$ is stored as three doubles `hi + lo + lo2`, with a rigorous bound `err`
 on the remainder. For an `f64` value $g$, the cell computes
 $\lvert g - (\text{hi} + \text{lo} + \text{lo2})\rvert + \text{err}$ with rational
-arithmetic. That is a rigorous and nearly tight bound on $\lvert g - v\rvert$. The contract is
-an absolute error of at most $2^{-52}$ for nodes and a relative error of at most $2^{-52}$ for
-weights.
+arithmetic. That is a rigorous and nearly tight bound on $\lvert g - v\rvert$. Above 100
+points the rule comes from asymptotic expansions, and the contract is an absolute error of at
+most $32\cdot2^{-52}$ for nodes and a relative error of at most $32\cdot2^{-52}$ for weights.
 
 For comparison, the cell also measures {func}`numpy.polynomial.legendre.leggauss`, which works
 in `f64` throughout.
@@ -117,16 +117,17 @@ for name, (xs, ws) in {"scatrs": (x, w), f"numpy {np.__version__}": (xn, wn)}.it
     first = ", ".join(f"{e:.3g}" for e in weight_err[:3])
     print(f"{name:>12} {node_err.max():11.3g} {weight_err.max():13.3g}   {first}")
     if name == "scatrs":
-        assert node_err.max() <= 1 and weight_err.max() <= 1
+        assert node_err.max() <= 32 and weight_err.max() <= 32
 ```
 
 Next to $\pm1$ the weights are ill-conditioned in the nodes. A node error $\delta$ changes the
 weight by a relative $2\lvert x\rvert\delta/(1 - x^2)$, and $1 - x^2 \approx 5.8/n^2$ at the
 extreme nodes. That is about $n^2/6$ units of $2^{-52}$ per ulp of node error. So a weight
 computed from an `f64` node loses up to that much, even from the correctly rounded node: about
-$7\cdot10^4$ units at $n = 1000$. scatrs avoids this by computing
-the rule in double-double arithmetic and rounding it once. This matters next to $+1$, where
-the Mie forward-scattering peak is integrated.
+$7\cdot10^4$ units at $n = 1000$. scatrs avoids this: up to 100 points it computes the rule
+in double-double arithmetic and rounds it once, and above it computes each weight from an
+asymptotic expansion in the angle of the node rather than from the node. This matters next to
+$+1$, where the Mie forward-scattering peak is integrated.
 
 numpy's error, $3.7\cdot10^7$ units here, is much larger, and the difference is algorithmic.
 `leggauss` computes the weights as $2/\bigl(n\,P_{n-1}(x)\,P_n'(x)\bigr)$, up to a final

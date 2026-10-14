@@ -79,7 +79,9 @@ allowed-confusables = ["−", "–", "ρ", "×", "′"]
 
 [tool.ruff.lint.per-file-ignores]
 # l is the degree of d^l_{mn}, the notation of the papers the generator follows.
+"reference/scatrs_reference/generators/mie_greek.py" = ["E741"]
 "reference/scatrs_reference/generators/wigner_d.py" = ["E741"]
 "reference/tests/test_generators.py" = ["E741"]
+"reference/tests/test_mie_greek.py" = ["E741"]
 # The edge-case tables concatenate sublists grouped by what they probe.
 "reference/scatrs_reference/generators/dd_elementary.py" = ["RUF005"]

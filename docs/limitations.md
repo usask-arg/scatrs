@@ -1,10 +1,11 @@
 # Limitations and known issues
 
 <!-- synced with docs/plans/phase-0-followups.md -->
+<!-- synced with docs/plans/phase-1b-followups.md -->
 
 scatrs is pre-alpha. This page lists what users should know: missing pieces, costs,
 and behaviour at the edges. The repository tracks each item, with the phase that is to address
-it, in `docs/plans/phase-0-followups.md`.
+it, in `docs/plans/phase-0-followups.md` and `docs/plans/phase-1b-followups.md`.
 
 (what-backs-the-numbers)=
 ## What backs the accuracy figures
@@ -24,28 +25,29 @@ it, in `docs/plans/phase-0-followups.md`.
 ## Scope and availability
 
 - Mie scattering by homogeneous spheres is the only scattering method yet; layered spheres and
-  the T-matrix follow. Distributions of sizes and the Greek coefficients arrive in later phases.
+  the T-matrix follow. The phase matrix and Greek coefficients are those of single spheres:
+  size distributions and mixtures arrive in phase 2.
 - Python exposes only `f64` results. `DoubleDouble` and the `Dual` derivatives are
   available from Rust only.
 - Neither wheels nor the Rust crate are published, and the Rust API is not on docs.rs. See
   {doc}`installation`.
 - Continuous integration runs the Rust and Python tests on Linux (x86_64), macOS (arm64) and
   Windows (x86_64) for every change. The slow tests marked `#[ignore]` run only weekly, on the
-  same three systems: the 20 000-point Gauss–Legendre rule against Arb, and the root checks for
-  every rule up to 3000 points. The release workflow also builds wheels for platforms that no
+  same three systems: the 20 000-point double-double Gauss–Legendre rule against Arb, every
+  asymptotic rule from 101 to 3000 points against double-double, and the phase matrix and
+  Greek coefficients of spheres at $x = 2\cdot10^3$, $10^4$ and $2\cdot10^4$. The release workflow also builds wheels for platforms that no
   tests run on (aarch64 Linux and Windows, s390x, ppc64le, musl Linux and Intel macOS). 32-bit
   platforms are not supported.
 
 ## Gauss–Legendre quadrature
 
-- **Cost.** The method is $O(n^2)$. On an Apple M4 Pro it takes about 11 s at $n$ = 20 000,
-  and an extrapolated 8 minutes at the cap of $2^{17}$ points. Mie quadrature at size parameter
-  $2\cdot10^4$ needs about $4\cdot10^4$ points, which takes about 45 s.
-- **Interruption.** A call cannot be interrupted. In Python, Ctrl+C takes effect only once it
-  returns. Compute a rule once and reuse it.
-- **Planned speed-ups.** Two tunings of the present method measured about 5× faster together
-  during code review (not committed). The real fix is an $O(n)$ method (Bogaert 2014). Faster
-  rules are a priority for phase 1b, and the cap will be raised once the $O(n)$ method lands.
+- **Accuracy above 100 points.** `f64` rules above 100 points come from asymptotic expansions,
+  within $32\cdot2^{-52}$ (measured: 2.8 and 4.0 units of $2^{-52}$ for nodes and weights)
+  rather than the half ulp of the double-double rule rounded once.
+- **Double-double cost.** Double-double rules use the $O(n^2)$ Newton method at every $n$. On
+  an Apple M4 Pro that takes about 11 s at $n$ = 20 000, and an extrapolated 8 minutes at the
+  cap of $2^{17}$ points. A call cannot be interrupted; compute a double-double rule once and
+  reuse it.
 
 ## Builds without FMA
 
@@ -149,8 +151,21 @@ the same treatment when a kernel needs them.
   accurate relative to $Q_\text{ext}$, not to $Q_\text{abs}$ itself: near a resonance with
   $k = 10^{-8}$ their relative error reached $4\cdot10^{-9}$.
 - **Cost.** $O(x + \lvert m\rvert x)$ per sphere; the Python functions loop over the spheres
-  on one thread. Parallel batches arrive in phase 1b. The largest accepted $\lvert m\rvert x$
-  take seconds per sphere, and a call cannot be interrupted.
+  on one thread. Parallel batches arrive in a later phase. The largest accepted
+  $\lvert m\rvert x$ take seconds per sphere, and a call cannot be interrupted.
+- **Cost of the Greek coefficients.** All orders of one sphere cost $O(x^2)$: 7.6 s at
+  $x = 10^4$ in `f64` on an Apple M4 Pro. Ask for fewer orders (`order=`) where a calculation
+  does not need them all. All orders also need $2N + 1$ quadrature nodes, at most $2^{17}$, so
+  `greek` rejects spheres with $N \ge 2^{16}$ ($x$ above about $6.5\cdot10^4$, outside the
+  validated domain) unless asked for fewer orders.
+- **Validation of large spheres.** The double-double reference for the phase matrix and the
+  Greek coefficients also costs $O(x^2)$, so their accuracy map stops at $x = 10^3$; larger
+  spheres are checked weekly at three sizes, $x = 2\cdot10^3$, $10^4$ and $2\cdot10^4$, the last
+  two only to order 64. See {ref}`greek-accuracy`.
+- **Node rounding in the Greek coefficients.** The `f64` Gauss–Legendre nodes are rounded, and
+  the error this causes grows like $L^2 + x^2$ for order $L$: measured, about $2\cdot10^{-9}$ of
+  $\max_l\lvert\alpha_1^l\rvert$ at $x = 2\cdot10^4$ with $L = 64$, and $2\cdot10^{-11}$ at
+  $x = 10^3$ for all orders. The declared accuracy includes it. See {ref}`mie-accuracy-model`.
 - **m = 1 exactly.** The coefficients vanish, but for $x \ge 1$ the lowest orders are computed
   as rounding noise rather than exact zeros, so $g$ and its derivatives are meaningless there
   (the efficiencies are at rounding level).
@@ -162,7 +177,8 @@ the same treatment when a kernel needs them.
 - **Shared inputs.** Calls release the GIL and read input arrays in place. Do not modify or
   resize an input array from another thread during a call.
 - **Output size.** One Mie call returns at most `MAX_MIE_VALUES` = $2^{27}$ complex values,
-  counting derivatives (2 GiB), or twice as many real values for the efficiencies. The bound
+  counting derivatives (2 GiB), or twice as many real values for the efficiencies, the phase
+  matrix and the Greek coefficients. The bound
   applies to the broadcast output, which small inputs can make large: a call above it raises
   `InvalidInputError` before allocating anything.
 - **Per-call overhead.** Measured during code review on an Apple M4 Pro (not committed), the

@@ -92,7 +92,18 @@ functions to come.
 - **Amplitudes.** $S_1(\mu)$ and $S_2(\mu)$ at $\mu = \cos\Theta$ (Bohren & Huffman 1983,
   Eq. 4.74).
 - **Phase-matrix normalization.** $\tfrac12 \int_{-1}^{1} F_{11}(\mu)\,d\mu = 1$, with
-  $F_{11} = (\lvert S_1\rvert^2 + \lvert S_2\rvert^2)/(x^2 Q_\text{sca}/2)$.
+  $F_{11} = (\lvert S_1\rvert^2 + \lvert S_2\rvert^2)/(x^2 Q_\text{sca}/2)$. The unnormalized
+  phase matrix is the normalized one times $Q_\text{sca}$ (per unit geometric cross section).
+- **Phase-matrix elements.** $F_{11}$, $F_{12}$, $F_{33}$, $F_{34}$ are Bohren & Huffman's
+  $S_{11}$, $S_{12}$, $S_{33}$, $S_{34}$ (1983, §4.4) times that normalization, with
+  $F_{22} = F_{11}$ and $F_{44} = F_{33}$ for spheres. $F_{12} < 0$ for Rayleigh scattering at
+  90°, so the degree of linear polarization of scattered unpolarized light is
+  $-F_{12}/F_{11}$.
+- **Greek coefficients.** $\alpha_1, \ldots, \alpha_4$, $\beta_1$, $\beta_2$ expand the phase
+  matrix in the Wigner d-functions of `wigner_d` at $\mu = \cos\Theta$ (Mishchenko, Travis &
+  Lacis 2002, Eqs. 4.75–4.80), indexed by order $l = 0, \ldots, L$. Normalized,
+  $\alpha_1^0 = 1$ and $\alpha_1^1 = 3g$. See {doc}`theory/mie` for the expansion and the sign
+  conventions.
 - **Derivatives with respect to m.** The coefficients and amplitudes are holomorphic in $m$:
   their derivative $d/dm$ equals $\partial/\partial(\operatorname{Re} m)$, and
   $\partial/\partial(\operatorname{Im} m) = i\,d/dm$. Real outputs give

@@ -14,6 +14,9 @@ CALLS = {
     "efficiencies": lambda x, m, **kw: mie.efficiencies(x, m, **kw),
     "coefficients": lambda x, m, **kw: mie.coefficients(x, m, **kw),
     "amplitudes": lambda x, m, **kw: mie.amplitudes(x, m, 0.5, **kw),
+    "phase_matrix": lambda x, m, **kw: mie.phase_matrix(x, m, 0.5, **kw),
+    "greek": lambda x, m, **kw: mie.greek(x, m, 4, **kw),
+    "greek_default": lambda x, m, **kw: mie.greek(x, m, **kw),
 }
 
 

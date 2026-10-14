@@ -28,16 +28,21 @@ from numpy.typing import ArrayLike, NDArray
 from scatrs import _args, _scatrs
 
 __all__ = [
+    "MAX_GREEK_ORDER",
     "MAX_MIE_ORDER",
     "MAX_MIE_VALUES",
     "PARAMETERS",
     "MieAmplitudes",
     "MieCoefficients",
     "MieEfficiencies",
+    "MieGreek",
+    "MiePhaseMatrix",
     "amplitudes",
     "coefficients",
     "default_n_max",
     "efficiencies",
+    "greek",
+    "phase_matrix",
 ]
 
 MAX_MIE_ORDER: Final[int] = _scatrs.MAX_MIE_ORDER
@@ -45,7 +50,10 @@ MAX_MIE_ORDER: Final[int] = _scatrs.MAX_MIE_ORDER
 
 MAX_MIE_VALUES: Final[int] = _scatrs.MAX_MIE_VALUES
 """The most complex values one call returns, counting derivatives: ``2**27`` (2 GiB); twice as
-many real values for :func:`efficiencies`."""
+many real values for :func:`efficiencies`, :func:`phase_matrix` and :func:`greek`."""
+
+MAX_GREEK_ORDER: Final[int] = _scatrs.MAX_GREEK_ORDER
+"""The largest ``order`` :func:`greek` accepts: ``2**21``, twice :data:`MAX_MIE_ORDER`."""
 
 PARAMETERS: Final = ("x", "m_real", "m_imag")
 """The parameters ``derivatives`` may name."""
@@ -155,11 +163,9 @@ class MieEfficiencies:
         ValueError
             If the derivative was not requested.
         """
-        _check(self.params, param)
-        if param == "m":
-            raise ValueError("efficiencies are real: use 'm_real' or 'm_imag'")
+        p = _check_real(self.params, param, "efficiencies")
         assert self._jacobian is not None
-        rows = self._jacobian[PARAMETERS.index(param)]
+        rows = self._jacobian[p]
         return MieEfficiencies(*rows)
 
 
@@ -240,6 +246,95 @@ class MieAmplitudes:
         return MieAmplitudes(ds1_dm, ds2_dm)
 
 
+def _check_real(params: tuple[str, ...], param: str, what: str) -> int:
+    _check(params, param)
+    if param == "m":
+        raise ValueError(f"{what} are real: use 'm_real' or 'm_imag'")
+    return PARAMETERS.index(param)
+
+
+@dataclass(frozen=True, eq=False)
+class MiePhaseMatrix:
+    """The phase matrix of spheres, arrays of shape ``S + mu.shape`` (Bohren & Huffman 1983,
+    §4.4). For a sphere ``F22 = F11`` and ``F44 = F33``; the other elements are 0.
+
+    Attributes
+    ----------
+    f11, f12, f33, f34 : numpy.ndarray
+        ``(|S1|**2 + |S2|**2)/2``, ``(|S2|**2 - |S1|**2)/2``, ``Re(S2 conj(S1))`` and
+        ``Im(S2 conj(S1))``, times ``4/(x**2 q_sca)`` (normalized: ``F11`` averages to 1 over
+        the sphere of directions) or ``4/x**2`` (unnormalized: per unit geometric cross
+        section, which sums over a size distribution).
+    params : tuple of str
+        The parameters :meth:`d` accepts.
+    """
+
+    f11: NDArray[np.float64]
+    f12: NDArray[np.float64]
+    f33: NDArray[np.float64]
+    f34: NDArray[np.float64]
+    params: tuple[str, ...] = ()
+    _derivatives: NDArray[np.float64] | None = field(default=None, repr=False)
+
+    def d(self, param: str) -> MiePhaseMatrix:
+        """The derivatives with respect to ``param`` (``"x"``, ``"m_real"`` or ``"m_imag"``);
+        normalized derivatives include that of ``q_sca``.
+
+        Raises
+        ------
+        ValueError
+            If the derivative was not requested.
+        """
+        p = _check_real(self.params, param, "phase-matrix elements")
+        assert self._derivatives is not None
+        return MiePhaseMatrix(*self._derivatives[p])
+
+
+@dataclass(frozen=True, eq=False)
+class MieGreek:
+    """Greek (generalized-spherical-function) expansion coefficients of the phase matrix of
+    spheres, arrays of shape ``S + (L + 1,)``; ``alpha1[..., l]`` is the coefficient of order
+    ``l`` (Mishchenko, Travis & Lacis 2002, Eqs. 4.75–4.80):
+    ``F11 = sum alpha1[l] d00_l``, ``F22 + F33 = sum (alpha2 + alpha3)[l] d22_l``,
+    ``F22 - F33 = sum (alpha2 - alpha3)[l] d2-2_l``, ``F44 = sum alpha4[l] d00_l``,
+    ``F12 = sum beta1[l] d02_l``, ``F34 = sum beta2[l] d02_l``, with ``dmn_l`` the Wigner
+    d-functions of :func:`scatrs.special.wigner_d` at the cosine of the scattering angle.
+
+    Attributes
+    ----------
+    alpha1, alpha2, alpha3, alpha4, beta1, beta2 : numpy.ndarray
+        float64. Normalized, ``alpha1[..., 0]`` is 1 and ``alpha1[..., 1]`` is ``3 g``;
+        unnormalized, they are those times ``q_sca``. Orders above a sphere's ``2 n_terms``
+        are exactly 0.
+    n_terms : numpy.ndarray
+        int64, shape ``S``: the number of terms of each sphere.
+    params : tuple of str
+        The parameters :meth:`d` accepts.
+    """
+
+    alpha1: NDArray[np.float64]
+    alpha2: NDArray[np.float64]
+    alpha3: NDArray[np.float64]
+    alpha4: NDArray[np.float64]
+    beta1: NDArray[np.float64]
+    beta2: NDArray[np.float64]
+    n_terms: NDArray[np.int64]
+    params: tuple[str, ...] = ()
+    _derivatives: NDArray[np.float64] | None = field(default=None, repr=False)
+
+    def d(self, param: str) -> MieGreek:
+        """The derivatives with respect to ``param`` (``"x"``, ``"m_real"`` or ``"m_imag"``).
+
+        Raises
+        ------
+        ValueError
+            If the derivative was not requested.
+        """
+        p = _check_real(self.params, param, "Greek coefficients")
+        assert self._derivatives is not None
+        return MieGreek(*self._derivatives[p], self.n_terms)
+
+
 _SHARED_DOC = """
     Parameters
     ----------
@@ -266,14 +361,15 @@ _SHARED_DOC = """
     InvalidInputError
         For ``x`` outside ``[1e-30, 1e6]``, non-finite ``m``, ``Re m < 0`` or ``Im m < 0``
         (gain media), ``|m|`` outside ``[1e-6, 1e3]``, ``n_max`` outside
-        ``[1, MAX_MIE_ORDER]``{extra_raise}, or an output above ``MAX_MIE_VALUES``. The
-        message names the first failing element (in C order).
+        ``[1, MAX_MIE_ORDER]``{extra_raise}, or an output above ``MAX_MIE_VALUES`` complex
+        values (``2 * MAX_MIE_VALUES`` real values). The message names the first failing
+        element (in C order).
     OutsideValidatedDomainError
         For valid inputs outside the validated domain, unless ``allow_unvalidated``.
     TypeError
         For non-numeric ``x`` or ``m`` (complex ``x``), a non-integer ``n_max`` (``float``
         and ``bool`` values are rejected), ``derivatives`` that is neither a bool nor a
-        sequence of names, or a non-bool ``allow_unvalidated``.
+        sequence of names, or a non-bool ``allow_unvalidated``{extra_type}.
     ValueError
         For an unknown parameter name, or (from numpy) shapes that do not broadcast.
     BufferError
@@ -315,7 +411,7 @@ efficiencies.__doc__ = """Efficiencies and asymmetry parameter of spheres.
     -------
     MieEfficiencies
         Each field has the broadcast shape of ``x`` and ``m``.
-""" + _SHARED_DOC.format(extra="", extra_raise="")
+""" + _SHARED_DOC.format(extra="", extra_raise="", extra_type="")
 
 
 def coefficients(
@@ -346,7 +442,7 @@ coefficients.__doc__ = """Mie coefficients aₙ and bₙ of spheres.
     -------
     MieCoefficients
         Shape ``S + (N,)``, zero-padded to the largest number of terms ``N``.
-""" + _SHARED_DOC.format(extra="", extra_raise="")
+""" + _SHARED_DOC.format(extra="", extra_raise="", extra_type="")
 
 
 def amplitudes(
@@ -383,5 +479,106 @@ amplitudes.__doc__ = """Amplitude scattering functions S₁ and S₂ of spheres.
         Shape ``S + mu.shape``.
 """ + _SHARED_DOC.format(
     extra="mu : array_like\n        Cosines of the scattering angle, in [-1, 1].\n    ",
-    extra_raise=", ``mu`` outside [-1, 1] or NaN",
+    extra_raise=",\n        ``mu`` outside [-1, 1] or NaN",
+    extra_type="",
+)
+
+
+def phase_matrix(
+    x: ArrayLike,
+    m: ArrayLike,
+    mu: ArrayLike,
+    *,
+    normalized: bool = True,
+    n_max: SupportsIndex | None = None,
+    derivatives: bool | Sequence[str] = False,
+    allow_unvalidated: bool = False,
+) -> MiePhaseMatrix:
+    params = _parameters(derivatives)
+    xb, mb, shape = _inputs(x, m)
+    mus = _args.real_array(mu, "mu")
+    f, d = _scatrs.mie_phase_matrix(
+        xb,
+        mb,
+        mus.reshape(mus.shape),
+        _n_max(n_max),
+        bool(params),
+        _args.flag(allow_unvalidated, "allow_unvalidated"),
+        _args.flag(normalized, "normalized"),
+    )
+    f, d = _frozen(f), _frozen(d)
+    out = (*shape, *mus.shape)
+    dd = None if d is None else d.reshape((3, 4, *out))
+    return MiePhaseMatrix(*(v.reshape(out) for v in f), params=params, _derivatives=dd)
+
+
+phase_matrix.__doc__ = """The phase matrix F11, F12, F33, F34 of spheres.
+
+    Returns
+    -------
+    MiePhaseMatrix
+        Shape ``S + mu.shape``.
+""" + _SHARED_DOC.format(
+    extra="mu : array_like\n        Cosines of the scattering angle, in [-1, 1].\n"
+    "    normalized : bool, optional\n        Divide by ``q_sca`` (the default), so that F11"
+    " averages to 1.\n    ",
+    extra_raise=",\n        ``mu`` outside [-1, 1] or NaN",
+    extra_type=" or ``normalized``",
+)
+
+
+def greek(
+    x: ArrayLike,
+    m: ArrayLike,
+    order: SupportsIndex | None = None,
+    *,
+    normalized: bool = True,
+    n_max: SupportsIndex | None = None,
+    derivatives: bool | Sequence[str] = False,
+    allow_unvalidated: bool = False,
+) -> MieGreek:
+    params = _parameters(derivatives)
+    xb, mb, shape = _inputs(x, m)
+    terms, g, d = _scatrs.mie_greek(
+        xb,
+        mb,
+        None if order is None else _args.size(order, "order"),
+        _n_max(n_max),
+        bool(params),
+        _args.flag(allow_unvalidated, "allow_unvalidated"),
+        _args.flag(normalized, "normalized"),
+    )
+    g, d = _frozen(g), _frozen(d)
+    width = g.shape[-1]
+    out = (*shape, width)
+    n_terms = _frozen(terms.astype(np.int64)).reshape(shape)
+    dd = None if d is None else d.reshape((3, 6, *out))
+    return MieGreek(*(v.reshape(out) for v in g), n_terms, params, dd)
+
+
+greek.__doc__ = (
+    """Greek expansion coefficients of the phase matrix of spheres.
+
+    Exact up to rounding: the phase matrix at the nodes of a Gauss–Legendre rule with
+    ``n_terms + ceil((L + 1)/2)`` points, projected onto the Wigner d-functions.
+
+    Returns
+    -------
+    MieGreek
+        Shape ``S + (L + 1,)``.
+"""
+    + _SHARED_DOC.format(
+        extra="order : int, optional\n        The highest order L; by default ``2 n_terms`` of the"
+        " largest sphere, which is\n        all of them. Orders above ``2 n_terms`` are exactly 0."
+        "\n    normalized : bool, optional\n        Normalize ``alpha1[..., 0]`` to 1 (the"
+        " default), or to ``q_sca``.\n    ",
+        extra_raise=",\n        a negative ``order`` or one above ``MAX_GREEK_ORDER``, a sphere"
+        " whose rule would\n        need more than ``2**17`` nodes",
+        extra_type=" or ``normalized``,\n        or a non-integer ``order``",
+    )
+    + """
+    Projecting adds about ``n_terms * L`` operations per sphere to the amplitudes at the
+    ``n_terms + ceil((L + 1)/2)`` nodes: all orders take about 0.09 s at x = 1e3 and
+    7.6 s at x = 1e4.
+"""
 )

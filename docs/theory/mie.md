@@ -2,8 +2,9 @@
 
 This page derives the methods behind `scatrs::mie` (Python: `scatrs.mie`): the series
 and its truncation, the recurrences, the cancellation-free forms of the absorption and the
-derivatives, the accuracy model, and the rigorous reference values. The rustdoc of
-`scatrs::mie` is the authoritative statement of the contracts; the figures here repeat it.
+derivatives, the phase matrix and its Greek coefficients, the accuracy model, and the rigorous
+reference values. The rustdoc of `scatrs::mie` is the authoritative statement of the
+contracts; the figures here repeat it.
 
 ## Conventions and the series
 
@@ -191,6 +192,107 @@ numbers, propagated through the same recurrences, are the test oracle: their val
 bitwise with `f64`, and their derivatives with the closed forms to within the rounding
 errors of the two routes.
 
+## The phase matrix
+
+<!-- synced with scatrs/src/mie/phase.rs rustdoc -->
+
+The phase matrix of a sphere has four independent elements (Bohren & Huffman 1983, §4.4):
+
+$$F_{11} = \tfrac12\bigl(\lvert S_1\rvert^2 + \lvert S_2\rvert^2\bigr), \quad
+F_{12} = \tfrac12\bigl(\lvert S_2\rvert^2 - \lvert S_1\rvert^2\bigr), \quad
+F_{33} = \mathrm{Re}\bigl(S_2S_1^*\bigr), \quad F_{34} = \mathrm{Im}\bigl(S_2S_1^*\bigr),$$
+
+with $F_{22} = F_{11}$, $F_{44} = F_{33}$, $F_{21} = F_{12}$, $F_{43} = -F_{34}$ and the other
+elements zero, all at $\mu = \cos\Theta$. scatrs returns them times one of two scales
+(`Normalization`):
+
+- **normalized**, $4/(x^2 Q_\text{sca})$, so that $\tfrac12\int_{-1}^1 F_{11}\,d\mu = 1$;
+- **unnormalized**, $4/x^2$: the normalized form times $Q_\text{sca}$, the phase matrix per
+  unit geometric cross section, which is what sums over a distribution of sizes.
+
+The derivatives with respect to $x$, $\mathrm{Re}\,m$ and $\mathrm{Im}\,m$ come from those of
+the amplitudes: $d\lvert S\rvert^2 = 2\,\mathrm{Re}(S^*dS)$ and $d(S_2S_1^*) =
+dS_2\,S_1^* + S_2\,dS_1^*$, with $\partial S/\partial(\mathrm{Re}\,m) = dS/dm$ and
+$\partial S/\partial(\mathrm{Im}\,m) = i\,dS/dm$ since $S$ is holomorphic in $m$. The
+normalized form adds the derivative of its scale, which includes that of $Q_\text{sca}$.
+
+## Greek coefficients
+
+<!-- synced with scatrs/src/mie/greek.rs rustdoc -->
+
+The Greek (generalized-spherical-function) coefficients expand the phase matrix in Wigner
+d-functions (Mishchenko, Travis & Lacis 2002, Eqs. 4.75–4.80; Hovenier, van der Mee & Domke
+2004):
+
+$$F_{11} = \sum_l \alpha_1^l\,d^l_{00}, \quad
+F_{22} + F_{33} = \sum_l (\alpha_2^l + \alpha_3^l)\,d^l_{22}, \quad
+F_{22} - F_{33} = \sum_l (\alpha_2^l - \alpha_3^l)\,d^l_{2,-2},$$
+
+$$F_{44} = \sum_l \alpha_4^l\,d^l_{00}, \quad F_{12} = \sum_l \beta_1^l\,d^l_{02}, \quad
+F_{34} = \sum_l \beta_2^l\,d^l_{02},$$
+
+with $d^l_{mn}$ evaluated at $\mu = \cos\Theta$ in the convention of `wigner_d`
+({ref}`wigner-d`), for example $d^2_{02}(\theta) = (\sqrt6/4)\sin^2\theta$. The functions of
+each element are orthogonal, $\int_{-1}^1 d^l_{mn}d^{l'}_{mn}\,d\mu = 2\delta_{ll'}/(2l + 1)$,
+so each coefficient is a projection:
+
+$$c^l = \frac{2l + 1}{2}\int_{-1}^1 F(\mu)\,d^l(\mu)\,d\mu .$$
+
+**Exact quadrature.** $S_1$ and $S_2$ are polynomials of degree $N$ in $\mu$ ($\pi_n$ has
+degree $n - 1$ and $\tau_n$ degree $n$), so every element of the phase matrix is a
+polynomial of degree $2N$. The four d-functions used here are polynomials of degree $l$ in
+$\mu$: each is $(1 - \mu)^{\lvert m - n\rvert/2}(1 + \mu)^{\lvert m + n\rvert/2}$ times a
+Jacobi polynomial, and the exponents are integers for these $(m, n)$. So the integrand for
+order $l \le L$ has degree at most $2N + L$. A Gauss–Legendre rule with $n_q$ nodes is exact
+to degree $2n_q - 1$, so
+
+$$n_q = N + \lceil (L + 1)/2\rceil$$
+
+nodes make the projection exact up to rounding. The coefficients of an $N$-term sphere vanish
+above order $2N$; `greek` projects up to $\min(L, 2N)$ and fills the orders above with exact
+zeros. By default $L = 2N$, all of them.
+
+**Normalization.** The projection of the unnormalized phase matrix gives $\alpha_1^0$ equal to
+$Q_\text{sca}$ up to rounding. Normalized coefficients are divided by that projected
+$\alpha_1^0$, so that $\alpha_1^0$ is exactly 1 and the common error of the projection
+cancels; then $\alpha_1^1 = 3g$. Unnormalized coefficients are the normalized ones times
+$Q_\text{sca}$.
+
+**Streaming.** For each node, the four Wigner recurrences ($d_{00}$, $d_{22}$, $d_{2,-2}$,
+$d_{02}$) run once up to $L$ and accumulate into the coefficient arrays: $O(n_q L)$ time and
+$O(n_q + L)$ memory (the phase-matrix tables at the nodes and the coefficients). Storing the d-functions at every node instead would take about 13 GB at
+$x = 10^4$ (four functions at about $2\cdot10^4$ nodes and $2\cdot10^4$ orders, in `f64`).
+
+**Linearity.** The projection is linear in $F$, so projecting the derivative tables of the
+phase matrix gives the Jacobians of the Greek coefficients, in the same pass: the
+d-functions, which dominate the cost, are shared by any number of tables. The normalized
+derivatives then follow from the quotient rule, $d(r/r_0) = (dr - (r/r_0)\,dr_0)/r_0$. A
+`GreekProjector` holds a rule and its order and projects tables given at its nodes, for
+example the summed phase matrices of many spheres at once: the basis for size distributions
+in phase 2.
+
+### Sign conventions
+
+<!-- synced with scatrs/tests/mie_greek.rs -->
+
+scatrs' elements are Bohren & Huffman's $S_{ij}$ (§4.4) times the scale above; with
+$\mu = \cos\Theta$ the expansion uses them as follows.
+
+| Bohren & Huffman | scatrs | Expanded in | Coefficient | Rayleigh limit |
+|---|---|---|---|---|
+| $S_{11}$ | $F_{11} = F_{22}$ | $d^l_{00}$ | $\alpha_1$ | $\alpha_1^l = 1, 0, \tfrac12$ for $l = 0, 1, 2$ |
+| $S_{11} \pm S_{33}$ | $F_{22} \pm F_{33}$ | $d^l_{22}$, $d^l_{2,-2}$ | $\alpha_2 \pm \alpha_3$ | $\alpha_2^2 = 3$, $\alpha_3 = 0$ |
+| $S_{33}$ | $F_{33} = F_{44}$ | $d^l_{00}$ | $\alpha_4$ | $\alpha_4^1 = 3/2$ |
+| $S_{12}$ | $F_{12}$ | $d^l_{02}$ | $\beta_1$ | $\beta_1^2 = -\sqrt6/2$ |
+| $S_{34}$ | $F_{34}$ | $d^l_{02}$ | $\beta_2$ | $\beta_2 = 0$ |
+
+The last column is the limit $x \to 0$, where the normalized phase matrix is
+$F_{11} = \tfrac34(1 + \mu^2)$, $F_{12} = -\tfrac34(1 - \mu^2)$, $F_{33} = \tfrac32\mu$ and
+$F_{34} = 0$; the other coefficients vanish. The Rust test
+`rayleigh_limit_pins_the_sign_conventions` checks these values. In particular $F_{12} < 0$ at
+$\Theta = 90°$, so the degree of linear polarization of scattered unpolarized light, positive
+when it is polarized perpendicular to the scattering plane, is $-F_{12}/F_{11}$.
+
 (mie-accuracy-model)=
 ## The accuracy model
 
@@ -230,10 +332,35 @@ the amplitudes, with $S_\text{rms} = x\sqrt{Q_\text{sca}}/2$). The two condition
   exact factor of $m^2 - 1 = (m - 1)(m + 1)$, and the $m$-derivatives have no factor that
   cancels.
 
+The phase matrix and the Greek coefficients are real outputs, so their cond is componentwise.
+Each phase-matrix element is measured relative to $\max(F_{11}, \bar F)$, with
+$\bar F = \tfrac12\int F_{11}\,d\mu$ (1 normalized, $Q_\text{sca}$ unnormalized), and each
+Greek coefficient array relative to $\max_l\lvert\alpha_1^l\rvert$. Their priors κ′ are
+
+- κ for the phase matrix, and $\kappa\max(1, \lvert m\rvert/\lvert m - 1\rvert)$ for its
+  derivatives, like the efficiencies and their Jacobian (the normalized phase matrix divides by
+  $Q_\text{sca}$);
+- $\kappa + ((L + 1)^2 + x^2)/8$ for the Greek coefficients up to order $L$, and
+  $\kappa\max(1, \lvert m\rvert/\lvert m - 1\rvert) + ((L + 1)^2 + x^2)/8$ for their
+  derivatives.
+
+The second term is the quadrature's. The computed coefficients are those of a rule whose
+`f64` nodes differ from the exact Gauss nodes; next to $\mu = 1$, where it matters, they are
+within about half an ulp, for the rounded double-double rule and the asymptotic rule alike
+(measured: 0.43 ulp). Next to $\mu = 1$ such a move changes $d_L$ by about $L^2\cdot2^{-54}$; and it changes the forward
+peak of the phase matrix, whose slope in $\mu$ grows like $x^4$ while the weights there shrink
+like $1/x^2$, by about $x^2\cdot2^{-54}$ of its size. Without
+the term the Greek coefficients needed $C = 85$ at $x = 100$ (all orders) and $C = 100$ at
+$x = 2\cdot10^4$ (to order 64), growing with $L^2$ and $x^2$; with it, $C$ is at most 1.7
+everywhere it was measured (the map 1.7, the Arb references 0.61, the large spheres 0.22). The
+error belongs to the `f64` nodes, not to how they are computed: forcing the double-double rule
+changes nothing, since its nodes rounded to `f64` are as accurate next to $\mu = 1$.
+
 The constants C are measured, with a margin of at least 4 over the worst case found at every
 Arb reference point and on a dense double-double grid: 16 for the coefficients, efficiencies
 and $g$; 128 for $S_1$, $S_2$; 64 for their derivatives; 256 for the efficiency Jacobian; 512
-for the coefficient derivatives. See {doc}`/validation/accuracy` for the map, and for why
+for the coefficient derivatives; 32 for the phase matrix; 128 for its derivatives; 8 for the
+Greek coefficients; 16 for their derivatives. See {doc}`/validation/accuracy` for the map, and for why
 neither term alone is enough.
 
 ## Reference values
@@ -323,3 +450,10 @@ runs:
   $m \lesssim 1.4$ the Jacobian costs more than the target of twice the values: up to 2.2
   times at $m = 0.75$, $x \ge 1000$;
 - amplitudes at 100 angles add about 4 ns per angle and term.
+
+The Greek coefficients for all orders cost the amplitudes at $n_q \approx 2N$ nodes,
+$O(N^2)$, and the four Wigner recurrences up to $L = 2N$ at each node, also $O(N^2)$. In
+`f64` on the same machine they take 0.09 s at $x = 10^3$ and 7.6 s at $x = 10^4$ (measured
+during development, not by the benchmark). The Gauss–Legendre rule itself is negligible: above
+100 points it comes from $O(n)$ asymptotic expansions, 6 ms for the $2\cdot10^4$ nodes of
+$x = 10^4$ ({ref}`gauss-legendre`).

@@ -67,12 +67,14 @@ SCALARS = "docs/theory/scalar-types.md"
 LIMITATIONS = "docs/limitations.md"
 WIGNER_EXAMPLE = "docs/examples/wigner-d.md"
 HG_EXAMPLE = "docs/examples/henyey-greenstein.md"
+QUADRATURE = "docs/examples/quadrature.md"
 REFERENCE_SUITE = "docs/validation/reference-suite.md"
 DOMAIN_RS = "scatrs/src/mie/domain.rs"
 MIE_THEORY = "docs/theory/mie.md"
 MIE_RS = "scatrs/src/mie/mod.rs"
 MIE_PY = "python/scatrs/mie.py"
 MIE_BINDINGS_RS = "scatrs-py/src/mie.rs"
+GREEK_RS = "scatrs/src/mie/greek.rs"
 INSTALLATION = "docs/installation.md"
 CONTRIBUTING = "CONTRIBUTING.md"
 
@@ -82,13 +84,27 @@ CONTRACTS = [
     ("Wigner double-double bound", "(l+1)2^-97", [WIGNER_RS, THEORY]),
     ("Gauss-Legendre cap", "2^17", [GL_RS, SPECIAL_PY, THEORY, LIMITATIONS]),
     ("Gauss-Legendre cap", "131072", [GL_RS, SPECIAL_PY, THEORY]),
-    ("Gauss-Legendre cost model", "28nsn^2", [GL_RS, SPECIAL_PY, THEORY]),
-    ("Gauss-Legendre timing", "0.72s", [GL_RS, SPECIAL_PY, THEORY]),
-    ("Gauss-Legendre timing", "11s", [GL_RS, SPECIAL_PY, THEORY, LIMITATIONS]),
+    ("Gauss-Legendre double-double cost model", "28nsn^2", [GL_RS, THEORY]),
+    ("Gauss-Legendre double-double timing", "0.72s", [GL_RS, THEORY]),
+    ("Gauss-Legendre double-double timing", "11s", [GL_RS, THEORY, LIMITATIONS]),
+    ("Gauss-Legendre f64 timing at the cap", "40ms", [GL_RS, SPECIAL_PY, THEORY]),
+    (
+        "Gauss-Legendre asymptotic bound",
+        "322^-52",
+        [GL_RS, SPECIAL_PY, THEORY, LIMITATIONS, QUADRATURE],
+    ),
+    ("Gauss-Legendre asymptotic measured", "2.82^-52", [GL_RS, THEORY]),
+    ("Gauss-Legendre asymptotic measured", "4.02^-52", [GL_RS, THEORY]),
+    (
+        "Gauss-Legendre asymptotic measured",
+        "2.8and4.0unitsof2^-52",
+        [SPECIAL_PY, LIMITATIONS, "CHANGELOG.md"],
+    ),
     ("Wigner cost", "2.6ns", [WIGNER_RS, THEORY]),
     ("Gauss-Legendre f64 node contract", "nodeabsoluteerror≤2^-52", [GL_RS]),
     ("Gauss-Legendre f64 weight contract", "weightrelativeerror≤2^-52", [GL_RS]),
-    ("Gauss-Legendre f64 contract", "|f64|≤2^-52|≤2^-52|", [THEORY]),
+    ("Gauss-Legendre f64 contract", "|f64,n≤100|≤2^-52|≤2^-52|", [THEORY]),
+    ("Gauss-Legendre asymptotic contract", "|f64,n>100|≤322^-52|≤322^-52|", [THEORY]),
     ("Gauss-Legendre double-double weight bound", "2^-100(4+n^2)", [GL_RS, THEORY]),
     ("Python Wigner output limit", "2^28", [SPECIAL_PY, LIMITATIONS]),
     ("Double-double full precision", "2^-969", [DD_RS, SCALARS]),
@@ -108,6 +124,46 @@ CONTRACTS = [
     ("Mie accepted |m|", "|m|in[10^-6,10^3]", [LIMITATIONS]),
     ("Mie accepted x", "xoutside[1e-30,1e6]", [MIE_PY]),
     ("Mie accepted |m|", "|m|outside[1e-6,1e3]", [MIE_PY]),
+    (
+        "Greek all-orders timing",
+        "7.6s",
+        [MIE_THEORY, LIMITATIONS, MIE_PY, GREEK_RS, "docs/plans/phase-1b-followups.md"],
+    ),
+    (
+        "Greek all-orders timing",
+        "0.09s",
+        [MIE_THEORY, MIE_PY, GREEK_RS, "docs/plans/phase-1b-followups.md"],
+    ),
+    ("Gauss-Legendre f64 timing", "6ms", [GL_RS, THEORY, MIE_THEORY]),
+    ("Greek node limit", "6.510^4", [GREEK_RS, LIMITATIONS]),
+    (
+        "Greek quadrature term",
+        "((L+1)^2+x^2)/8",
+        [DOMAIN_RS, MIE_THEORY, "docs/plans/phase-1b-followups.md"],
+    ),
+    (
+        "Greek node rounding",
+        "L^22^-54",
+        [DOMAIN_RS, MIE_THEORY, "docs/plans/phase-1b-followups.md"],
+    ),
+    (
+        "Greek node rounding",
+        "x^22^-54",
+        [DOMAIN_RS, MIE_THEORY, "docs/plans/phase-1b-followups.md"],
+    ),
+    (
+        "Greek C without the term",
+        "C=85atx=100(allorders)",
+        [MIE_THEORY, "docs/validation/accuracy.md"],
+    ),
+    (
+        "Greek C without the term",
+        "C=100atx=210^4(toorder64)",
+        [MIE_THEORY, "docs/validation/accuracy.md"],
+    ),
+    ("Greek worst C", "Cisatmost1.7", [MIE_THEORY, "docs/validation/accuracy.md"]),
+    ("Greek node-rounding error", "210^-9", [LIMITATIONS, "docs/plans/phase-1b-followups.md"]),
+    ("Greek node-rounding error", "210^-11", [LIMITATIONS, "docs/plans/phase-1b-followups.md"]),
 ]
 
 
@@ -170,14 +226,16 @@ def _declared_mie_constants() -> dict[str, float]:
     body = source[source.index("pub fn constant(") :]
     body = body[: body.index("\n    }\n")]
     constants = {}
-    for arm in re.finditer(r"((?:\s*\|?\s*MieOutput::\w+)+)\s*=>\s*([\d.]+)", body):
+    arm_variant = r"MieOutput::\w+(?:\s*\{\s*\.\.\s*\})?"
+    for arm in re.finditer(rf"((?:\s*\|?\s*{arm_variant})+)\s*=>\s*([\d.]+)", body):
         for variant in re.findall(r"MieOutput::(\w+)", arm.group(1)):
             constants[variant] = float(arm.group(2))
     return constants
 
 
-def test_mie_constants_match_the_accuracy_map() -> None:
-    columns = {
+# The columns of each accuracy map, by the `MieOutput` variant each measures.
+ACCURACY_MAPS = {
+    "mie-accuracy-map.json": {
         "coefficients": "Coefficients",
         "q_ext": "Extinction",
         "q_sca": "Scattering",
@@ -188,10 +246,24 @@ def test_mie_constants_match_the_accuracy_map() -> None:
         "coefficient_derivatives": "CoefficientDerivatives",
         "efficiency_jacobian": "EfficiencyJacobian",
         "amplitude_derivatives": "AmplitudeDerivatives",
-    }
+    },
+    "greek-accuracy-map.json": {
+        "phase_matrix": "PhaseMatrix",
+        "phase_matrix_derivatives": "PhaseMatrixDerivatives",
+        "greek": "GreekCoefficients",
+        "greek_derivatives": "GreekDerivatives",
+    },
+}
+
+
+@pytest.mark.parametrize("name", sorted(ACCURACY_MAPS))
+def test_mie_constants_match_the_accuracy_map(name: str) -> None:
+    columns = ACCURACY_MAPS[name]
     constants = _declared_mie_constants()
-    assert set(constants) == set(columns.values())
-    data = json.loads((ROOT / "docs/validation/data/mie-accuracy-map.json").read_text())
+    measured = {v for c in ACCURACY_MAPS.values() for v in c.values()}
+    assert set(constants) == measured, "a constant that no map measures, or the reverse"
+    data = json.loads((ROOT / "docs/validation/data" / name).read_text())
+    assert set(data["declared"]) == set(data["c"]) == set(columns)
     for column, variant in columns.items():
         assert data["declared"][column] == constants[variant], column
         # The documented margin: every constant at least 4 times the worst C of the map. A null
@@ -212,6 +284,10 @@ MIE_CONSTANT_GROUPS = [
     (("AmplitudeDerivatives",), "their derivatives", "derivatives of S₁, S₂"),
     (("EfficiencyJacobian",), "the efficiency Jacobian", "efficiency Jacobian"),
     (("CoefficientDerivatives",), "the coefficient derivatives", "coefficient derivatives"),
+    (("PhaseMatrix",), "the phase matrix", "phase matrix"),
+    (("PhaseMatrixDerivatives",), "its derivatives", "derivatives of the phase matrix"),
+    (("GreekCoefficients",), "the Greek coefficients", "Greek coefficients"),
+    (("GreekDerivatives",), "their derivatives", "derivatives of the Greek coefficients"),
 ]
 
 

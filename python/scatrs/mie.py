@@ -50,7 +50,7 @@ MAX_MIE_ORDER: Final[int] = _scatrs.MAX_MIE_ORDER
 
 MAX_MIE_VALUES: Final[int] = _scatrs.MAX_MIE_VALUES
 """The most complex values one call returns, counting derivatives: ``2**27`` (2 GiB); twice as
-many real values for :func:`efficiencies`."""
+many real values for :func:`efficiencies`, :func:`phase_matrix` and :func:`greek`."""
 
 MAX_GREEK_ORDER: Final[int] = _scatrs.MAX_GREEK_ORDER
 """The largest ``order`` :func:`greek` accepts: ``2**21``, twice :data:`MAX_MIE_ORDER`."""
@@ -163,11 +163,9 @@ class MieEfficiencies:
         ValueError
             If the derivative was not requested.
         """
-        _check(self.params, param)
-        if param == "m":
-            raise ValueError("efficiencies are real: use 'm_real' or 'm_imag'")
+        p = _check_real(self.params, param, "efficiencies")
         assert self._jacobian is not None
-        rows = self._jacobian[PARAMETERS.index(param)]
+        rows = self._jacobian[p]
         return MieEfficiencies(*rows)
 
 
@@ -363,14 +361,15 @@ _SHARED_DOC = """
     InvalidInputError
         For ``x`` outside ``[1e-30, 1e6]``, non-finite ``m``, ``Re m < 0`` or ``Im m < 0``
         (gain media), ``|m|`` outside ``[1e-6, 1e3]``, ``n_max`` outside
-        ``[1, MAX_MIE_ORDER]``{extra_raise}, or an output above ``MAX_MIE_VALUES``. The
-        message names the first failing element (in C order).
+        ``[1, MAX_MIE_ORDER]``{extra_raise}, or an output above ``MAX_MIE_VALUES`` complex
+        values (``2 * MAX_MIE_VALUES`` real values). The message names the first failing
+        element (in C order).
     OutsideValidatedDomainError
         For valid inputs outside the validated domain, unless ``allow_unvalidated``.
     TypeError
         For non-numeric ``x`` or ``m`` (complex ``x``), a non-integer ``n_max`` (``float``
         and ``bool`` values are rejected), ``derivatives`` that is neither a bool nor a
-        sequence of names, or a non-bool ``allow_unvalidated``.
+        sequence of names, or a non-bool ``allow_unvalidated``{extra_type}.
     ValueError
         For an unknown parameter name, or (from numpy) shapes that do not broadcast.
     BufferError
@@ -412,7 +411,7 @@ efficiencies.__doc__ = """Efficiencies and asymmetry parameter of spheres.
     -------
     MieEfficiencies
         Each field has the broadcast shape of ``x`` and ``m``.
-""" + _SHARED_DOC.format(extra="", extra_raise="")
+""" + _SHARED_DOC.format(extra="", extra_raise="", extra_type="")
 
 
 def coefficients(
@@ -443,7 +442,7 @@ coefficients.__doc__ = """Mie coefficients aₙ and bₙ of spheres.
     -------
     MieCoefficients
         Shape ``S + (N,)``, zero-padded to the largest number of terms ``N``.
-""" + _SHARED_DOC.format(extra="", extra_raise="")
+""" + _SHARED_DOC.format(extra="", extra_raise="", extra_type="")
 
 
 def amplitudes(
@@ -480,7 +479,8 @@ amplitudes.__doc__ = """Amplitude scattering functions S₁ and S₂ of spheres.
         Shape ``S + mu.shape``.
 """ + _SHARED_DOC.format(
     extra="mu : array_like\n        Cosines of the scattering angle, in [-1, 1].\n    ",
-    extra_raise=", ``mu`` outside [-1, 1] or NaN",
+    extra_raise=",\n        ``mu`` outside [-1, 1] or NaN",
+    extra_type="",
 )
 
 
@@ -522,7 +522,8 @@ phase_matrix.__doc__ = """The phase matrix F11, F12, F33, F34 of spheres.
     extra="mu : array_like\n        Cosines of the scattering angle, in [-1, 1].\n"
     "    normalized : bool, optional\n        Divide by ``q_sca`` (the default), so that F11"
     " averages to 1.\n    ",
-    extra_raise=", ``mu`` outside [-1, 1] or NaN",
+    extra_raise=",\n        ``mu`` outside [-1, 1] or NaN",
+    extra_type=" or ``normalized``",
 )
 
 
@@ -556,8 +557,9 @@ def greek(
 
 
 greek.__doc__ = (
-    """Greek expansion coefficients of the phase matrix of spheres, exact up to
-    rounding: the phase matrix at the nodes of a Gauss–Legendre rule with
+    """Greek expansion coefficients of the phase matrix of spheres.
+
+    Exact up to rounding: the phase matrix at the nodes of a Gauss–Legendre rule with
     ``n_terms + ceil((L + 1)/2)`` points, projected onto the Wigner d-functions.
 
     Returns
@@ -570,11 +572,13 @@ greek.__doc__ = (
         " largest sphere, which is\n        all of them. Orders above ``2 n_terms`` are exactly 0."
         "\n    normalized : bool, optional\n        Normalize ``alpha1[..., 0]`` to 1 (the"
         " default), or to ``q_sca``.\n    ",
-        extra_raise=", ``order`` above ``MAX_GREEK_ORDER``",
+        extra_raise=",\n        a negative ``order`` or one above ``MAX_GREEK_ORDER``, a sphere"
+        " whose rule would\n        need more than ``2**17`` nodes",
+        extra_type=" or ``normalized``,\n        or a non-integer ``order``",
     )
     + """
-    The cost per sphere grows like ``n_terms * L`` for the projection (on top of the
-    amplitudes at ``n_terms + L/2`` angles): all orders take about 0.1 s at x = 1e3 and
-    8 s at x = 1e4.
+    Projecting adds about ``n_terms * L`` operations per sphere to the amplitudes at the
+    ``n_terms + ceil((L + 1)/2)`` nodes: all orders take about 0.1 s at x = 1e3 and 8 s at
+    x = 1e4.
 """
 )

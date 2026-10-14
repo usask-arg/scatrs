@@ -23,9 +23,9 @@ use scatrs::mie::{
 
 use crate::errors::to_pyerr;
 
-/// The most complex values one call returns, counting derivatives, 2²⁷ (2 GiB); the
-/// efficiencies, which are real, may have twice as many. Larger requests raise
-/// `InvalidInputError`, as in `special.rs`.
+/// The most complex values one call returns, counting derivatives, 2²⁷ (2 GiB); the real
+/// outputs (efficiencies, phase matrix, Greek coefficients) may have twice as many. Larger
+/// requests raise `InvalidInputError`, as in `special.rs`.
 pub const MAX_MIE_VALUES: usize = 1 << 27;
 
 /// An error raised without the GIL: a core error, converted to its `scatrs.errors` class once
@@ -130,6 +130,19 @@ fn solve<'m>(
         mie.compute(x, m, opts)
     };
     r.map_err(at(i))
+}
+
+/// Checks every element and returns the largest number of terms, before anything is allocated.
+fn largest_n_terms(
+    x: &ArrayViewD<'_, f64>,
+    m: &ArrayViewD<'_, Complex64>,
+    opts: &MieOptions,
+) -> scatrs::Result<usize> {
+    let mut most = 0;
+    for (i, (&xi, &mi)) in x.iter().zip(m.iter()).enumerate() {
+        most = most.max(n_terms(xi, mi, opts).map_err(at(i))?);
+    }
+    Ok(most)
 }
 
 /// `count` (`None` if it overflowed) values of `kind`, unless that exceeds `limit` (named
@@ -344,11 +357,7 @@ pub fn mie_coefficients<'py>(
         .map_err(|e| to_pyerr(py, e))?;
     let (terms, a, b, d, width) = py
         .detach(|| -> Result<_, Failure> {
-            // Check every element and find the largest number of terms, before allocating.
-            let mut width = 0;
-            for (i, (&xi, &mi)) in xv.iter().zip(mv.iter()).enumerate() {
-                width = width.max(n_terms(xi, mi, &opts).map_err(at(i))?);
-            }
+            let width = largest_n_terms(&xv, &mv, &opts)?;
             let count = len.checked_mul(width).and_then(|v| v.checked_mul(arrays));
             let per_array = complex_values("the coefficients", count, derivatives)? / arrays;
             let mut terms = zeros::<u64>(len, "the numbers of terms")?;
@@ -538,9 +547,10 @@ pub fn mie_phase_matrix<'py>(
                             phase_buffers(dr, per_array, row.clone()),
                             phase_buffers(di, per_array, row.clone()),
                         ],
-                    )?;
+                    )
+                    .map_err(at(i))?;
                 } else {
-                    sol.phase_matrix(&mu, norm, values)?;
+                    sol.phase_matrix(&mu, norm, values).map_err(at(i))?;
                 }
             }
             Ok((f, d))
@@ -626,11 +636,7 @@ pub fn mie_greek<'py>(
     let norm = normalization(normalized);
     let (terms, g, d, width) = py
         .detach(|| -> Result<_, Failure> {
-            // Check every element and find the number of orders, before allocating.
-            let mut most = 0;
-            for (i, (&xi, &mi)) in xv.iter().zip(mv.iter()).enumerate() {
-                most = most.max(n_terms(xi, mi, &opts).map_err(at(i))?);
-            }
+            let most = largest_n_terms(&xv, &mv, &opts)?;
             let width = order.unwrap_or(2 * most) + 1;
             let count = len.checked_mul(width).and_then(|v| v.checked_mul(arrays));
             let per_array = real_values("the Greek coefficients", count, derivatives)? / arrays;
@@ -655,13 +661,15 @@ pub fn mie_greek<'py>(
                     }
                 };
                 if derivatives {
-                    let (values, jac) = s.greek_with_derivatives(Some(width - 1), norm)?;
+                    let (values, jac) = s
+                        .greek_with_derivatives(Some(width - 1), norm)
+                        .map_err(at(i))?;
                     put(&mut g, 0, &values);
                     for (p, c) in jac.iter().enumerate() {
                         put(&mut d, 6 * p, c);
                     }
                 } else {
-                    put(&mut g, 0, &s.greek(Some(width - 1), norm)?);
+                    put(&mut g, 0, &s.greek(Some(width - 1), norm).map_err(at(i))?);
                 }
             }
             Ok((terms, g, d, width))

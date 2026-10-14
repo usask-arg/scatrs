@@ -92,8 +92,9 @@ def _fd(f, h):
 
 
 @pytest.mark.parametrize("normalized", [True, False])
-def test_derivatives_match_finite_differences(normalized):
-    x, m, mu = 6.0, 1.5 + 0.05j, [0.95, 0.2, -1.0]
+@pytest.mark.parametrize(("x", "m"), [(0.7, 1.33 + 1e-3j), (6.0, 1.5 + 0.05j), (25.0, 2.5 + 1j)])
+def test_derivatives_match_finite_differences(normalized, x, m):
+    mu = [0.95, 0.2, -1.0]
     n = int(mie.default_n_max(x)) + 1  # x ± h keeps the number of terms
     kw = {"n_max": n, "normalized": normalized}
     f = mie.phase_matrix(x, m, mu, derivatives=True, **kw)
@@ -104,20 +105,49 @@ def test_derivatives_match_finite_differences(normalized):
         "m_imag": (lambda h: (x, m + 1j * h), 1e-7),
     }
     for p, (at, h) in steps.items():
-        for name in ("f11", "f12", "f33", "f34"):
-            fd = _fd(
+        # Measured like the tolerances: the phase matrix against F11, the Greek coefficients
+        # against alpha1.
+        fds = {
+            name: _fd(
                 lambda e, at=at, name=name: getattr(mie.phase_matrix(*at(e), mu, **kw), name), h
             )
-            np.testing.assert_allclose(getattr(f.d(p), name), fd, atol=1e-6 * np.abs(fd).max())
-        for name in ("alpha1", "alpha2", "alpha3", "alpha4", "beta1", "beta2"):
-            fd = _fd(lambda e, at=at, name=name: getattr(mie.greek(*at(e), 2 * n, **kw), name), h)
-            got = getattr(g.d(p), name)
-            np.testing.assert_allclose(got, fd, atol=1e-6 * max(np.abs(fd).max(), 1e-3))
+            for name in ("f11", "f12", "f33", "f34")
+        }
+        scale = np.abs(fds["f11"]).max()
+        for name, fd in fds.items():
+            np.testing.assert_allclose(getattr(f.d(p), name), fd, rtol=0, atol=1e-6 * scale)
+        names = ("alpha1", "alpha2", "alpha3", "alpha4", "beta1", "beta2")
+        fdg = {
+            name: _fd(lambda e, at=at, name=name: getattr(mie.greek(*at(e), 2 * n, **kw), name), h)
+            for name in names
+        }
+        scale = max(np.abs(fdg["alpha1"]).max(), 1e-3)
+        for name, fd in fdg.items():
+            np.testing.assert_allclose(getattr(g.d(p), name), fd, rtol=0, atol=1e-6 * scale)
     with pytest.raises(ValueError, match="are real"):
         f.d("m")
     with pytest.raises(ValueError, match="are real"):
         g.d("m")
     assert g.d("x").n_terms is g.n_terms
+
+
+def test_batched_derivatives_equal_scalar_calls():
+    x = np.array([[0.5], [12.0]])
+    m = np.array([1.33, 1.5 + 0.01j, 0.75])
+    mu = np.array([[0.9, 0.0], [-0.3, -1.0]])
+    for normalized in (True, False):
+        g = mie.greek(x, m, normalized=normalized, derivatives=True)
+        f = mie.phase_matrix(x, m, mu, normalized=normalized, derivatives=True)
+        width = g.alpha1.shape[-1]
+        for i in range(2):
+            for j in range(3):
+                # The smaller spheres are zero-padded to the batch's order.
+                gs = mie.greek(x[i, 0], m[j], width - 1, normalized=normalized, derivatives=True)
+                fs = mie.phase_matrix(x[i, 0], m[j], mu, normalized=normalized, derivatives=True)
+                for p in mie.PARAMETERS:
+                    np.testing.assert_array_equal(g.d(p).beta1[i, j], gs.d(p).beta1)
+                    np.testing.assert_array_equal(g.d(p).alpha3[i, j], gs.d(p).alpha3)
+                    np.testing.assert_array_equal(f.d(p).f34[i, j], fs.d(p).f34)
 
 
 def test_greek_errors():
@@ -127,6 +157,12 @@ def test_greek_errors():
         mie.greek(1.0, 1.5, mie.MAX_GREEK_ORDER + 1)
     with pytest.raises(TypeError):
         mie.greek(1.0, 1.5, 3.0)
+    # Empty inputs do not hide a bad order.
+    with pytest.raises(InvalidInputError, match="Greek order must be at most"):
+        mie.greek([], 1.5, mie.MAX_GREEK_ORDER + 1)
+    # A sphere whose quadrature rule would exceed the cap, named by its element.
+    with pytest.raises(InvalidInputError, match=r"element 0: .* quadrature nodes, more than"):
+        mie.greek([1.0, 1.0], 1.5, n_max=70_000, allow_unvalidated=True)
     with pytest.raises(TypeError, match="normalized must be a bool"):
         mie.greek(1.0, 1.5, normalized=1)
     with pytest.raises(TypeError, match="normalized must be a bool"):

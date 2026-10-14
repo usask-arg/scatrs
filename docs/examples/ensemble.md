@@ -99,11 +99,12 @@ assert g.greek.alpha1[0] == 1
 assert abs(g.greek.alpha1[1] - 3 * g.g) < 1e-13 * 3 * g.g
 ```
 
-Their error estimates are bounds, but loose ones: the size nodes are projected in bands by
-their number of terms, and a band's table jumps where a node leaves it, which the per-panel
-$\lvert K_{15} - G_7\rvert$ takes for integration error ({doc}`/theory/ensembles`). Unnormalized
-(`normalized=False`), $\alpha_1^0$ is $\langle C_\text{sca}\rangle$ itself, yet its estimate is
-more than $10^3$ times that of $\langle C_\text{sca}\rangle$.
+Their error estimates are bounds, given the estimates of the tables they are projected from.
+Every node of a size panel fills the tables of the panel's projector band, so the tables are
+smooth within a panel and the bounds are about as tight as the other estimates
+({doc}`/theory/ensembles`). Unnormalized (`normalized=False`), $\alpha_1^0$ is $\langle
+C_\text{sca}\rangle$ itself, and its estimate is less than twice that of $\langle
+C_\text{sca}\rangle$.
 
 ```{code-cell} python
 u = ensemble.compute(sulfate, 0.55, m, greek=32, normalized=False)
@@ -112,7 +113,7 @@ print(f"alpha1[0] = {u.greek.alpha1[0]:.12e}, c_sca = {u.c_sca:.12e}")
 print(f"estimates: alpha1[0] {u.error.greek.alpha1[0]:.1e}, c_sca {u.error.c_sca:.1e}; "
       f"true error {abs(u.greek.alpha1[0] - exact.greek.alpha1[0]):.1e}")
 assert abs(u.greek.alpha1[0] / u.c_sca - 1) < 1e-13
-assert u.error.greek.alpha1[0] > 1e3 * u.error.c_sca
+assert u.error.greek.alpha1[0] < 2 * u.error.c_sca
 assert np.all(abs(u.greek.alpha1 - exact.greek.alpha1) <= u.error.greek.alpha1)
 ```
 

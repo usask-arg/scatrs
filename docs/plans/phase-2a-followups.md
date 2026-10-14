@@ -11,9 +11,9 @@ in its heading.
     about N + L/2 Gauss–Legendre cosines, O(N²) for large spheres.
   - **Why deferred:** the projection is exact and validated (phase 1b), and pass 2 with Greek
     coefficients is the cost of broad distributions of large spheres. Measured on an Apple M4
-    Pro, one wavelength, lognormal r_g = 1, σ_g = 2, m = 1.33 + 10⁻⁴i, rtol 1e-6: 1.1 s, 5.9 s
-    and 22.6 s at λ = 1, 0.5 and 0.3 to order 32, against 0.04 s, 0.11 s and 0.23 s for the
-    cross sections alone.
+    Pro (12 cores), per wavelength, lognormal r_g = 1, σ_g = 2, m = 1.33 + 10⁻⁴i, rtol 1e-6:
+    0.62 s, 2.9 s and 10.4 s at λ = 1, 0.5 and 0.3 to order 32, against 0.035 s, 0.091 s and
+    0.21 s for the cross sections alone.
   - **Then:** validate against the projection and the Arb references, and re-measure the table
     in `docs/theory/ensembles.md` and `docs/limitations.md`.
 - **Shared πₙ/τₙ tables per band.** The nodes of a projector band share its cosines, and πₙ(μ)
@@ -24,19 +24,18 @@ in its heading.
   sphere whatever L, so pass 2 costs about the same for L = 32 as for far higher orders. The two
   items above are the candidates.
 - **The phase-1b item "Caching projectors across spheres"** was resolved differently: one
-  projector per band of the number of terms (bands growing by a factor 1.25), since one shared
-  projector at the largest n_q took 20 s per wavelength for a broad distribution.
+  projector per band of the number of terms (bands growing by a factor 1.25, chosen per panel),
+  since one shared projector at the largest n_q made every small sphere pay for the largest.
+  With the bands, the Greek coefficients to order 32 of the broad distribution above still take
+  about 10 s per wavelength at λ = 0.3.
 
 ## Accuracy of the error estimates (phase 5)
-- **Tighter Greek error estimates.** Found while writing the documentation: the estimates of the
-  Greek coefficients are bounds but loose by orders of magnitude. For the lognormal
-  r_g = 0.08, σ_g = 1.6, m = 1.43 + 10⁻⁸i at λ = 0.55, the estimate of the unnormalized α₁⁰
-  (which equals ⟨C_sca⟩) is 6.8·10⁻⁴ against 1.8·10⁻⁸ for ⟨C_sca⟩, with a true error of about
-  10⁻⁹. Within a panel the band of a node changes with its radius, so each band's table is a
-  step function of r, and its |K15 − G7| is of the order of the panel's whole contribution.
-  Projection is linear, so the difference of the K15 and G7 coefficients summed over the bands
-  would estimate the error of the continuous integrand instead (per panel it would need a
-  projection per panel; over all panels it loses the triangle inequality across panels).
+- **Unresolved ripples of non-absorbing spheres.** Found while updating the documentation: for
+  the lognormal r_g = 1, σ_g = 2, m = 1.33 at λ = 0.5 with `max_panels` raised, the converged
+  result's estimate of ⟨C_ext⟩ (9.7·10⁻⁷ of it) falls short of its true error (1.1·10⁻⁶), and
+  by 5–11× at rtol 1e-8 to 1e-10: K15 and G7 both miss resonance ripples narrower than a panel.
+  Candidates: refining on a ripple-sensitive quantity, or a minimum node density in x for
+  Im m ≈ 0.
 
 ## Cross-code comparison and benchmark (phase 2b)
 - **sasktran2's `MieDatabase`.** Compare the ensemble outputs (cross sections, ω, g, Greek

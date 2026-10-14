@@ -79,7 +79,7 @@ Per wavelength, in t = ln r, with ∫ C p dr = ∫ C(r) p(r) r dt.
 - **Pass 1 (refinement).** Only the efficiencies are evaluated (O(N) per radius). The refined
   quantities are ⟨C_ext⟩, ⟨C_sca⟩ and ⟨C_sca·g⟩, plus, for each requested distribution
   parameter θ, the integrals weighted by ∂p/∂θ. Each has a target: rtol·⟨C⟩ for the cross
-  sections, rtol·⟨C_sca⟩ for ⟨C_sca·g⟩, and rtol·|θ|·∫C|∂p/∂θ|dr for the derivative
+  sections, rtol·⟨C_sca⟩ for ⟨C_sca·g⟩, and rtol·∫|C·∂p/∂θ|dr for the derivative
   integrals. In rounds, every panel whose estimate exceeds its share (target/number of
   panels) of any quantity is halved, until all totals meet their targets or the panel count
   reaches `max_panels` (default 4096), which sets `converged = false` (not an error: without
@@ -182,38 +182,74 @@ unresolvable ripples without absorption), CHANGELOG.
 
 ## 12. Changes during implementation
 
-Recorded 2026-10-14, after prototyping and measuring:
+Recorded 2026-10-14, after prototyping and measuring, and amended after the engine review
+(marked *review*):
 
-- **Cut-offs.** The Mie integration range bounds the number (r⁰) and area (r²) tails at
-  rtol/10 each: renormalizing over the range moves every per-particle average by the omitted
-  number fraction, so the number tail must be bounded too. The volume (r³) tail is not used
-  for the Mie range (for σ_g = 2 it pushed the range to x ≈ 5000): the moments ⟨r²⟩ and ⟨r³⟩
-  are integrated separately, without Mie solutions, on a range that also bounds the volume
-  tail. The cut-offs move each average by at most about 2·rtol/10, which every error
+- **Cut-offs.** The Mie integration range bounds only the area (r²) tail, at rtol/10 (as in
+  section 3); the cross sections of small spheres fall faster than r². The normalization
+  Z = ∫u dr, ⟨r²⟩ and ⟨r³⟩ are integrated separately, without Mie solutions, on a moment range
+  that bounds the number (r⁰), area and volume (r³) tails at max(10⁻³·rtol, 10⁻¹⁶), and every
+  average is S/Z. The volume tail is not used for the Mie range (for σ_g = 2 it pushed the range
+  to x ≈ 5000). *Review:* the Mie range first bounded the number tail too, at rtol/10, since
+  renormalizing over it moves every average by the omitted number fraction; with Z from the
+  moment integration the tiny spheres of a long number tail need no Mie solutions, and the
+  smaller tail of the moment range covers the derivatives, which weight the tails by about
+  (∂ ln u/∂θ)². The cut-offs move each average by at most about 2·rtol/10, which every error
   estimate includes.
-- **Refined quantities.** Pass 1 refines on 1 (the normalization), ⟨C_ext⟩, ⟨C_sca⟩ and
-  ⟨C_sca g⟩, the requested distribution-parameter integrals, and, when derivatives with
-  respect to m are requested, the derivatives of the cross sections with respect to m (to
-  rtol of their absolute integrals): without that, their estimates fell short by a factor of
-  3. ⟨C_back⟩ is refined only with `refine_backscatter` (to rtol of max(⟨C_back⟩, ⟨C_sca⟩), as
-  phase 1a measures Q_back): its glory ripples made a broad weakly absorbing case unconverged
-  at 4096 panels; without refinement its estimate is indicative (it fell short by up to a
-  factor of 7.6 on a derivative). Panels are split only for quantities still above their
-  targets.
+- **Peak width** (*review*). The march of the cut-offs and the initial panels step by at most
+  min(½, ½·w) in ln r, w the width of the density's peak in ln r: ln σ_g (lognormal),
+  √(b/(1 − 2b)) (gamma), 1/√(αγ) (modified gamma with α > 0, else 1/γ), ∞ for finite support.
+  Steps of ½ skipped over narrow peaks.
+- **Range extension** (*review*). After pass 1 meets its targets, the range is extended at an
+  end where any refined integrand (values and every derivative block) per unit ln r at the end
+  node exceeds a tenth of its target, not only the extinction integrand: the cross sections of
+  small absorbing spheres and the derivatives can have heavier tails than the area. The θ
+  blocks are compared with rtol·max(|their integral|, 10⁻³·their absolute integral), since they
+  cancel. Each extension is ½ in ln r, or w for narrower peaks, with the end criterion scaled by
+  the extension over ½; at most 100 per side; an extension beyond `max_panels` returns the
+  result unconverged.
+- **Refined quantities.** Pass 1 refines on 1, ⟨C_ext⟩, ⟨C_sca⟩ and ⟨C_sca g⟩, the requested
+  distribution-parameter integrals (to rtol·∫|C·∂p/∂θ|dr, with no |θ| factor), and, when
+  derivatives with respect to m are requested, the derivatives of the cross sections with
+  respect to m (to rtol of their absolute integrals): without that, their estimates fell short
+  by a factor of 3. ⟨C_back⟩ is refined only with `refine_backscatter` (to rtol of
+  max(⟨C_back⟩, ⟨C_sca⟩), as phase 1a measures Q_back): its glory ripples made a broad weakly
+  absorbing case unconverged at 4096 panels; without refinement its estimate is indicative (it
+  fell short by up to a factor of 7.6 on a derivative, before the review). Panels are split only
+  for quantities still above their targets. *Review:* ⟨C_abs⟩ is refined too, to rtol of
+  ⟨C_ext⟩ (the accuracy of C_ext − C_sca), and its derivatives against the matching C_ext
+  integrals: relative to C_abs itself, the absorption resonances of weakly absorbing large
+  spheres took the whole panel budget (r_g = 1, σ_g = 2, m = 1.33 + 10⁻⁴i at λ = 0.5: 4096
+  panels, unconverged, against 2634 converged). `refine_order` is at most `MAX_REFINE_ORDER`
+  = 1024.
 - **Projector bands.** One shared projector (n_q = N_max + ⌈(L + 1)/2⌉) made every small sphere
-  pay for the largest: 20 s per wavelength for a broad distribution. Nodes are grouped into
-  bands by their number of terms (bands growing by a factor 1.25), each with its own exact
-  projector.
-- **Initial panels** are capped at `max_panels` (equal panels in ln r beyond it).
+  pay for the largest: 20 s per wavelength for a broad distribution. Bands of the number of
+  terms (growing by a factor 1.25) each have their own exact projector, to order
+  L_b = min(L, 2·N_band) on N_band + ⌈(L_b + 1)/2⌉ nodes. *Review:* a band is chosen per panel,
+  by the largest number of terms at its nodes, not per node: per-node bands made each band's
+  table a step function within a panel, and the Greek error estimates loose by orders of
+  magnitude.
+- **Initial panels** are capped at `max_panels` (about `max_panels` equal panels in ln r beyond
+  it, at least one between `Tabulated` breakpoints).
+- **Power law** (*review*). The reference radius of the unnormalized density is r_min for
+  α ≥ 0 and r_max otherwise, where the density is largest.
+- **Errors** (*review*). `InvalidInput` also for a derivative parameter requested twice,
+  mixture or mode weights with a non-finite sum, a range that reaches size parameters above
+  `MAX_SIZE_PARAMETER` (before any panel), and a zero or non-finite ⟨C_ext⟩, ⟨C_sca⟩ or
+  ⟨C_back⟩ (m = 1). Errors are deterministic: the first in wavelength and part order, whatever
+  the thread count.
 - **Validation.** Jacobians are checked against central differences at rtol 1e-11 rather than
   with frozen panels; the reference integrals are `f64` at rtol 1e-11. On the calibration grid
-  (eight distributions, with backscattering refined) every true error is within its estimate:
-  at most 0.085 of it for the refined outputs and 0.37 for the others.
-- **Measured cost** (Apple M4 Pro, one wavelength, lognormal r_g = 1, σ_g = 2,
-  m = 1.33 + 10⁻⁴i, rtol 1e-6): cross sections, g and moments 0.04 s at λ = 1, 0.11 s at
-  λ = 0.5, 0.23 s at λ = 0.3; with Greek coefficients to order 32, 1.1 s, 5.9 s and 22.6 s. The
-  exact Greek coefficients need each node's amplitudes at about N + L/2 cosines, O(N²) for
-  large spheres. Recorded as a follow-up for the performance phase: Clebsch–Gordan Greek
-  coefficients (O(N·L) per sphere) and shared πₙ/τₙ tables per band.
+  (nine distributions, with backscattering refined; the review added a multimodal fine + coarse
+  mode) the refined outputs are within their estimates and the others within twice theirs
+  (|K15 − G7| is an estimate, not a bound): at most 0.003 of the estimate for the refined
+  outputs and 1.210 for the others.
+- **Measured cost** (Apple M4 Pro, 12 cores, per wavelength, best of 2, lognormal r_g = 1,
+  σ_g = 2, m = 1.33 + 10⁻⁴i, rtol 1e-6): cross sections, g and moments 0.035 s at λ = 1
+  (1465 panels), 0.091 s at λ = 0.5 (2634), 0.21 s at λ = 0.3 (4096), all converged; with Greek
+  coefficients to order 32, 0.62 s, 2.9 s and 10.4 s. The exact Greek coefficients need each
+  node's amplitudes at about N + L/2 cosines, O(N²) for large spheres. Recorded as a follow-up
+  for the performance phase: Clebsch–Gordan Greek coefficients (O(N·L) per sphere) and shared
+  πₙ/τₙ tables per band.
 - **Non-absorbing spheres.** Derivatives with respect to Im m at Im m = 0 have a spike at every
   resonance and do not converge (flagged); the values do.

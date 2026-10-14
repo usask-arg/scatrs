@@ -172,13 +172,13 @@ CONTRACTS = [
     # Ensembles of spheres: the measured cost (lognormal r_g = 1, σ_g = 2, m = 1.33 + 1e-4i).
     *(
         ("Ensemble cost", t, [ENSEMBLE_THEORY, LIMITATIONS, FOLLOWUPS_2A])
-        for t in ("0.04s", "0.11s", "0.23s", "1.1s", "5.9s", "22.6s")
+        for t in ("0.035s", "0.091s", "0.21s", "0.62s", "2.9s", "10.4s")
     ),
-    ("Ensemble shared-projector cost", "20sperwavelength", [ENSEMBLE_THEORY, FOLLOWUPS_2A]),
+    ("Ensemble banded-projector cost", "10sperwavelength", [ENSEMBLE_THEORY, FOLLOWUPS_2A]),
     ("Ensemble max_panels default", "default4096", [ENSEMBLE_RS, ENSEMBLE_THEORY, LIMITATIONS]),
-    ("Ensemble calibration grid", "eightdistributions", [ACCURACY, LIMITATIONS]),
-    ("Ensemble calibration, refined outputs", "0.085", [ENSEMBLE_TESTS, ACCURACY]),
-    ("Ensemble calibration, other outputs", "0.37", [ENSEMBLE_TESTS, ACCURACY]),
+    ("Ensemble calibration grid", "ninedistributions", [ACCURACY, LIMITATIONS]),
+    ("Ensemble calibration, refined outputs", "0.003", [ENSEMBLE_TESTS, ACCURACY]),
+    ("Ensemble calibration, other outputs", "1.210", [ENSEMBLE_TESTS, ACCURACY]),
     ("Ensemble non-absorbing estimate", "estimateofabout10^-5of", [ACCURACY, LIMITATIONS]),
 ]
 

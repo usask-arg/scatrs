@@ -36,7 +36,8 @@ All notable changes are documented here. The format follows
   mixture weights; cross sections, single-scattering albedo, asymmetry parameter,
   backscattering, lidar and depolarization ratios, moments, phase matrix and exact Greek
   coefficients. Parallel over wavelengths and size panels with rayon, with results bitwise
-  identical for any number of threads.
+  identical, and the same errors, for any number of threads. `MAX_REFINE_ORDER` bounds the
+  optional refinement on the Greek coefficients.
 - `GreekProjector::project_bounds`, which projects bounds on phase-matrix table errors to
   bounds on the Greek coefficients.
 

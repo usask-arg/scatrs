@@ -10,14 +10,14 @@ the interface; the single-sphere quantities come from {doc}`mie`.
 <!-- synced with scatrs/src/ensemble/mod.rs rustdoc -->
 
 Radii and wavelengths are in the same (any) unit, and $x = 2\pi r/\lambda$. Each component of
-an ensemble has one refractive index per wavelength. Every output is a number average over the
-integration range $[r_\text{lo}, r_\text{hi}]$ of the distribution (below):
+an ensemble has one refractive index per wavelength. Every output is a number average,
 
 $$\langle C\rangle = \frac{\int C(r)\,n(r)\,dr}{\int n(r)\,dr}
 = \frac{\int C(e^t)\,n(e^t)\,e^t\,dt}{\int n(e^t)\,e^t\,dt}, \qquad t = \ln r,$$
 
-so cross sections are per particle, in the square of the unit of the radii. The outputs at each
-wavelength are
+with the numerator over the Mie range $[r_\text{lo}, r_\text{hi}]$ of the distribution and the
+denominator over its wider moment range (below), so cross sections are per particle, in the
+square of the unit of the radii. The outputs at each wavelength are
 
 - $\langle C_\text{ext}\rangle$, $\langle C_\text{sca}\rangle$ and $\langle C_\text{abs}\rangle$,
   the last from $Q_\text{abs}$, which phase 1a computes without cancellation;
@@ -38,8 +38,13 @@ their own error estimates. The relative tolerance rtol of the size integration i
 0.1]$ (default $10^{-6}$). Every size node must be in the validated domain of the Mie solution
 ({doc}`mie`) unless `allow_unvalidated` is set; otherwise the call fails with
 `OutsideValidatedDomain`, naming the wavelength and the radius. The tails of broad distributions
-can push $x$ past $2\cdot10^4$. A result also says whether the integration `converged`, how many
-panels it used, and its integration ranges.
+can push $x$ past $2\cdot10^4$; a Mie range that reaches $x > 10^6$ (`MAX_SIZE_PARAMETER`, the
+largest the Mie solution accepts) is `InvalidInput` before any panel is evaluated. So are
+a derivative parameter requested twice, mixture or mode weights with a non-finite sum,
+`refine_order` above `MAX_REFINE_ORDER` = 1024, and a zero or non-finite $\langle
+C_\text{ext}\rangle$, $\langle C_\text{sca}\rangle$ or $\langle C_\text{back}\rangle$ (for
+$m = 1$, say), whose ratios are undefined. A result also says whether the integration
+`converged`, how many panels it used, and its Mie ranges.
 
 
 ## Size distributions
@@ -67,14 +72,15 @@ not increase or has negative densities, mode weights that are not positive) are
 
 The engine never uses a normalization constant. Each distribution provides an unnormalized
 density $u(r; \theta)$ and its exact gradient $\partial u/\partial\theta$, and every average is
-the ratio $\int C\,u\,dr \big/ \int u\,dr$ over the integration range. So every distribution
-is normalized over its cut-off range (the renormalization the cut-offs need), and no $\Gamma$
-functions are evaluated.
+the ratio $S/Z$ of $S = \int C\,u\,dr$ over the Mie range and $Z = \int u\,dr$ over the moment
+range (below). So every distribution is normalized over its cut-off range (the renormalization
+the cut-offs need), and no $\Gamma$ functions are evaluated.
 
 To keep powers such as $r^\alpha$ from overflowing or underflowing, $u$ is scaled to about 1 at
 a reference radius $r_\text{ref}$: $r_g$ for the lognormal, the mode $(1 - 3b)\,a$ of the gamma
 distribution (or $a$ when $b \ge \tfrac13$), $\bigl(\max(\alpha, 1)/(b\gamma)\bigr)^{1/\gamma}$
-for the modified gamma, and $r_\text{min}$ for the power law. The gradient is the partial
+for the modified gamma, and for the power law the limit where its density is largest,
+$r_\text{min}$ for $\alpha \ge 0$ and $r_\text{max}$ otherwise. The gradient is the partial
 derivative with $r_\text{ref}$ held fixed. That choice does not affect any derivative: the
 scaling multiplies $u$ by a factor $K(\theta)$ independent of $r$, and in
 
@@ -92,31 +98,41 @@ distribution except `Tabulated` (`SizeDistribution::moment`); the tests use them
 `PowerLaw` and `Tabulated` are integrated over their support, and `Monodisperse` is the single
 sphere, without integration. The others have unbounded support, and their range starts at a
 characteristic radius ($r_g$, the effective radius $a$, or the modified gamma's reference
-radius) and marches outward in steps of ½ in $\ln r$ on each side. Each step's mass
-$s = \int r^k u\,dr$ is computed for every moment $r^k$ tracked. A side stops, after at least
-two steps, when for every moment the last step's mass and the geometric bound on the rest,
-$s/(1 - q)$ in all with $q < 1$ the ratio of the last two steps' masses, is at most rtol/10 of
-the mass found so far. A side that needs more than 400 steps is `InvalidInput`: the
-distribution is too broad.
+radius) and marches outward on each side in steps of $h_\text{max} = \min(\tfrac12,
+\tfrac12 w)$ in $\ln r$, with $w$ the width of the density's peak in $\ln r$: $\ln\sigma_g$
+for the lognormal, $\sqrt{b/(1 - 2b)}$ for the gamma distribution, $1/\sqrt{\alpha\gamma}$ for
+the modified gamma with $\alpha > 0$ (else $1/\gamma$), and $\infty$ for finite support. Each
+step's mass $s = \int r^k u\,dr$ is computed for every moment $r^k$ tracked. A side stops,
+after at least two steps, when for every moment the last step's mass and the geometric bound on
+the rest, $s/(1 - q)$ in all with $q < 1$ the ratio of the last two steps' masses, is at most
+$\epsilon$ of the mass found so far. A side that needs more than 400 steps is `InvalidInput`:
+the distribution is too broad.
 
-- **The Mie range** bounds the number ($k = 0$) and area ($k = 2$) tails. Renormalizing over the
-  range moves every per-particle average by the omitted number fraction, so the number tail
-  must be bounded; the area tail bounds the extinction of large spheres.
-- **The moment range** also bounds the volume tail ($k = 3$). Bounding it for the Mie range
-  pushed the range of a lognormal with $\sigma_g = 2$ to $x \approx 5000$, so $\langle
-  r^2\rangle$ and $\langle r^3\rangle$ are integrated separately, without Mie solutions, on this
-  wider range: adaptive G7–K15 panels (below) refined until each moment, and each of its
-  derivatives, meets rtol. These moments do not depend on the wavelength.
-- **The extension rule.** The area tail is not conservative when the bulk of the distribution
-  is in the Rayleigh regime and the tail is not: there $C_\text{ext}$ grows like $r^3$ to
-  $r^6$, faster than the area. So once pass 1 (below) meets its targets, the range is extended
-  by a further step of ½ in $\ln r$ at any end where the extinction integrand per unit $\ln r$
-  at the end node, times ½, exceeds rtol/10 of the integral of $C_\text{ext}$, and pass 1
-  continues; at most 100 extensions per side.
+- **The Mie range** bounds only the area ($k = 2$) tail, at $\epsilon = \text{rtol}/10$: it
+  bounds the extinction of large spheres, and the cross sections of small spheres fall faster
+  than $r^2$. The tiny spheres of a long number tail need no Mie solutions.
+- **The moment range** bounds the number ($k = 0$), area and volume ($k = 3$) tails, at
+  $\epsilon = \max(10^{-3}\,\text{rtol}, 10^{-16})$: without Mie solutions a far smaller tail
+  is cheap, and the derivatives weight the tails by about $(\partial\ln u/\partial\theta)^2$.
+  On this range, the normalization $Z = \int u\,dr$ and the moments $\langle r^2\rangle$ and
+  $\langle r^3\rangle$ (so $r_\text{eff}$, the mean area and the mean volume) are integrated
+  separately, without Mie solutions: adaptive G7–K15 panels (below) refined until each
+  integral, and each of its derivatives, meets rtol. They do not depend on the wavelength.
+- **The extension rule.** The area tail is not conservative for every integrand: when the bulk
+  of the distribution is in the Rayleigh regime and the tail is not, $C_\text{ext}$ grows like
+  $r^3$ to $r^6$, faster than the area, and the derivatives carry the extra weight of
+  $\partial\ln u/\partial\theta$. So once pass 1 (below) meets its targets, the range is
+  extended by $e = \min(\tfrac12, w)$ in $\ln r$ at any end where a refined integrand (a value
+  or any derivative block) per unit $\ln r$ at the end node, times $e/\tfrac12$, exceeds a tenth
+  of its target, and pass 1 continues. The θ-derivative integrals can cancel, so for their
+  blocks the target here is $\text{rtol}\cdot\max(\lvert\int\partial_\theta u\,C\,dr\rvert,
+  10^{-3}A)$, with $A$ the absolute integral of their pass-1 target. At most 100 extensions per
+  side; an extension that would exceed `max_panels` ends the integration with
+  `converged = false`.
 
-The omitted tails, at most rtol/10 of each moment bounded, move an average by at most about
-$2\cdot\text{rtol}/10$ of its value, a truncation term that every error estimate includes
-(below). The integration ranges are held fixed when differentiating.
+The omitted tails, at most rtol/10 of the area and less of the number, move an average by at
+most about $2\cdot\text{rtol}/10$ of its value, a truncation term that every error estimate
+includes (below). The integration ranges are held fixed when differentiating.
 
 ## Size integration
 
@@ -128,10 +144,12 @@ integrated as a component of its own), in $t = \ln r$:
 - **Rule.** Gauss–Kronrod G7–K15 panels, with QUADPACK's nodes and weights. The seven Gauss
   nodes are among the fifteen Kronrod nodes, so every integral gets $\lvert K_{15} -
   G_7\rvert$ on every panel without another Mie solution.
-- **Initial panels.** At most ½ wide in $t$ and at most 20 wide in size parameter (the broad
-  interference structure of the efficiencies has a period of about $\pi/\lvert m - 1\rvert$ in
-  $x$), with the radii of a `Tabulated` distribution as panel edges. If that would make more
-  than `max_panels` panels, the range is split into `max_panels` equal panels in $t$ instead.
+- **Initial panels.** At most $h_\text{max}$ wide in $t$ (the cut-offs' step: ½, or half the
+  peak's width) and at most 20 wide in size parameter (the broad interference structure of the
+  efficiencies has a period of about $\pi/\lvert m - 1\rvert$ in $x$), with the radii of a
+  `Tabulated` distribution as panel edges. If that would make more than `max_panels` panels,
+  the range is split into about `max_panels` equal panels in $t$ instead, at least one between
+  consecutive edges.
 
 (ensemble-pass-1)=
 ### Pass 1: refinement
@@ -141,24 +159,29 @@ Pass 1 evaluates only the efficiencies, $O(N)$ per radius for $N$ terms (and, wi
 
 | Integral | Target |
 |---|---|
-| $\int u$ (the normalization) | rtol of itself |
+| $\int u$ over the Mie range | rtol of itself |
 | $\int C_\text{ext}u$, $\int C_\text{sca}u$ | rtol of itself |
+| $\int C_\text{abs}u$ | rtol of $\int C_\text{ext}u$ |
 | $\int C_\text{sca}g\,u$ | rtol of $\int C_\text{sca}u$ |
-| for each requested distribution parameter $\theta$, each of the above with $\partial_\theta u$ in place of $u$ | rtol of the integral of its absolute value |
-| with derivatives with respect to $m$: $\int \partial_m C\,u$ for $C_\text{ext}$, $C_\text{sca}$, $C_\text{sca}g$ | rtol of the integral of its absolute value |
-| with `refine_backscatter`: $\int C_\text{back}u$ (and its derivatives) | rtol of the larger of itself and $\int C_\text{sca}u$ |
-| with `refine_order` $L_r$ (Rust only): $\int \pi r^2\alpha^l u$ for every Greek coefficient up to $L_r$ | rtol of $\int C_\text{sca}u$ |
+| for each requested distribution parameter $\theta$, each of the above with $\partial_\theta u$ in place of $u$ | rtol of $\int\lvert\partial_\theta u\,C\rvert\,dr$ ($C_\text{ext}$'s for $C_\text{abs}$) |
+| with derivatives with respect to $m$: $\int \partial_m C\,u$ for $C_\text{ext}$, $C_\text{sca}$, $C_\text{sca}g$, $C_\text{abs}$ | rtol of $\int\lvert u\,\partial_m C\rvert\,dr$ ($C_\text{ext}$'s for $C_\text{abs}$) |
+| with `refine_backscatter`: $\int C_\text{back}u$ (and its derivatives) | rtol of the larger of itself and $\int C_\text{sca}u$ (derivatives: as above) |
+| with `refine_order` $L_r \le$ `MAX_REFINE_ORDER` = 1024 (Rust only): $\int \pi r^2\alpha^l u$ for every Greek coefficient up to $L_r$ | rtol of $\int C_\text{sca}u$ (derivatives: as above) |
 
 The derivatives with respect to $m$ are refined because, without it, their error estimates fell
 short of their true errors by a factor of 3. The targets of derivatives are relative to the
 integrals of their absolute values because derivatives can cancel to near 0. $\langle
-C_\text{back}\rangle$ is refined only on request: backscattering by large, weakly absorbing
-spheres is a sum of narrow glory ripples (hence the target relative to $\langle
-C_\text{sca}\rangle$, as for single spheres), and refining on it can take far more panels: for a
-lognormal with $r_g = 1$, $\sigma_g = 2$ and $m = 1.33 + 10^{-4}i$ at $\lambda = 0.5$, 2847
-panels without it, and unconverged at 4096 with it. Without it, $\langle C_\text{back}\rangle$
-is integrated on the panels the other quantities chose, and its estimate is indicative (see
-{ref}`ensemble-accuracy`).
+C_\text{abs}\rangle$ is refined to rtol of $\langle C_\text{ext}\rangle$, the accuracy of
+$C_\text{ext} - C_\text{sca}$, and its derivatives against the matching $C_\text{ext}$
+integrals: relative to $C_\text{abs}$ itself, the absorption resonances of weakly absorbing
+large spheres took the whole panel budget (for a lognormal with $r_g = 1$, $\sigma_g = 2$ and
+$m = 1.33 + 10^{-4}i$ at $\lambda = 0.5$, unconverged at 4096 panels, against 2634 converged).
+$\langle C_\text{back}\rangle$ is refined only on request: backscattering by large, weakly
+absorbing spheres is a sum of narrow glory ripples (hence the target relative to $\langle
+C_\text{sca}\rangle$, as for single spheres), and refining on it can take far more panels: for
+the same lognormal, unconverged at 4096 panels with it. Without it, $\langle
+C_\text{back}\rangle$ is integrated on the panels the other quantities chose, and its estimate
+is indicative (see {ref}`ensemble-accuracy`).
 
 
 Pass 1 works in rounds. Each round evaluates the new panels, sums every integral and its
@@ -186,15 +209,17 @@ $n_q = N + \lceil(L + 1)/2\rceil$ nodes. The tables $\pi r^2 F$ ($C_\text{sca}$ 
 normalized phase matrix) are integrated over the size distribution at those nodes and
 projected once.
 
-One shared projector, with $n_q$ set by the largest $N$, made every small sphere pay for the
-largest: a sphere's amplitudes cost $O(N\,n_q)$, and a broad distribution took 20 s per
-wavelength. So the nodes are grouped into bands by their number of terms: $N$ belongs to the
-band of the first value $\ge N$ of the sequence $1, 2, 3, 4, 5, 7, 9, 12, 15, 19, 24, \ldots$
-(each $\lceil 1.25\times\rceil$ the last). A band with largest $N_b$ has its own projector, to
-order $\min(L, 2N_b)$ with $N_b + \lceil(\min(L, 2N_b) + 1)/2\rceil$ nodes, which is exact for
-every sphere in it (a sphere's coefficients vanish above $2N$). The coefficients of the
-ensemble are the sum of the bands' projections. With `GreekOrder::All` (Python
-`greek="all"`), $L = 2N_\text{max}$ for the largest $N$ at any node.
+One shared projector, with $n_q$ set by the largest $N$, would make every small sphere pay for
+the largest: a sphere's amplitudes cost $O(N\,n_q)$. So the panels are grouped into bands by
+the largest number of terms $N$ at their nodes: $N$ belongs to the band of the first value
+$\ge N$ of the sequence $1, 2, 3, 4, 5, 7, 9, 12, 15, 19, 24, \ldots$ (each $\lceil
+1.25\times\rceil$ the last). A band with largest $N_b$ has its own projector, to order $L_b =
+\min(L, 2N_b)$ with $n_q = N_b + \lceil(L_b + 1)/2\rceil$ nodes, which is exact for every sphere
+in it (a sphere's coefficients vanish above $2N$). Every node of a panel fills the tables of the
+panel's band, so each band's tables are smooth within a panel and their $\lvert K_{15} -
+G_7\rvert$ measures the integration error. The coefficients of the ensemble are the sum of the
+bands' projections. With `GreekOrder::All` (Python `greek="all"`), $L = 2N_\text{max}$ for the
+largest $N$ at any node.
 
 ## Error estimates
 
@@ -206,20 +231,19 @@ included; at the tolerances the ensembles accept they are far smaller.
   the error of the $K_{15}$ sum, which is pessimistic once the panels resolve the integrand.
   It is not a proof: it relies on the panels resolving the integrand, which pass 1 ensures for
   the refined quantities only.
-- **Averages.** For $v = S/S_0$, with $S_0 = \int u$, to first order
-  $e_v = (E_S + \lvert v\rvert E_0)/S_0 + 2\cdot\text{rtol}/10\cdot\lvert v\rvert$, the last
-  term the cut-offs' (for distributions with unbounded support only).
+- **Averages.** For $v = S/Z$, with $Z = \int u$ from the moment integration and $E_Z$ its
+  estimate, to first order $e_v = (E_S + \lvert v\rvert E_Z)/Z + 2\cdot\text{rtol}/10\cdot
+  \lvert v\rvert$, the last term the cut-offs' (for distributions with unbounded support only).
 - **Greek coefficients.** The per-node sums of the panels' $\lvert K_{15} - G_7\rvert$ tables,
   $\lvert\Delta T(\mu_k)\rvert$, are projected with absolute values:
   $\tfrac{2l + 1}{2}\sum_k w_k\lvert\Delta T(\mu_k)\rvert\lvert d_l(\mu_k)\rvert$ for
   $\alpha_1$, $\alpha_4$, $\beta_1$ and $\beta_2$ (with the d-function of each), and half the
   sum of the bounds of $\alpha_2 \pm \alpha_3$ for $\alpha_2$ and $\alpha_3$
   (`GreekProjector::project_bounds`). By the triangle inequality this bounds the error of the
-  projection, given the table estimates. It is a loose bound: within a panel the band of a node
-  changes with its radius, so each band's table is a step function of $r$, and its
-  $\lvert K_{15} - G_7\rvert$ is of the order of the panel's whole contribution. In
-  {doc}`/examples/ensemble` the estimate of the unnormalized $\alpha_1^0$, which equals
-  $\langle C_\text{sca}\rangle$, is more than $10^3$ times that of $\langle C_\text{sca}\rangle$.
+  projection, given the table estimates. Since the bands are chosen per panel, it is about as
+  tight as the estimates of the integrals: in {doc}`/examples/ensemble` the estimate of the
+  unnormalized $\alpha_1^0$, which equals $\langle C_\text{sca}\rangle$, is less than twice
+  that of $\langle C_\text{sca}\rangle$.
 - **Ratios.** $\omega$, $g$, the lidar ratio, $r_\text{eff}$ and the normalized forms are
   propagated to first order: $e(a/b) = (e_a + \lvert a/b\rvert e_b)/\lvert b\rvert$, and for
   the derivatives $e(\partial(a/b)) = (e_{\partial a} + \lvert a/b\rvert e_{\partial b} +
@@ -248,19 +272,21 @@ has a derivative.
   each weight follow from that product.
 - **Normalized and ratio outputs** by the quotient rule, as for the error estimates.
 
-The tests check every scalar output and $\beta_1^l$ up to order 6 against central differences
-of the whole computation at rtol $10^{-11}$, for the lognormal and gamma parameters, the
-monodisperse radius, $\mathrm{Re}\,m$, $\mathrm{Im}\,m$, a mixture weight and a mode weight.
+The tests check every scalar output, $\beta_1^l$ up to order 6 and $F_{12}$ at two cosines
+against central differences of the whole computation at rtol $10^{-11}$, for the lognormal and
+gamma parameters, the modified gamma's $b$ and $\gamma$, the power-law exponent, the
+monodisperse radius, $\mathrm{Re}\,m$, $\mathrm{Im}\,m$, a mixture weight, the
+$\mathrm{Re}\,m$ of a mixture's second component, a mode weight and a mode's width.
 
 ## Mixtures
 
 `compute_mixture` averages over external mixtures: components, each a distribution, its
-refractive indices and a weight $w_i \ge 0$ (a relative number concentration; not all 0).
-`compute` is a mixture of one component, without the weight parameter. Cross sections and
-moments are averaged with the number fractions $w_i/\sum w$. The phase-matrix tables, in
-$C_\text{sca}$ units, are averaged with the same fractions, so the phase matrices are
-averaged with $w_i\langle C_\text{sca}\rangle_i$, before one projection of all components. A
-multimodal distribution is a mixture of its modes with one refractive index.
+refractive indices and a weight $w_i \ge 0$ (a relative number concentration; their sum finite
+and positive). `compute` is a mixture of one component, without the weight parameter. Cross
+sections and moments are averaged with the number fractions $w_i/\sum w$. The phase-matrix
+tables, in $C_\text{sca}$ units, are averaged with the same fractions, so the phase matrices
+are averaged with $w_i\langle C_\text{sca}\rangle_i$, before one projection of all components.
+A multimodal distribution is a mixture of its modes with one refractive index.
 
 ## Parallelism and determinism
 
@@ -268,22 +294,25 @@ Wavelengths, the panels of each pass-1 round and chunks of four pass-2 panels ru
 on the current rayon pool (in Rust, a caller can `install` its own); each task owns its Mie
 workspace. Refinement decisions depend only on the values, and the sums are reduced in a fixed
 order, so results are bitwise identical for any number of threads (tested with pools of 1 and
-4). Python calls release the GIL.
+4). Errors are too: the parallel tasks all finish, and the first error in wavelength, part and
+panel order is returned. Python calls release the GIL.
 
 ## Cost
 
 Pass 1, and pass 2 without the Greek coefficients, are cheap. The Greek coefficients are not:
 the exact coefficients need each node's amplitudes at about $N + L/2$ cosines, $O(N^2)$ for
-large spheres. Measured on an Apple M4 Pro for one wavelength, a lognormal with $r_g = 1$,
-$\sigma_g = 2$ and $m = 1.33 + 10^{-4}i$, at rtol $10^{-6}$:
+large spheres. Measured on an Apple M4 Pro (12 cores) per wavelength (best of 2), a lognormal
+with $r_g = 1$, $\sigma_g = 2$ and $m = 1.33 + 10^{-4}i$, at rtol $10^{-6}$ and the other options
+default:
 
 
 | $\lambda$ | panels | cross sections, $g$ and moments | with Greek coefficients to order 32 |
 |---|---|---|---|
-| 1 | 1553 | 0.04 s | 1.1 s |
-| 0.5 | 2847 | 0.11 s | 5.9 s |
-| 0.3 | 4096 | 0.23 s | 22.6 s |
+| 1 | 1465 | 0.035 s | 0.62 s |
+| 0.5 | 2634 | 0.091 s | 2.9 s |
+| 0.3 | 4096 | 0.21 s | 10.4 s |
 
-A narrow fine-mode aerosol takes milliseconds ({doc}`/examples/ensemble`). Clebsch–Gordan Greek
-coefficients ($O(N\,L)$ per sphere) and $\pi_n$, $\tau_n$ tables shared within a band are
-planned to reduce the cost of pass 2; see {doc}`/limitations`.
+All three converge. The Greek coefficients still take about 10 s per wavelength at
+$\lambda = 0.3$. A narrow fine-mode aerosol takes milliseconds ({doc}`/examples/ensemble`).
+Clebsch–Gordan Greek coefficients ($O(N\,L)$ per sphere) and $\pi_n$, $\tau_n$ tables shared
+within a band are planned to reduce the cost of pass 2; see {doc}`/limitations`.

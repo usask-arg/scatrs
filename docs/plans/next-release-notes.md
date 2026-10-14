@@ -36,3 +36,15 @@ unchanged.
 - `EnsembleResult.wavelength`, `.refractive_index` (the m used) and `.grid` (the array-valued
   parameters, broadcast), and a short `repr`.
 - A changelog page in the documentation, built from these release notes.
+- Rust: `scatrs::mie::AngularTable` and the `MieSolution::*_from_table` methods (amplitudes,
+  phase matrix, and their derivatives) evaluate the angular functions once for many spheres at
+  the same angles, bitwise as the methods that take the cosines; amplitudes at 100 angles are
+  about 3.7 times faster for x ≥ 100. Python's amplitude and phase-matrix functions use one
+  for several spheres.
+
+## Changed
+
+- The Rust crate no longer depends on faer (54 crates): the ensembles' matrix products use
+  `matrixmultiply` (2 crates), at the same speed on the machines measured. The crate's lint is
+  `#![deny(unsafe_code)]` rather than `forbid`, for the one call into `matrixmultiply`.
+  Ensemble results change at the rounding level.

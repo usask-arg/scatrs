@@ -628,3 +628,42 @@ The fallback of section 2.7 replaced the dual numbers for L ≥ 2, before 3c. Th
   - Up to there, the worst C on the maps is 22 for the coefficient derivatives, 37 for the Jacobian, 163 for the amplitude derivatives, and 53 for the phase-matrix and Greek derivatives. The constants are unchanged.
   - Above 1000, the forward amplitude's derivative with respect to a thin air shell's index reaches C ≈ 1700 at x_L = 10⁴ (0.999 fraction, core 1.5 + 0.01i). The recurrence errors at the shell's two surfaces are independent of each other and coherent across orders, so they add up in the forward sum. Each coefficient's derivative stays within its tolerance.
 - **Cost.** Every derivative (3L of them) costs 1.6 to 2.8 times the values, for 2, 3 and 10 layers, from x_L = 0.1 to 1000. The target is (1 + 3L)×. With duals it was 4.6 to 7.4 times for two layers and 25 to 32 for ten.
+
+## 18. Changes while implementing 3c
+
+The plan, `docs/plans/2026-10-14-phase-3c-ensembles.md`, gives the diffs and the numbers.
+
+**Engine and Rust API (section 3.2):**
+
+- **Particle-aware entry points.** `compute_with_particle`, `compute_batch_with_particle` and `parameters_with_particle` take a `Particle`. `compute`, `compute_batch` and `parameters` keep their sphere signatures and delegate, so sphere callers (sasktran2) are unchanged.
+- **`Particle::LayeredSphere { radius_fractions, refractive_index }`**, built with `Particle::layered_sphere`:
+  - `radius_fractions` has L − 1 values, nondecreasing in (0, 1];
+  - `refractive_index[l][i]` is layer l's index at wavelength i.
+
+  The ensemble functions check both and return `InvalidInput` otherwise.
+- **Directions.** The directions are Re m and Im m of each layer, then one real direction per radius fraction, x_L·∂/∂x_l at a fixed outer radius.
+  - `PanelProducts` gains 4 columns per real direction: x_L·∂aₙ/∂x_l and x_L·∂bₙ/∂x_l.
+  - The radius derivative of a monodisperse ensemble is Σ_l f_l·∂/∂x_l. It starts from the outer group, so a sphere's is bitwise unchanged.
+- **The derivatives' domain in ensembles.** Directions along the particle, and a monodisperse radius, need layered derivatives at every node. Above x_L = 1000 (section 17) they raise `OutsideValidatedDomain` unless `allow_unvalidated` is set. Distribution-parameter derivatives need no particle derivatives and keep the values' domain. This settles the 3b hand-off's question.
+
+**Python (section 5.2):**
+
+- `LayeredSphere.layers` is added. `radius_fraction` defaults to `()`, for one layer.
+- A `Mixture` result's `refractive_index` is now always a tuple, sphere mixtures included, as section 5.2 planned. The release notes record this.
+
+**Validation:**
+
+- `scatrs/tests/ensemble_layered.rs` covers:
+  - one layer, bitwise equal to the sphere ensemble (values, estimates, derivatives, panels);
+  - layers of one index, bitwise in value;
+  - Jacobians against central differences: each layer's index, both fractions of a three-layer particle, the median radius, the monodisperse radius, and a mixture's coated component;
+  - mixtures, batches, thread independence, the derivatives' domain, and bad inputs.
+- The calibration of the error estimates adds a coated lognormal and a three-layer gamma distribution. The worst ratios, 0.003 and 1.210, are unchanged.
+- Mutation checks:
+  - dropping the x_L scale of the fraction direction fails the C_ext check;
+  - dropping it in the panel products fails β₁.
+
+**Cost (section 10):**
+
+- A broad lognormal (w1) of coated spheres costs 1.8× the spheres' time, on about as many panels.
+- With every derivative it costs 3.5×. The shell's Im m derivative refines to `max_panels`, as a weakly absorbing sphere's does.

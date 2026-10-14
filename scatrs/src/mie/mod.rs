@@ -70,6 +70,7 @@
 //! use them to check the closed-form derivatives.
 
 mod amplitudes;
+mod coefficients;
 mod domain;
 mod efficiencies;
 mod greek;
@@ -83,6 +84,7 @@ use crate::{Error, Result};
 
 pub(crate) use amplitudes::for_each_order;
 pub use amplitudes::{AmplitudeBuffers, AngularTable};
+pub(crate) use coefficients::{Coefficients, Group};
 pub use domain::{MieOutput, VALIDATED_DOMAIN, ValidatedDomain};
 pub use efficiencies::{Efficiencies, EfficiencyJacobian};
 pub use greek::{GreekCoefficients, GreekProjector, MAX_GREEK_ORDER, PhaseTables};

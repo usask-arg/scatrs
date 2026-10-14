@@ -141,8 +141,8 @@ class RefractiveIndex(ABC):
         Raises
         ------
         InvalidInputError
-            If a wavelength is not finite and positive, the model has no valid value there (as
-            for :meth:`evaluate`), or a derivative is not finite, naming the parameter and the
+            If a wavelength is not finite and positive, a model such as :class:`Sellmeier` has
+            no valid value there, or a derivative is not finite, naming the parameter and the
             first wavelength where it fails.
         """
         wl = _wavelengths(wavelength)

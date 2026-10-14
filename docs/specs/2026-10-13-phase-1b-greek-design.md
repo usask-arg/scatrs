@@ -99,3 +99,32 @@ thread pools, the instruction-count gate, fuzzing, the 1a follow-ups (Jacobian c
 Theory sections (Bogaert's method, exactness of the projection, the recurrences, conventions and
 signs), an example page (phase function, polarization, Greek coefficients), the accuracy page
 extended, and a limitations entry for the cost of large spheres.
+
+## 9. Changes during planning and prototyping
+
+Recorded 2026-10-13, after prototyping (the plan is
+`docs/plans/2026-10-13-phase-1b-greek.md`):
+
+- **Gauss–Legendre.** Bogaert's expansions as in FastGaussQuadrature.jl (MIT), keeping every
+  term, with Arb-computed Bessel tables and the double-double sine and cosine (the rule stays
+  platform-independent). Threshold 100 points (`ASYMPTOTIC_THRESHOLD`), for `f64` precision
+  only. Declared: node absolute and weight relative error ≤ 16·2⁻⁵² (measured 2.4 and 3.6). No
+  separate interior and boundary regions were needed. The caller-buffer variant is
+  `gauss_legendre_into`.
+- **Orders above 2N.** `greek` returns exact zeros above 2N instead of `InvalidInput`: a batch
+  of spheres in Python shares one L, and the zeros are exact, not padding of unknown values.
+  `MAX_GREEK_ORDER` = 2²¹ bounds L.
+- **Normalization.** Normalized coefficients are divided by the projected α₁⁰ (so α₁⁰ is
+  exactly 1) rather than by x²Q_sca/4; this cancels the common error of the projection.
+- **Error measures.** Phase-matrix elements relative to max(F₁₁, F̄), with F̄ = ½∫F₁₁dμ (1 or
+  Q_sca); Greek coefficients relative to max over l of |α₁| for every element.
+- **Accuracy model.** The Greek coefficients add ((L + 1)² + x²)/8 to κ′: the rounding of the
+  quadrature nodes to `f64` moves d_L and the forward peak (see the theory page). Constants:
+  phase matrix 32, its derivatives 128 (prior κ·max(1, |m|/|m − 1|)), Greek 8, their
+  derivatives 16.
+- **Validation cost.** The double-double Greek coefficients cost O(x²), so the accuracy map
+  stops at x = 10³ (12 s in the test profile); an ignored test, run weekly, checks x = 2·10³,
+  10⁴ and 2·10⁴.
+- **Sign conventions.** The table states scatrs' convention, pinned by the Rayleigh limit
+  (β₁² = −√6/2); comparing with sasktran2's conventions moves to the sasktran2 comparison
+  (out of scope, section 1).

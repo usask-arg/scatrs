@@ -319,10 +319,12 @@ A multimodal distribution is a mixture of its modes with one refractive index.
 `compute_batch` (Python {func}`scatrs.ensemble.compute_batch`) averages over each of many
 distributions of one material, as an optics database needs: a grid of median radii and widths,
 say. The distributions share their size nodes: one set of panels per wavelength covers the
-union of their Mie ranges (and their `Tabulated` breakpoints), and is refined until every
-distribution meets its own targets of pass 1 (a panel splits if it exceeds its share of any
-distribution's target) and extended until every distribution's integrands are negligible at
-both ends. Each node's Mie solution and tables then serve every distribution, weighted by each
+union of their Mie ranges, with the ends of finite supports and `Tabulated` radii as panel
+edges, and is refined until every distribution meets its own targets of pass 1 (a panel splits
+if it exceeds its share of any distribution's target) and extended until every distribution's
+integrands are negligible at both ends. Each distribution's largest initial step (half its
+peak's width) applies within its own range, and the extensions at an end take the widths of
+the distributions that want them, so a narrow member does not refine the whole range. Each node's Mie solution and tables then serve every distribution, weighted by each
 density. The normalizations and moments are integrated per distribution, without Mie
 solutions, and monodisperse distributions on their own.
 
@@ -330,8 +332,12 @@ Each distribution has its own error estimates and `converged` flag. A distributi
 at least as refined as alone, so its values differ from `compute`'s within the error estimates
 (a test checks both against references at rtol $10^{-10}$). A batch computes values only: the
 Jacobians come from `compute`. For the database grid of {doc}`/validation/sasktran2` (rtol
-$10^{-3}$, Greek coefficients to order 64, one thread), the batch costs about 1.7 times its
-broadest distribution alone, against 4 times for the 50 distributions one by one.
+$10^{-3}$, Greek coefficients to order 63, one thread, measured separately), the batch costs
+about 1.6 times its broadest distribution alone, against 4 times for the 50 distributions one
+by one. Memory grows with the distributions: each holds its sums over every band's tables, about
+2.5 MB per distribution and wavelength in flight for the grid's shortest wavelength (2 GB for
+800 distributions on one thread), and the sums of the panels in flight are capped at about
+64 MB.
 
 ## Parallelism and determinism
 

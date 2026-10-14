@@ -24,6 +24,11 @@ deliberately deferred. Each belongs to the phase or task named in its heading.
   share panels as `compute_batch` does, but sharing changes `compute`'s results and needs its own
   calibration.
 
+- **Memory of large batches.** Each distribution holds its sums, averages and mixed values
+  over the whole layout (every band's tables), about 2.5 MB per distribution and wavelength in
+  flight on the database grid; projecting each distribution's tables as soon as its sums are
+  complete would hold only its Greek coefficients.
+
 ## Accuracy of the error estimates (phase 5)
 - **⟨C_abs⟩ of weak absorbers.** ⟨C_abs⟩ is refined to rtol of ⟨C_ext⟩; for the weak absorbers
   of the database grid of `docs/validation/sasktran2.md` (m = 1.43 + 10⁻⁸i, co-albedo about

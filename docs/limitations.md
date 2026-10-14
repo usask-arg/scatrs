@@ -190,6 +190,13 @@ the same treatment when a kernel needs them.
   {doc}`theory/ensembles` and {doc}`validation/sasktran2`.
 - **Batches compute values only.** `compute_batch` shares the size nodes of many
   distributions; their Jacobians come from `compute`, one distribution at a time.
+- **Memory of batches.** Each distribution of a batch holds sums over every band's tables:
+  about 2.5 MB per distribution and wavelength in flight at $\lambda = 0.28$ µm for the
+  database grid of {doc}`validation/sasktran2` (2 GB for 800 distributions on one thread; more
+  wavelengths run at once on more threads). Split very large batches.
+- **Tables can exceed `max_panels`.** Every radius of a `Tabulated` distribution is a panel
+  edge, so a table of more radii than `max_panels`, or a batch of many tables, takes more
+  panels than `max_panels` (still converging).
 - **⟨C_abs⟩ of weak absorbers.** ⟨C_abs⟩ is refined to rtol of ⟨C_ext⟩, so for weak absorbers
   its relative accuracy, and that of the co-albedo, is far worse than rtol, and its estimate is
   indicative: for the database grid of {doc}`validation/sasktran2` ($m = 1.43 + 10^{-8}i$) it

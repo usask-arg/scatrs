@@ -1032,3 +1032,51 @@ fn a_batch_matches_each_distribution() {
     let bad = [lognormal(-1.0, 1.5)];
     assert!(invalid(compute_batch(&bad, &wavelengths, &m, &opts)));
 }
+
+/// Members of a batch that differ from the rest keep their own accuracy and cost: a power
+/// law's limits are panel edges, and a narrow peak sets the step only within its own range.
+#[test]
+fn batch_members_keep_their_own_accuracy() {
+    let m = [c(1.45, 1e-3); 3];
+    let wavelengths = [0.35, 0.5, 0.8];
+    let opts = EnsembleOptions::new()
+        .with_rtol(1e-4)
+        .with_greek(GreekOrder::Order(8));
+    let power = SizeDistribution::PowerLaw {
+        exponent: 4.0,
+        min_radius: 0.2,
+        max_radius: 1.0,
+    };
+    let batch = compute_batch(
+        &[power.clone(), lognormal(1.0, 2.0)],
+        &wavelengths,
+        &m,
+        &opts,
+    )
+    .unwrap();
+    let tight = opts.clone().with_rtol(1e-10).with_max_panels(50_000);
+    let reference = compute(&power, &wavelengths, &m, &tight).unwrap();
+    for (b, r) in batch[0].iter().zip(&reference) {
+        assert!(b.converged);
+        assert!((b.values.c_ext - r.values.c_ext).abs() <= b.errors.c_ext);
+        assert!((b.values.g - r.values.g).abs() <= b.errors.g);
+    }
+    // A narrow gamma beside a broad lognormal: about the panels of the lognormal alone.
+    let broad = lognormal(1.0, 2.0);
+    let narrow = SizeDistribution::Gamma {
+        effective_radius: 0.3,
+        effective_variance: 1e-4,
+    };
+    let opts = EnsembleOptions::new().with_rtol(1e-3);
+    let alone = compute(&broad, &[0.5], &[m[0]], &opts).unwrap()[0].panels;
+    let both = compute_batch(&[narrow, broad], &[0.5], &[m[0]], &opts).unwrap()[0][0].panels;
+    assert!(both < 2 * alone, "{both} panels against {alone}");
+    // A nearly monodisperse member does not keep a broad one from converging.
+    let three = [
+        lognormal(0.5, 1.001),
+        lognormal(0.01, 2.0),
+        lognormal(5.0, 2.0),
+    ];
+    let r = compute_batch(&three, &[2.0], &[m[0]], &EnsembleOptions::new()).unwrap();
+    assert!(r.iter().all(|d| d[0].converged));
+}

@@ -265,16 +265,16 @@ fn size(r: f64, lambda: f64) -> f64 {
     2.0 * PI * r / lambda
 }
 
-/// The initial panels of [t_lo, t_hi] (t = ln r): at most `max_step` wide and at most `MAX_DX`
-/// in size parameter, with the radii of `breaks` (inside the range) as edges; if that would
-/// take more than `budget` panels, equal panels between the edges, at least one per interval,
-/// about `budget` in all.
+/// The initial panels of [t_lo, t_hi] (t = ln r): starting at t, at most `max_step(t)` wide
+/// and at most `MAX_DX` in size parameter, with the radii of `breaks` (inside the range) as
+/// edges; if that would take more than `budget` panels, equal panels between the edges, at
+/// least one per interval, about `budget` in all.
 fn initial_panels(
     t_lo: f64,
     t_hi: f64,
     lambda: f64,
     breaks: &[f64],
-    max_step: f64,
+    max_step: &dyn Fn(f64) -> f64,
     budget: usize,
 ) -> Vec<(f64, f64)> {
     let mut edges = vec![t_lo];
@@ -290,7 +290,7 @@ fn initial_panels(
         let (mut a, b) = (w[0], w[1]);
         while a < b {
             let x = size(a.exp(), lambda);
-            let step = max_step.min((1.0 + MAX_DX / x).ln());
+            let step = max_step(a).min((1.0 + MAX_DX / x).ln());
             // Equal panels up to b rather than a short last one.
             let n = ((b - a) / step).ceil().max(1.0);
             let h = (b - a) / n;
@@ -649,13 +649,21 @@ fn pass1(
     let first = group.first().expect("a part");
     let n_refined = n_refined(refine_order, first);
     let n_greek = N_BASE + refine_order.map_or(0, |l| 6 * (l + 1));
+    // Panel edges where a part's density has a kink or a jump: a table's radii, and the ends
+    // of a finite support (inside the union range of a group).
     let mut breaks: Vec<f64> = group
         .iter()
-        .flat_map(|p| match p.dist {
-            SizeDistribution::Tabulated { radius, .. } => radius.as_slice(),
-            _ => &[],
+        .flat_map(|p| {
+            let ends = match p.support {
+                Support::Finite(lo, hi) => vec![lo, hi],
+                _ => Vec::new(),
+            };
+            let table: &[f64] = match p.dist {
+                SizeDistribution::Tabulated { radius, .. } => radius,
+                _ => &[],
+            };
+            ends.into_iter().chain(table.iter().copied())
         })
-        .copied()
         .collect();
     breaks.sort_by(f64::total_cmp);
     breaks.dedup();
@@ -682,20 +690,25 @@ fn pass1(
         .map(|p| matches!(p.support, Support::Unbounded(_)))
         .collect();
     let densities: Vec<_> = group.iter().map(|p| p.dist.prepare()).collect();
-    let max_step = densities
+    // Each part's largest step applies within its own range only, so that a narrow member of
+    // a batch does not set the step of the whole range.
+    let steps: Vec<(f64, f64, f64)> = group
         .iter()
-        .map(|d| d.max_step(STEP))
-        .fold(STEP, f64::min);
-    // Extensions of the range: `STEP`, or the narrowest peak's width, whose tails fall off
-    // over that width.
-    let ext = densities
-        .iter()
-        .zip(&extendable)
-        .filter(|&(_, &e)| e)
-        .map(|(d, _)| STEP.min(d.log_width))
-        .fold(STEP, f64::min);
+        .zip(&densities)
+        .map(|(p, d)| (p.cutoffs.0.ln(), p.cutoffs.1.ln(), d.max_step(STEP)))
+        .collect();
+    let max_step = |t: f64| {
+        steps
+            .iter()
+            .filter(|&&(lo, hi, _)| lo <= t && t < hi)
+            .map(|&(_, _, h)| h)
+            .fold(STEP, f64::min)
+    };
+    // Each part's extensions of the range: `STEP`, or its peak's width for narrower peaks,
+    // whose tails fall off over that width.
+    let exts: Vec<f64> = densities.iter().map(|d| STEP.min(d.log_width)).collect();
     let mut panels: Panels1 =
-        initial_panels(t_lo, t_hi, lambda, &breaks, max_step, options.max_panels)
+        initial_panels(t_lo, t_hi, lambda, &breaks, &max_step, options.max_panels)
             .into_iter()
             .map(|p| (p, None))
             .collect();
@@ -719,7 +732,7 @@ fn pass1(
                     .iter()
                     .map(|(_, s)| &s.as_ref().expect("evaluated")[p])
                     .collect();
-                status(part, &sums, options, n_refined, n_greek, ext)
+                status(part, &sums, options, n_refined, n_greek, exts[p])
             })
             .collect();
         // Converged: the targets met, and the ends negligible unless the support ends there.
@@ -732,18 +745,24 @@ fn pass1(
         };
         if statuses.iter().all(|s| s.met) {
             // Extend the range at an end where an integrand of any part is not negligible.
-            let wants = |end: usize| {
-                extensions[end] < MAX_EXTENSIONS
-                    && statuses
-                        .iter()
-                        .zip(&extendable)
-                        .any(|(s, &e)| e && !s.small[end])
+            // At each end, the parts that want an extension set its width and its steps.
+            let wanting = |end: usize| -> Option<(f64, f64)> {
+                if extensions[end] >= MAX_EXTENSIONS {
+                    return None;
+                }
+                statuses
+                    .iter()
+                    .zip(&extendable)
+                    .enumerate()
+                    .filter(|&(_, (s, &e))| e && !s.small[end])
+                    .map(|(p, _)| (exts[p], steps[p].2))
+                    .reduce(|a, b| (a.0.min(b.0), a.1.min(b.1)))
             };
-            let wants = [wants(0), wants(1)];
+            let wants = [wanting(0), wanting(1)];
             let mut extended = false;
-            if wants[0] {
+            if let Some((ext, step)) = wants[0] {
                 let fresh =
-                    initial_panels(t_lo - ext, t_lo, lambda, &[], max_step, options.max_panels);
+                    initial_panels(t_lo - ext, t_lo, lambda, &[], &|_| step, options.max_panels);
                 if panels.len() + fresh.len() > options.max_panels {
                     return Ok(finish(panels, converged(), (t_lo, t_hi)));
                 }
@@ -754,9 +773,9 @@ fn pass1(
                 panels = new;
                 extended = true;
             }
-            if wants[1] {
+            if let Some((ext, step)) = wants[1] {
                 let fresh =
-                    initial_panels(t_hi, t_hi + ext, lambda, &[], max_step, options.max_panels);
+                    initial_panels(t_hi, t_hi + ext, lambda, &[], &|_| step, options.max_panels);
                 if panels.len() + fresh.len() > options.max_panels {
                     return Ok(finish(panels, converged(), (t_lo, t_hi)));
                 }
@@ -1079,9 +1098,11 @@ struct Sums2 {
     blocks: usize,
 }
 
-/// The number of `CHUNK`s of panels whose sums are held at once before they are added up in
-/// order: bounds the memory of large groups, independently of the thread count.
+/// At most this many `CHUNK`s of panels have their sums held at once before they are added up
+/// in order, and fewer for large groups: about `WINDOW_BYTES` of sums. The window depends on
+/// the inputs only, never on the thread count.
 const WINDOW: usize = 32;
+const WINDOW_BYTES: usize = 64 << 20;
 
 /// The weights of a group's blocks at a panel's nodes: a row per (part, block) for the
 /// values (the values block, weight u·r, and each θ block, ∂u/∂θ·r) and a row per part with
@@ -1178,7 +1199,17 @@ fn pass2(
             Par::Seq,
         );
     };
-    for window in panels.chunks(CHUNK * WINDOW) {
+    // A chunk's sums: every part's blocks on the common part and at most a band per panel,
+    // with their errors.
+    let widest = layout
+        .bands
+        .iter()
+        .map(|b| 4 * b.projector.nodes().len())
+        .max()
+        .unwrap_or(0);
+    let per_chunk = blocks.iter().sum::<usize>() * (common + CHUNK * widest) * 2 * 8;
+    let window = (WINDOW_BYTES / per_chunk.max(1)).clamp(1, WINDOW);
+    for window in panels.chunks(CHUNK * window) {
         let chunks: Vec<Result<Vec<Vec<Segment>>>> = window
             .par_chunks(CHUNK)
             .map_init(

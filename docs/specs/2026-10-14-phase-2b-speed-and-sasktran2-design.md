@@ -189,3 +189,11 @@ Recorded 2026-10-14, after measuring:
   10⁻⁶) neither code resolves the co-albedo. Computing ω as 1 − ⟨C_abs⟩/⟨C_ext⟩ (equal up to
   rounding) would give a tight estimate, but ⟨C_abs⟩'s own estimate fell up to 1.6 times short of
   its true error on W2, so ω keeps the conservative quotient estimate (follow-up).
+- **The rtol of the comparison** are 3·10⁻³, 10⁻³, 3·10⁻⁴ and 10⁻⁴ (section 7 named 10⁻³ to
+  10⁻⁵): the matched rtol fell at 3·10⁻⁴ (W1) and 10⁻³ (W2), and 3·10⁻³ brackets them.
+- **Review fixes** (*review*). In a group, the ends of finite supports are panel edges (a power
+  law beside a broader lognormal exceeded its estimate, ratio 1.05); each part's largest step
+  applies within its own range, and an extension takes the width and steps of the parts that
+  want it (a narrow gamma beside a broad lognormal took 1248 panels against 61, and a nearly
+  monodisperse member left a broad one unconverged); the window of chunk sums is sized from the
+  inputs, at most 32 chunks and about 64 MB (peak memory for 800 distributions: 3.2 → 2.0 GB).

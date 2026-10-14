@@ -70,7 +70,9 @@
 mod amplitudes;
 mod domain;
 mod efficiencies;
+mod greek;
 mod kernel;
+mod phase;
 
 use num_complex::Complex;
 
@@ -80,6 +82,8 @@ use crate::{Error, Result};
 pub use amplitudes::AmplitudeBuffers;
 pub use domain::{MieOutput, VALIDATED_DOMAIN, ValidatedDomain};
 pub use efficiencies::{Efficiencies, EfficiencyJacobian};
+pub use greek::{GreekCoefficients, GreekProjector, MAX_GREEK_ORDER, PhaseTables};
+pub use phase::{Normalization, PhaseBuffers};
 
 /// The largest number of terms [`Mie::compute`] accepts, 2²⁰.
 ///

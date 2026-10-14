@@ -70,7 +70,7 @@
       "precision_bits": 640,
       "python_flint": "0.9.0",
       "records": 8,
-      "sha256": "3d04f3aa60ce5c17bbdd43f709bdf863ebba8889dd8d1611a4e408ea9321137f"
+      "sha256": "c5be657c491510ff2d4a81ad1597c54458b4b2ec8cdb0da5a7c6392203c91d8c"
     },
     "mie.jsonl": {
       "flint": "3.6.0",

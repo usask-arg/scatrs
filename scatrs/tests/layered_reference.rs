@@ -17,6 +17,7 @@ use common::layered::{
     EFFICIENCY_NAMES, Measure, derivative_measures, q_of, reference, value_measures,
 };
 use num_complex::Complex;
+use scatrs::Error;
 use scatrs::layered::{Layered, VALIDATED_DOMAIN, ValidatedDomain};
 use scatrs::mie::{AmplitudeBuffers, MieOptions, MieOutput, default_n_max};
 
@@ -94,11 +95,18 @@ impl Worst {
 
     fn check(&mut self, output: MieOutput, err: f64, measure: Measure, r: &Record, detail: &str) {
         let (x, m) = inputs(r);
-        assert!(
-            VALIDATED_DOMAIN.contains(&x, &m),
-            "{} is outside the domain",
-            r.case
+        let derivative = matches!(
+            output,
+            MieOutput::CoefficientDerivatives
+                | MieOutput::EfficiencyJacobian
+                | MieOutput::AmplitudeDerivatives
         );
+        let inside = if derivative {
+            VALIDATED_DOMAIN.contains_derivatives(&x, &m)
+        } else {
+            VALIDATED_DOMAIN.contains(&x, &m)
+        };
+        assert!(inside, "{} is outside the domain", r.case);
         let x_l = x[x.len() - 1];
         let tol =
             VALIDATED_DOMAIN.tolerance(output, x_l, &m, measure.condition) * self.unit * self.slack;
@@ -145,8 +153,20 @@ fn values_match_arb() {
     let mut dd_q = EFFICIENCY_NAMES.map(Worst::double_double);
     let mut dd_s = Worst::double_double("S_1, S_2");
     let series = records("layered.jsonl", ",series");
+    let mut outside = 0;
     for c in records("layered.jsonl", ",coefficients") {
         let (x, m) = inputs(&c);
+        if !VALIDATED_DOMAIN.contains(&x, &m) {
+            // Outside the domain: refused unless allowed.
+            let r = lay.compute(&x, &m, &MieOptions::new()).map(|_| ());
+            assert!(
+                matches!(r, Err(Error::OutsideValidatedDomain(_))),
+                "{}",
+                c.case
+            );
+            outside += 1;
+            continue;
+        }
         let case = c.case.trim_end_matches(",coefficients");
         let r = series
             .iter()
@@ -240,6 +260,7 @@ fn values_match_arb() {
             }
         }
     }
+    eprintln!("{outside} reference cases outside the domain, refused as expected");
 }
 
 #[test]
@@ -251,9 +272,10 @@ fn derivatives_match_arb() {
     let mut dd_j = Worst::double_double("efficiency Jacobian");
     for r in records("layered_derivatives.jsonl", "") {
         let (x, m) = inputs(&r);
+        assert!(VALIDATED_DOMAIN.contains_derivatives(&x, &m), "{}", r.case);
         let n = n_max(&r, &x);
         let d = reference(&x, &m, &[], None);
-        let measures = derivative_measures(&x, &m, &d, &orders(&r));
+        let measures = derivative_measures(&x, &m, &[], &d, &orders(&r));
         let s = lay
             .compute_with_derivatives(&x, &m, &MieOptions::new().with_n_max(n))
             .expect("inside the domain");

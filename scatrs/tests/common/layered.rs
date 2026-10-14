@@ -203,20 +203,25 @@ pub struct DerivativeMeasures {
     pub coefficients: Vec<[Measure; 4]>,
     /// Per layer: [∂/∂x_l, ∂/∂Re m_l, ∂/∂Im m_l][Q_ext, Q_sca, Q_abs, Q_back, g].
     pub jacobian: Vec<[[Measure; 5]; 3]>,
+    /// Per layer: [∂/∂x_l, d/dm_l][S₁, S₂], over all cosines.
+    pub amplitudes: Vec<[[Measure; 2]; 2]>,
 }
 
 /// The measures of the derivatives of the layered sphere (x, m), from its double-double
 /// solution `d` and central differences of double-double derivatives (steps 2⁻³⁰ x_l and
 /// 2⁻³⁰ |m_l|, one-sided in Im m_l at Im m_l = 0, as `common::mie::derivative_measures`), over
-/// the coefficient orders `orders`. A derivative's scale is at least its natural size, the
+/// the coefficient orders `orders` and the cosines `mu` (those of `d`). A derivative's scale is
+/// at least its natural size, the
 /// value's times (1 + |m|x_L)/|p| (|m| the largest index, |p| = x_l or |m_l|): a derivative can
 /// vanish identically (with respect to the index of a shell of zero thickness).
 pub fn derivative_measures(
     x: &[f64],
     m: &[Complex<f64>],
+    mu: &[f64],
     d: &Outputs<Dd>,
     orders: &[usize],
 ) -> DerivativeMeasures {
+    let mu_dd: Vec<Dd> = mu.iter().map(|&v| dd(v)).collect();
     let layers = x.len();
     let x_l = x[layers - 1];
     let n = d.a.len();
@@ -249,7 +254,7 @@ pub fn derivative_measures(
                     1 => ms[l].re += s,
                     _ => ms[l].im += s,
                 }
-                solve(&xs, &ms, &[], Some(n))
+                solve(&xs, &ms, &mu_dd, Some(n))
             };
             per.push(match (up, down) {
                 (true, true) => (shifted(1.0), shifted(-1.0), 2.0 * h),
@@ -326,8 +331,41 @@ pub fn derivative_measures(
             })
         })
         .collect();
+    let s_rms = x_l * q_of(&d.q, 1).hi().sqrt() / 2.0;
+    let amplitudes = (0..layers)
+        .map(|l| {
+            std::array::from_fn(|p| {
+                std::array::from_fn(|i| {
+                    let k = 2 * p + i;
+                    let p_size = if p == 0 { x[l] } else { m[l].norm() };
+                    let natural = s_rms * phase / p_size;
+                    let scale = d.ds[l][k]
+                        .iter()
+                        .map(|&v| cnorm(v).max(natural))
+                        .fold(0.0, f64::max);
+                    let num = (0..mu.len())
+                        .map(|j| {
+                            (0..layers)
+                                .map(|q| {
+                                    let (px, nx, dx) = &steps[q][0];
+                                    let (pr, nr, dr) = &steps[q][1];
+                                    x[q] * cg(px.ds[l][k][j], nx.ds[l][k][j], *dx)
+                                        + m[q].norm() * cg(pr.ds[l][k][j], nr.ds[l][k][j], *dr)
+                                })
+                                .sum::<f64>()
+                        })
+                        .fold(0.0, f64::max);
+                    Measure {
+                        scale,
+                        condition: num / scale,
+                    }
+                })
+            })
+        })
+        .collect();
     DerivativeMeasures {
         coefficients,
         jacobian,
+        amplitudes,
     }
 }

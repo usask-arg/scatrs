@@ -207,7 +207,9 @@ impl<T: Real> Layered<T> {
     ///
     /// # Errors
     ///
-    /// As [`compute`](Self::compute).
+    /// As [`compute`](Self::compute), and [`Error::OutsideValidatedDomain`] above the
+    /// derivatives' validated x_L ([`ValidatedDomain::derivative_x_max`]) unless
+    /// `allow_unvalidated` is set.
     pub fn compute_with_derivatives(
         &mut self,
         x: &[T],
@@ -215,6 +217,13 @@ impl<T: Real> Layered<T> {
         opts: &MieOptions,
     ) -> Result<LayeredSolution<'_, T>> {
         let n = check_inputs(x, m, opts)?;
+        let outer = x[x.len() - 1].approx_f64();
+        if !opts.allow_unvalidated && x.len() > 1 && outer > VALIDATED_DOMAIN.derivative_x_max {
+            return Err(Error::OutsideValidatedDomain(format!(
+                "the derivatives are validated up to x_L = {:e}, got {outer:e}",
+                VALIDATED_DOMAIN.derivative_x_max
+            )));
+        }
         let layers = x.len();
         self.x = x[layers - 1];
         self.layers.resize_with(layers, LayerDerivatives::new);

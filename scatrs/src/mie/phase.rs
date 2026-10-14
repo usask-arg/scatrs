@@ -298,16 +298,21 @@ impl<T: Real> Coefficients<'_, T> {
         let x = self.x;
         let c = self.phase_scale(normalization);
         let two = T::from_f64(2.0);
+        // Only the outer size parameter's derivative has the term of 4/x².
         let dc = match normalization {
             Normalization::Normalized => {
                 let q = self.efficiencies().q_sca;
-                [
-                    -c * (two / x + jac.x.q_sca / q),
-                    -c * jac.m_re.q_sca / q,
-                    -c * jac.m_im.q_sca / q,
-                ]
+                let x_part = if group.outer {
+                    -c * (two / x + jac.x.q_sca / q)
+                } else {
+                    -c * (jac.x.q_sca / q)
+                };
+                [x_part, -c * jac.m_re.q_sca / q, -c * jac.m_im.q_sca / q]
             }
-            Normalization::Unnormalized => [-two * c / x, T::zero(), T::zero()],
+            Normalization::Unnormalized => {
+                let x_part = if group.outer { -two * c / x } else { T::zero() };
+                [x_part, T::zero(), T::zero()]
+            }
         };
         let i1 = Complex::new(T::zero(), T::one());
         let v = values;

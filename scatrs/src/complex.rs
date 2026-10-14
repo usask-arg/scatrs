@@ -26,10 +26,45 @@ pub(crate) fn inv<T: Real>(z: Complex<T>) -> Complex<T> {
     }
 }
 
+/// e^w − 1 for Re w ≤ 0, accurate to a few ulps of |e^w − 1| also where |w| is small:
+/// (e^a cos b − 1) + i e^a sin b for w = a + ib, with e^a cos b − 1 = expm1(a) cos b −
+/// 2 sin²(b/2), whose two terms have the same sign wherever they are small (a ≤ 0).
+#[inline]
+pub(crate) fn exp_m1<T: Real>(w: Complex<T>) -> Complex<T> {
+    let (a, b) = (w.re, w.im);
+    let (s, c) = b.sin_cos();
+    let h = (b * 0.5).sin();
+    Complex::new(a.exp_m1() * c - h * h * 2.0, a.exp() * s)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::scalar::DoubleDouble as Dd;
+
+    /// `exp_m1` in f64 against the same formula in double-double (whose `exp_m1`, `sin` and
+    /// `cos` are checked against Arb), from |w| = 10⁻²⁰ to 40, Re w ≤ 0: within 4 ulps of
+    /// |e^w − 1|; and against the series w + w²/2 at |w| = 10⁻¹².
+    #[test]
+    fn exp_m1_is_accurate_for_small_and_large_arguments() {
+        let mut worst = 0.0f64;
+        for i in 0..400 {
+            let r = 10f64.powf(-20.0 + 21.6 * f64::from(i) / 399.0);
+            let t = core::f64::consts::PI * (0.5 + f64::from(i % 37) / 36.0);
+            let w = c(r * t.cos().min(0.0), r * t.sin());
+            let got = exp_m1(w);
+            let wd = Complex::new(Dd::from(w.re), Dd::from(w.im));
+            let want = exp_m1(wd);
+            let want = c(want.re.hi(), want.im.hi());
+            let err = (got - want).norm() / want.norm();
+            worst = worst.max(err);
+            assert!(err <= 4.0 * f64::EPSILON, "w = {w}: error {err:e}");
+        }
+        let w = c(-3e-13, 4e-13);
+        let series = w + w * w * 0.5;
+        assert!(rel(exp_m1(w), series) <= 2.0 * f64::EPSILON);
+        eprintln!("exp_m1: worst error {:.2} ulps", worst / f64::EPSILON);
+    }
 
     fn c(re: f64, im: f64) -> Complex<f64> {
         Complex::new(re, im)

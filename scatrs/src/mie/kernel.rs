@@ -4,27 +4,43 @@
 //! ψ_k(ρ)/ψ_{k−1}(ρ), D_n(ρ) = (n + 1)/ρ − u_{n+1}(ρ), R_n = ξ_{n−1}/ξ_n, T_n = ψ_n/ξ_n, and
 //! Δ_a = A ξ_n − ξ_{n−1}, Δ_b = B ξ_n − ξ_{n−1} with A = D_n(mx)/m + n/x and
 //! B = m D_n(mx) + n/x, so that a_n = (A ψ_n − ψ_{n−1})/Δ_a and b_n = (B ψ_n − ψ_{n−1})/Δ_b.
+//!
+//! A layered sphere has the same outer step with D_n(mx) replaced by the effective
+//! log-derivatives Hₐ and H_b at its outer surface (`Outer`), which `crate::layered` computes.
 
 use num_complex::Complex;
 
 use crate::complex::inv;
 use crate::scalar::Real;
 
+/// One coefficient's effective log-derivative H at the outer surface of a layered sphere, at
+/// one order: as the correction δ = H − D_n(mx) to the outer layer's own log-derivative, which
+/// keeps the ratio region's numerators free of cancellation, or as H itself, near the poles of
+/// D_n(mx) where D_n(mx) and δ would cancel.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum Side<T> {
+    Delta(Complex<T>),
+    Direct(Complex<T>),
+}
+
+/// Hₐ and H_b at one order.
+pub(crate) type Outer<T> = (Side<T>, Side<T>);
+
 #[derive(Clone, Debug)]
-pub(super) struct State<T: Real> {
-    pub(super) x: T,
-    pub(super) m: Complex<T>,
-    pub(super) a: Vec<Complex<T>>,
-    pub(super) b: Vec<Complex<T>>,
+pub(crate) struct State<T: Real> {
+    pub(crate) x: T,
+    pub(crate) m: Complex<T>,
+    pub(crate) a: Vec<Complex<T>>,
+    pub(crate) b: Vec<Complex<T>>,
     pub(super) derivatives: bool,
-    pub(super) da_dx: Vec<Complex<T>>,
-    pub(super) da_dm: Vec<Complex<T>>,
-    pub(super) db_dx: Vec<Complex<T>>,
-    pub(super) db_dm: Vec<Complex<T>>,
+    pub(crate) da_dx: Vec<Complex<T>>,
+    pub(crate) da_dm: Vec<Complex<T>>,
+    pub(crate) db_dx: Vec<Complex<T>>,
+    pub(crate) db_dm: Vec<Complex<T>>,
     /// (x²/2) Q_abs, and its derivatives with respect to x, Re m and Im m (of the sum alone,
     /// without the factor 2/x²).
-    pub(super) abs_sum: T,
-    pub(super) abs_sum_jacobian: [T; 3],
+    pub(crate) abs_sum: T,
+    pub(crate) abs_sum_jacobian: [T; 3],
     /// u_k(mx) for k = 1, …, N + 1 (index k).
     u_z: Vec<Complex<T>>,
     /// u_k(x) for k = n_s + 1, …, N + 1 (index k).
@@ -33,11 +49,11 @@ pub(super) struct State<T: Real> {
     u_real: Vec<T>,
 }
 
-fn real<T: Real>(v: T) -> Complex<T> {
+pub(crate) fn real<T: Real>(v: T) -> Complex<T> {
     Complex::new(v, T::zero())
 }
 
-fn int<T: Real>(k: usize) -> T {
+pub(crate) fn int<T: Real>(k: usize) -> T {
     // Exact: the orders are below 2^53.
     T::from_f64(k as f64)
 }
@@ -61,8 +77,69 @@ fn start_index<T: Real>(n_top: usize, rho_abs: f64) -> usize {
     above + margin::<T>()
 }
 
+/// u_k(z) for k = 1, …, n_top + 1 into `out` (index k), complex z.
+pub(crate) fn ratios_complex<T: Real>(out: &mut Vec<Complex<T>>, z: Complex<T>, n_top: usize) {
+    let inv_z = inv(z);
+    let start = start_index::<T>(n_top + 1, z.norm().approx_f64());
+    out.clear();
+    out.resize(n_top + 2, real(T::zero()));
+    let mut u = real(T::zero());
+    for k in (1..=start).rev() {
+        let c = inv_z.scale(int(2 * k + 1));
+        let mut den = c - u;
+        if den.re == T::zero() && den.im == T::zero() {
+            // Only at an exact zero of ψ_{k−1}: nudge by a rounding error, as Lentz's
+            // method does, so that the pole of D_{k−1} stays finite.
+            den = real(T::epsilon() * (c.norm() + u.norm()));
+        }
+        u = inv(den);
+        if k <= n_top + 1 {
+            out[k] = u;
+        }
+    }
+}
+
+/// u_k(ρ) for k = from, …, n_top + 1 (real ρ), returned at index k of a vector.
+pub(crate) fn ratios_real<T: Real>(out: &mut Vec<T>, rho: T, from: usize, n_top: usize) {
+    let inv_rho = rho.recip();
+    let start = start_index::<T>(n_top + 1, rho.approx_f64().abs());
+    out.clear();
+    out.resize(n_top + 2, T::zero());
+    let mut u = T::zero();
+    for k in (from.max(1)..=start).rev() {
+        let c = inv_rho * int::<T>(2 * k + 1);
+        let mut den = c - u;
+        if den == T::zero() {
+            den = T::epsilon() * (c.abs() + u.abs());
+        }
+        u = den.recip();
+        if k <= n_top + 1 {
+            out[k] = u;
+        }
+    }
+}
+
+/// u_k(z) for z = m·x and k = 1, …, n_top + 1 into `out` (index k): by the real recurrence
+/// (through `scratch`) when Im m is zero (with no derivative seeded in it), as for D_n(mx).
+pub(crate) fn ratios<T: Real>(
+    out: &mut Vec<Complex<T>>,
+    scratch: &mut Vec<T>,
+    m: Complex<T>,
+    x: T,
+    n_top: usize,
+) {
+    let z = m.scale(x);
+    if m.im.is_zero() {
+        ratios_real(scratch, z.re, 1, n_top);
+        out.clear();
+        out.extend(scratch.iter().map(|&u| real(u)));
+    } else {
+        ratios_complex(out, z, n_top);
+    }
+}
+
 impl<T: Real> State<T> {
-    pub(super) fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             x: T::zero(),
             m: real(T::zero()),
@@ -81,51 +158,38 @@ impl<T: Real> State<T> {
         }
     }
 
-    /// u_k(ρ) for k = 1, …, n_top + 1 into `self.u_z` (complex ρ = z).
-    fn ratios_complex(&mut self, z: Complex<T>, n_top: usize) {
-        let inv_z = inv(z);
-        let start = start_index::<T>(n_top + 1, z.norm().approx_f64());
-        self.u_z.clear();
-        self.u_z.resize(n_top + 2, real(T::zero()));
-        let mut u = real(T::zero());
-        for k in (1..=start).rev() {
-            let c = inv_z.scale(int(2 * k + 1));
-            let mut den = c - u;
-            if den.re == T::zero() && den.im == T::zero() {
-                // Only at an exact zero of ψ_{k−1}: nudge by a rounding error, as Lentz's
-                // method does, so that the pole of D_{k−1} stays finite.
-                den = real(T::epsilon() * (c.norm() + u.norm()));
-            }
-            u = inv(den);
-            if k <= n_top + 1 {
-                self.u_z[k] = u;
-            }
-        }
-    }
-
-    /// u_k(ρ) for k = from, …, n_top + 1 (real ρ), returned at index k of a vector.
-    fn ratios_real(out: &mut Vec<T>, rho: T, from: usize, n_top: usize) {
-        let inv_rho = rho.recip();
-        let start = start_index::<T>(n_top + 1, rho.approx_f64().abs());
-        out.clear();
-        out.resize(n_top + 2, T::zero());
-        let mut u = T::zero();
-        for k in (from.max(1)..=start).rev() {
-            let c = inv_rho * int::<T>(2 * k + 1);
-            let mut den = c - u;
-            if den == T::zero() {
-                den = T::epsilon() * (c.abs() + u.abs());
-            }
-            u = den.recip();
-            if k <= n_top + 1 {
-                out[k] = u;
-            }
-        }
-    }
-
     /// Computes a_n, b_n for n = 1, …, `n` (and their derivatives if asked), and the
     /// absorption sum.
-    pub(super) fn solve(&mut self, x: T, m: Complex<T>, n: usize, derivatives: bool) {
+    pub(crate) fn solve(&mut self, x: T, m: Complex<T>, n: usize, derivatives: bool) {
+        self.prepare(x, m, n);
+        self.finish(x, m, n, derivatives, None);
+    }
+
+    /// The first step of [`solve`](Self::solve): u_k(mx) for k = 1, …, `n` + 1, which
+    /// [`u_z`](Self::u_z) then returns.
+    pub(crate) fn prepare(&mut self, x: T, m: Complex<T>, n: usize) {
+        // D_n(mx). For real m (with no derivative seeded in Im m) the real recurrence is used:
+        // twice as fast, and for m = 1 exactly it reproduces u_k(x) bit for bit.
+        ratios(&mut self.u_z, &mut self.u_real, m, x, n);
+    }
+
+    /// u_k(mx) for k = 1, …, N + 1 (index k), after [`prepare`](Self::prepare).
+    pub(crate) fn u_z(&self) -> &[Complex<T>] {
+        &self.u_z
+    }
+
+    /// The rest of [`solve`](Self::solve), after [`prepare`](Self::prepare) with the same
+    /// x, m and n. With `outer`, the effective log-derivatives of a layered sphere at each
+    /// order replace D_n(mx); derivatives are then not available.
+    pub(crate) fn finish(
+        &mut self,
+        x: T,
+        m: Complex<T>,
+        n: usize,
+        derivatives: bool,
+        outer: Option<&[Outer<T>]>,
+    ) {
+        debug_assert!(!(derivatives && outer.is_some()));
         let one = T::one();
         let two = T::from_f64(2.0);
         let i1 = Complex::new(T::zero(), one);
@@ -133,15 +197,6 @@ impl<T: Real> State<T> {
         self.m = m;
         self.derivatives = derivatives;
         let z = m.scale(x);
-        // D_n(mx). For real m (with no derivative seeded in Im m) the real recurrence is used:
-        // twice as fast, and for m = 1 exactly it reproduces u_k(x) bit for bit.
-        if m.im.is_zero() {
-            Self::ratios_real(&mut self.u_real, z.re, 1, n);
-            self.u_z.clear();
-            self.u_z.extend(self.u_real.iter().map(|&u| real(u)));
-        } else {
-            self.ratios_complex(z, n);
-        }
         let xf = x.approx_f64();
         // Orders up to n_s use the upward ψ and χ recurrences; above, the ratios.
         let n_s = if xf >= 1.0 {
@@ -150,7 +205,7 @@ impl<T: Real> State<T> {
             0
         };
         if n_s < n {
-            Self::ratios_real(&mut self.u_x, x, n_s + 1, n);
+            ratios_real(&mut self.u_x, x, n_s + 1, n);
         }
         for v in [
             &mut self.a,
@@ -189,8 +244,14 @@ impl<T: Real> State<T> {
             let kf: T = int(k);
             let k_x = kf * inv_x;
             let d = inv_z.scale(int(k + 1)) - self.u_z[k + 1];
-            let d_m = d * inv_m;
-            let md = d * m;
+            let side = outer.map(|o| o[k - 1]);
+            let h = |s: Option<Side<T>>| match s {
+                None => d,
+                Some(Side::Delta(delta)) => d + delta,
+                Some(Side::Direct(h)) => h,
+            };
+            let d_m = h(side.map(|s| s.0)) * inv_m;
+            let md = h(side.map(|s| s.1)) * m;
             let big_a = d_m + real(k_x);
             let big_b = md + real(k_x);
             // a_n, b_n, 1/Δ_a, 1/Δ_b, ξ_n/Δ and ξ_{n−1}/Δ.
@@ -224,9 +285,21 @@ impl<T: Real> State<T> {
                 inv_xi = inv_xi * r;
                 let u_z1 = self.u_z[k + 1];
                 let u_x1 = real(self.u_x[k + 1]);
-                // D/m − D_n(x) and m D − D_n(x), without the cancelling (n + 1)/x terms.
-                let num_a = c_a.scale(int::<T>(k + 1) * inv_x) + u_x1 - u_z1 * inv_m;
-                let num_b = u_x1 - m * u_z1;
+                // D/m − D_n(x) and m D − D_n(x), without the cancelling (n + 1)/x terms; for a
+                // layered sphere, plus δ/m and m δ, or H/m − D_n(x) and m H − D_n(x) directly.
+                let mut num_a = c_a.scale(int::<T>(k + 1) * inv_x) + u_x1 - u_z1 * inv_m;
+                let mut num_b = u_x1 - m * u_z1;
+                if let Some((sa, sb)) = side {
+                    let d_x = real(int::<T>(k + 1) * inv_x) - u_x1;
+                    num_a = match sa {
+                        Side::Delta(delta) => num_a + delta * inv_m,
+                        Side::Direct(_) => d_m - d_x,
+                    };
+                    num_b = match sb {
+                        Side::Delta(delta) => num_b + m * delta,
+                        Side::Direct(_) => md - d_x,
+                    };
+                }
                 let ia = inv(big_a - r);
                 let ib = inv(big_b - r);
                 an = t * num_a * ia;

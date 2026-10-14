@@ -142,6 +142,7 @@
 mod complex;
 pub mod ensemble;
 pub mod error;
+pub mod layered;
 pub mod mie;
 pub mod scalar;
 pub mod special;

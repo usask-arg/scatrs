@@ -21,11 +21,14 @@ pub(crate) struct Coefficients<'a, T> {
 
 /// The derivatives of the coefficients with respect to a real size parameter and a refractive
 /// index, in which they are holomorphic, and those of the absorption sum with respect to the
-/// size parameter, Re m and Im m.
+/// size parameter, Re m and Im m. `outer` says whether the size parameter is
+/// [`Coefficients::x`], which scales the outputs (a sphere's, or a layered sphere's outer
+/// layer's), so that the derivatives include those of the scale.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Group<'a, T> {
     pub(crate) d: CoefficientDerivatives<'a, T>,
     pub(crate) abs_sum: [T; 3],
+    pub(crate) outer: bool,
 }
 
 impl<T: Real> Coefficients<'_, T> {
@@ -52,6 +55,7 @@ impl<'a, T: Real> MieSolution<'a, T> {
         self.derivatives().map(|d| Group {
             d,
             abs_sum: self.state.abs_sum_jacobian,
+            outer: true,
         })
     }
 }

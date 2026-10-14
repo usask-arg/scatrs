@@ -156,7 +156,8 @@ impl<T: Real> Coefficients<'_, T> {
     }
 
     /// The derivatives of the efficiencies with respect to the size parameter and the real and
-    /// imaginary parts of the refractive index of `group`.
+    /// imaginary parts of the refractive index of `group` (Q = (2/x²)·sum: only the outer size
+    /// parameter's derivative has the term of 2/x²).
     pub(crate) fn efficiencies_jacobian(&self, group: &Group<'_, T>) -> EfficiencyJacobian<T> {
         let (a, b, d) = (self.a, self.b, &group.d);
         let i1 = Complex::new(T::zero(), T::one());
@@ -174,7 +175,13 @@ impl<T: Real> Coefficients<'_, T> {
                 _ => derivative_sums(a, b, |k| i1 * d.da_dm[k], |k| i1 * d.db_dm[k]),
             };
             // Q = (2/x²)·sum: ∂Q/∂x = (2/x²)·∂sum/∂x − (2/x)·Q.
-            let x_term = |v: T| if p == 0 { two * inv_x * v } else { T::zero() };
+            let x_term = |v: T| {
+                if p == 0 && group.outer {
+                    two * inv_x * v
+                } else {
+                    T::zero()
+                }
+            };
             let q_sca = two_x2 * sums.sca - x_term(q.q_sca);
             let q_abs = two_x2 * group.abs_sum[p] - x_term(q.q_abs);
             let q_back = two * re_mul_conj(sums.back, values.back) * inv_x2 - x_term(q.q_back);

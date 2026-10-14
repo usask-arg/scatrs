@@ -17,13 +17,17 @@ available from Rust ({doc}`rust-api`). Both APIs follow the {doc}`/theory/conven
 ```
 
 The package also re-exports the exceptions of {mod}`scatrs.errors` and the modules
-{mod}`scatrs.mie`, {mod}`scatrs.ensemble`, {mod}`scatrs.refractive`, {mod}`scatrs.size` and
-{mod}`scatrs.special`. The classes below are defined in `scatrs.particles`,
-{mod}`scatrs.size` and {mod}`scatrs.ensemble`, and used from the top level.
+{mod}`scatrs.mie`, {mod}`scatrs.ensemble`, {mod}`scatrs.particles`, {mod}`scatrs.refractive`,
+{mod}`scatrs.size` and {mod}`scatrs.special`. The classes below are defined in
+{mod}`scatrs.particles`, {mod}`scatrs.size` and {mod}`scatrs.ensemble`, and used from the top
+level.
 
 ### Particles, ensembles and mixtures
 
 ```{eval-rst}
+.. automodule:: scatrs.particles
+   :no-members:
+
 .. autoclass:: scatrs.Sphere
 
 .. autoclass:: scatrs.Ensemble

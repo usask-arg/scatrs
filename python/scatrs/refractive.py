@@ -362,7 +362,7 @@ class Function(RefractiveIndex):
 
     def __post_init__(self) -> None:
         if not callable(self.f):
-            raise TypeError(f"f must be callable, not {type(self.f).__name__}")
+            raise TypeError(f"Function: f must be callable, not {type(self.f).__name__}")
 
     def _m(self, wavelength: NDArray[np.float64]) -> ArrayLike:
         return self.f(wavelength.copy())

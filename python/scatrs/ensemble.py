@@ -391,9 +391,12 @@ def _weight(w: ArrayLike, what: str) -> float:
     TypeError
         If ``w`` is not a real number: a bool, a string or an array, say.
     """
-    a = _args.real_array(w, what)
+    a = np.asarray(w)
     if a.ndim != 0:
         raise TypeError(f"{what} must be a real number, not an array of shape {a.shape}")
+    if a.dtype.kind not in "iuf":
+        given = a.dtype if isinstance(w, np.ndarray) else type(w).__name__
+        raise TypeError(f"{what} must be a real number, not {given}")
     return float(a)
 
 
@@ -585,7 +588,10 @@ class Mixture:
                     f"component {i} must be a (weight, Ensemble) pair, not {type(c).__name__}"
                 ) from None
             if not isinstance(e, Ensemble):
-                raise TypeError(f"component {i} must be a (weight, Ensemble) pair")
+                raise TypeError(
+                    f"component {i} must be a (weight, Ensemble) pair, not "
+                    f"({type(w).__name__}, {type(e).__name__})"
+                )
             if e.grid_shape != ():
                 raise ValueError(
                     f"the distribution of component {i} is a grid of shape {e.grid_shape}; "

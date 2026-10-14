@@ -201,6 +201,10 @@ class MultiModal(_Distribution):
             out.append((f"{prefix}mode{j}.weight", w))
         return out
 
+    def _identity(self) -> tuple:
+        # Each mode's own identity: a Tabulated mode's table is not among the leaves.
+        return ("MultiModal", tuple((_key(w), d._identity()) for w, d in self.modes))
+
     def _spec(self, pick: _Pick, prefix: str = "") -> tuple:
         return (
             "multimodal",

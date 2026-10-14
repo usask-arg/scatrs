@@ -23,6 +23,8 @@
 
 As in phases 1b and 2a, both tasks were prototyped and verified before this plan was written; their code is the exact diff of their commits on branch `phase-2c` (task 1: `d472d0c`, task 2: `92845e9`). Verified at each commit: ruff check and format, `uv run pytest -q` (325 then 333 passed, 1 skipped), and for task 2 the docs build with `-W` and mypy on the new modules (`ensemble.py` keeps the two `EnsembleOutputs(**…, greek=…)` errors it has on `main`). The documentation is folded into task 2 because the docs build executes the examples, which use the API that task 2 replaces.
 
+Each task was then reviewed for spec compliance and for code quality, and the branch as a whole had a final review. The fixes from those reviews were committed on top of the two tasks: `530f8e3`, `98d091d`, `8fb7a77`, `61b3bc6`, `f3e70d4` and the final-review fixes. The diffs embedded below predate them; the branch, not this plan, is the record of the final code.
+
 ## Measured results the plan relies on
 
 | What | Measured |

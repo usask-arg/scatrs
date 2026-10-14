@@ -25,3 +25,19 @@ to the phase or task named in its heading.
 - **Derivatives of grids.** `Ensemble.compute` raises `NotImplementedError` for `derivatives`
   of a grid of distributions. The engine's groups already support per-distribution θ blocks;
   the work is the result layout (the grid's axes first, as for the values) and its tests.
+
+## Input checks kept from 0.1.0 (undecided)
+- **`Tabulated` flattens and accepts bools.**
+  - **What:** `Tabulated` converts its radii and densities with `np.asarray(..., dtype=float)`
+    and `ravel()`, so a 2-D table is silently flattened and bools become 0.0 and 1.0, as in
+    0.1.0. The numeric parameters reject bools (`TypeError`).
+  - **Then:** require one-dimensional real sequences, raising `TypeError` for bools and
+    `ValueError` for other shapes.
+  - **Why deferred:** a behaviour change from 0.1.0, outside the review fixes.
+- **Doubled prefix in a scalar ensemble's engine errors.**
+  - **What:** an engine error of a scalar `Ensemble` reads
+    "invalid input: component 0: invalid input: …", as in 0.1.0: the engine wraps the error of
+    the mixture's single component in a second prefix.
+  - **Then:** have the engine (or the binding) drop the component prefix for a single
+    component, or the inner "invalid input: ".
+  - **Why deferred:** the wording comes from the Rust engine, outside 2c-1's Python scope.

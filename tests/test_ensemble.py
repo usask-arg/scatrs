@@ -158,7 +158,7 @@ def test_errors():
         Mixture([]).compute(0.5)
     with pytest.raises(TypeError, match="pair"):
         Mixture([LOGNORMAL])
-    with pytest.raises(TypeError, match="pair"):
+    with pytest.raises(TypeError, match=r"pair, not \(float, LogNormal\)$"):
         Mixture([(1.0, LOGNORMAL)])
     with pytest.raises(TypeError, match="must be a Sphere"):
         Ensemble(1.5, LOGNORMAL)
@@ -407,6 +407,12 @@ def test_ensembles_and_mixtures_pickle():
             c.size.modes[0][0].flags.writeable = True
 
 
+def test_ensembles_of_multimodal_tables_compare_the_tables():
+    a = Ensemble(Sphere(1.5), MultiModal([(1, Tabulated([0.1, 0.2, 0.3], [0.0, 1.0, 0.0]))]))
+    b = Ensemble(Sphere(1.5), MultiModal([(1, Tabulated([1.0, 2.0, 3.0], [0.0, 5.0, 0.0]))]))
+    assert a != b and hash(a) != hash(b)
+
+
 def test_mixture_weights_are_real_scalars():
     e = Ensemble(Sphere(1.5), LOGNORMAL)
     for w in (True, np.bool_(True), "1.0", b"1", None):
@@ -414,5 +420,9 @@ def test_mixture_weights_are_real_scalars():
             Mixture([(1.0, e), (w, e)])
     with pytest.raises(TypeError, match=r"weight of component 0 must be a real number, not an ar"):
         Mixture([([1.0, 2.0], e)])
+    with pytest.raises(TypeError, match=r"weight of component 0 must be a real number, not bool$"):
+        Mixture([(np.array(True), e)])
+    with pytest.raises(TypeError, match=r"weight of component 0 must be a real number, not str$"):
+        Mixture([("1.0", e)])
     w = Mixture([(np.int64(2), e)]).components[0][0]
     assert type(w) is float and w == 2.0

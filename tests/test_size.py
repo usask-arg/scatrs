@@ -46,6 +46,15 @@ def test_distributions_are_values():
         MultiModal([(1.0, "x")])
 
 
+def test_multimodal_compares_the_tables_of_its_modes():
+    a = MultiModal([(1, Tabulated([0.1, 0.2, 0.3], [0.0, 1.0, 0.0]))])
+    b = MultiModal([(1, Tabulated([1.0, 2.0, 3.0], [0.0, 5.0, 0.0]))])
+    assert a != b and hash(a) != hash(b)
+    c = MultiModal([(1.0, Tabulated((0.1, 0.2, 0.3), np.array([0.0, 1.0, 0.0])))])
+    assert a == c and hash(a) == hash(c)
+    assert a != MultiModal([(2, Tabulated([0.1, 0.2, 0.3], [0.0, 1.0, 0.0]))])
+
+
 def test_grids_broadcast_and_flatten_in_c_order():
     d = PowerLaw([[3.0], [4.0]], 0.1, [0.5, 1.0, 2.0])
     shape, specs = size._specs(d)

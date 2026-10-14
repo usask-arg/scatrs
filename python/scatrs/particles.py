@@ -14,6 +14,8 @@ __all__ = ["Sphere"]
 
 def _model(value: object) -> RefractiveIndex:
     """``value`` as a refractive-index model."""
+    if isinstance(value, np.ndarray) and value.ndim == 0 and value.dtype.kind != "O":
+        value = value[()]  # a 0-d array is its numpy scalar, as for a number
     if isinstance(value, RefractiveIndex):
         return value
     if isinstance(value, type):  # callable, but not a model
@@ -22,7 +24,9 @@ def _model(value: object) -> RefractiveIndex:
             f"{value.__name__}; instantiate it, as in scatrs.refractive.Constant(1.5)"
         )
     if isinstance(value, (bool, np.bool_)):
-        raise TypeError("refractive_index must be a number or a model, not a bool")
+        raise TypeError(
+            "refractive_index must be a number, a scatrs.refractive model or a callable, not a bool"
+        )
     if isinstance(value, numbers.Number):
         return Constant(value)  # type: ignore[arg-type]
     if callable(value):

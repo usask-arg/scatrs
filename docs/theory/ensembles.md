@@ -305,18 +305,18 @@ $\mathrm{Re}\,m$ of a mixture's second component, a mode weight and a mode's wid
 
 ## Mixtures
 
-`compute_mixture` (Python {class}`scatrs.Mixture`) averages over external mixtures: components,
-each a distribution, its refractive indices and a weight $w_i \ge 0$ (a relative number
-concentration; their sum finite and positive). `compute` is a mixture of one component, without
-the weight parameter. Cross
-sections and moments are averaged with the number fractions $w_i/\sum w$. The phase-matrix
+{rust}`compute_mixture <scatrs::ensemble::compute_mixture>` (Python {class}`scatrs.Mixture`)
+averages over external mixtures: components, each a distribution, its refractive indices and a
+weight $w_i \ge 0$ (a relative number concentration; their sum finite and positive).
+{rust}`compute <scatrs::ensemble::compute>` is a mixture of one component, without the weight
+parameter. Cross sections and moments are averaged with the number fractions $w_i/\sum w$. The phase-matrix
 tables, in $C_\text{sca}$ units, are averaged with the same fractions, so the phase matrices
 are averaged with $w_i\langle C_\text{sca}\rangle_i$, before one projection of all components.
 A multimodal distribution is a mixture of its modes with one refractive index.
 
 ## Batches
 
-`compute_batch` averages over each of many distributions of one material, as an optics
+{rust}`compute_batch <scatrs::ensemble::compute_batch>` averages over each of many distributions of one material, as an optics
 database needs: a grid of median radii and widths, say. In Python, an {class}`scatrs.Ensemble`
 whose distribution has array-valued parameters is such a batch: its parameters broadcast
 together into a grid, flattened in C order, and the results have the grid's axes before the

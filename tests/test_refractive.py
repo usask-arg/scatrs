@@ -318,7 +318,7 @@ def test_function_wraps_a_callable_and_checks_its_values():
         Function(lambda wl: np.full(wl.shape, "x")).evaluate([0.5])
     with pytest.raises(InvalidInputError, match="finite"):
         Function(lambda wl: wl * np.nan).evaluate([0.5])
-    with pytest.raises(TypeError, match="callable"):
+    with pytest.raises(TypeError, match=r"^Function: f must be callable, not float$"):
         Function(1.5)
     # The callable gets a copy: changing it changes nothing.
     wl = np.array([0.5, 0.6])
@@ -330,6 +330,9 @@ def test_sphere_converts_its_refractive_index():
     assert Sphere(1.5).refractive_index == Constant(1.5)
     assert Sphere(np.complex128(1.5 + 1e-3j)).refractive_index == Constant(1.5 + 1e-3j)
     assert Sphere(2).refractive_index == Constant(2.0)
+    assert Sphere(np.array(1.5)).refractive_index == Constant(1.5)
+    assert Sphere(np.array(1.5 + 1e-3j)).refractive_index == Constant(1.5 + 1e-3j)
+    assert type(Sphere(np.array(2)).refractive_index.m) is complex
     t = Table([0.4, 0.5], [1.5, 1.4])
     assert Sphere(t).refractive_index is t
     s = Sphere(lambda wl: np.full(wl.shape, 1.5))
@@ -339,8 +342,12 @@ def test_sphere_converts_its_refractive_index():
         Sphere(np.array([1.5, 1.4]))
     with pytest.raises(TypeError, match=r"refractive\.Table"):
         Sphere([1.5, 1.4])
-    with pytest.raises(TypeError, match="bool"):
-        Sphere(True)
+    accepted = r"a number, a scatrs\.refractive model or a callable, not"
+    for m in (True, np.bool_(True), np.array(True)):
+        with pytest.raises(TypeError, match=rf"{accepted} a bool$"):
+            Sphere(m)
+    with pytest.raises(TypeError, match=rf"{accepted} str_$"):
+        Sphere(np.array("1.5"))
     with pytest.raises(TypeError, match="str"):
         Sphere("1.5")
     with pytest.raises(InvalidInputError, match="Im m ≥ 0"):

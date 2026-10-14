@@ -22,6 +22,22 @@
   zeros", *Numerische Mathematik* 18 (1972), 305–320. Disk arithmetic, used by the reference
   generator.
 
+**Layered spheres**
+
+- A. L. Aden and M. Kerker, "Scattering of electromagnetic waves from two concentric spheres",
+  *Journal of Applied Physics* 22 (1951), 1242–1246. The coated sphere, by direct matching at
+  the interfaces, as the reference generator and the textbook method of the comparison do.
+- C. F. Bohren and D. R. Huffman, *Absorption and Scattering of Light by Small Particles*,
+  Wiley (1983), Chapter 5 and Section 8.1. The electrostatic polarizability of a coated
+  sphere (the Rayleigh limit checked in the external validation) and the coated sphere's
+  coefficients.
+- W. Yang, "Improved recursive algorithm for light scattering by a multilayered sphere",
+  *Applied Optics* 42 (2003), 1710–1720. The recursion for the effective logarithmic
+  derivatives.
+- O. Peña and U. Pal, "Scattering of electromagnetic radiation by a multilayered sphere",
+  *Computer Physics Communications* 180 (2009), 2348–2354. Yang's recursion in the form of
+  scattnlay, the code of the comparison.
+
 **Quadrature**
 
 - F. G. Tricomi, "Sugli zeri dei polinomi sferici ed ultrasferici", *Annali di Matematica Pura

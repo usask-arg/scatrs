@@ -17,7 +17,7 @@ available from Rust ({doc}`rust-api`). Both APIs follow the {doc}`/theory/conven
 ```
 
 The package also re-exports the exceptions of {mod}`scatrs.errors` and the modules
-{mod}`scatrs.mie`, {mod}`scatrs.ensemble`, {mod}`scatrs.particles`, {mod}`scatrs.refractive`,
+{mod}`scatrs.mie`, {mod}`scatrs.layered`, {mod}`scatrs.ensemble`, {mod}`scatrs.particles`, {mod}`scatrs.refractive`,
 {mod}`scatrs.size` and {mod}`scatrs.special`. The classes below are defined in
 {mod}`scatrs.particles`, {mod}`scatrs.size` and {mod}`scatrs.ensemble`, and used from the top
 level.
@@ -85,6 +85,13 @@ level.
 
 ```{eval-rst}
 .. automodule:: scatrs.mie
+   :members:
+```
+
+## `scatrs.layered`
+
+```{eval-rst}
+.. automodule:: scatrs.layered
    :members:
 ```
 

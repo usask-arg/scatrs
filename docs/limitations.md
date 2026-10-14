@@ -11,7 +11,7 @@ describes what the accuracy figures rest on.
 ## Scope and availability
 
 - scatrs computes homogeneous spheres, single or averaged over size distributions and
-  external mixtures.
+  external mixtures, and single layered spheres (core and shells).
 - Python exposes only `f64` results. Double-double precision and the `Dual` derivatives of
   the Rust core are available from Rust only.
 - The tests run on Linux (x86_64), macOS (arm64) and Windows (x86_64) for every change. The
@@ -21,6 +21,24 @@ describes what the accuracy figures rest on.
   $x = 2\cdot10^3$, $10^4$ and $2\cdot10^4$. The released wheels are also tested on aarch64
   Linux and Windows and on Intel macOS; the s390x, ppc64le and musl Linux wheels are built
   but not tested. 32-bit platforms are not supported.
+
+## Layered spheres
+
+- **Concentric layers only.** Inclusions off the centre, and non-spherical layers, need the
+  T-matrix method, which is planned.
+- **Validated domain.** $10^{-6} \le x_L \le 10^4$ with $|m_l|\,x_L \le 3\cdot10^4$ for every
+  layer, every index in the sphere's domain, and at most 16 layers. Beyond
+  $|m|\,x_L = 3\cdot10^4$ the narrow resonances of thin lossless shells of high index cost the
+  coefficients up to $10^9$ ulps. A single layer is a sphere, with the sphere's domain.
+- **Derivatives up to $x_L = 100$.** The derivatives come from dual numbers through the
+  recursion, and lose accuracy faster than the values for larger particles, worst for thin
+  lossless shells (the amplitude derivatives of a thin air shell around a large core reached
+  errors of $10^{-8}$ relative at $x_L = 5\cdot10^3$). Above $x_L = 100$,
+  `compute_with_derivatives` and `derivatives=` raise `OutsideValidatedDomain` unless
+  `allow_unvalidated` is set. They also cost more than a sphere's closed forms: 4.6 to 7.4
+  times the values for two layers, up to 32 times for ten.
+- **Cost.** About 2.5 times a sphere of the outer size for a coated sphere, and roughly
+  1.5 times more per further layer ({doc}`theory/layered`).
 
 ## Mie scattering
 

@@ -330,6 +330,16 @@ fn point(x_l: f64, fractions: &[f64], m: &[Complex<f64>], mu: &[f64]) -> [f64; 4
     out
 }
 
+/// The declared constants of the columns.
+fn declared() -> [f64; 4] {
+    [
+        ValidatedDomain::constant(MieOutput::PhaseMatrix),
+        ValidatedDomain::constant(MieOutput::GreekCoefficients { order: 0 }),
+        ValidatedDomain::constant(MieOutput::PhaseMatrixDerivatives),
+        ValidatedDomain::constant(MieOutput::GreekDerivatives { order: 0 }),
+    ]
+}
+
 fn to_json(xs: &[f64], ps: &[(Vec<f64>, Vec<Complex<f64>>)], results: &[[f64; 4]]) -> String {
     let list = |v: Vec<String>| v.join(", ");
     let mut json = String::from("{\n");
@@ -351,6 +361,12 @@ fn to_json(xs: &[f64], ps: &[(Vec<f64>, Vec<Complex<f64>>)], results: &[[f64; 4]
         })
         .collect();
     let _ = writeln!(json, "  \"particles\": [{}],", list(particles));
+    let declared = OUTPUTS
+        .iter()
+        .zip(declared())
+        .map(|(n, c)| format!("\"{n}\": {c}"))
+        .collect();
+    let _ = writeln!(json, "  \"declared\": {{{}}},", list(declared));
     json += "  \"c\": {\n";
     for (o, name) in OUTPUTS.iter().enumerate() {
         let rows = (0..xs.len())
@@ -410,12 +426,7 @@ fn greek_accuracy_map_is_within_the_declared_tolerances() {
         std::fs::write(&path, to_json(&xs, &ps, &results)).expect("write the map");
         eprintln!("wrote {path}");
     }
-    let declared = [
-        ValidatedDomain::constant(MieOutput::PhaseMatrix),
-        ValidatedDomain::constant(MieOutput::GreekCoefficients { order: 0 }),
-        ValidatedDomain::constant(MieOutput::PhaseMatrixDerivatives),
-        ValidatedDomain::constant(MieOutput::GreekDerivatives { order: 0 }),
-    ];
+    let declared = declared();
     let mut failures = Vec::new();
     for (o, name) in OUTPUTS.iter().enumerate() {
         let (k, worst) = results

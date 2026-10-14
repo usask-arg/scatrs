@@ -179,6 +179,81 @@ worst_c(greek, gnames)
 plot_map(greek, gx, gm, gnames, rows=2, height=7)
 ```
 
+(layered-accuracy)=
+## Layered spheres
+
+<!-- synced with scatrs/src/layered/domain.rs rustdoc -->
+
+The outputs of {mod}`scatrs.layered` follow the same model ({doc}`/theory/layered`), with the
+condition numbers summed over every layer's parameters and their own constants. Inside their
+validated domain ($10^{-6} \le x_L \le 10^4$ with $|m_l|\,x_L \le 3\cdot10^4$, every index in
+the sphere's domain, at most 16 layers; the derivatives up to $x_L = 100$), four tests enforce
+them:
+
+- `scatrs/tests/layered_reference.rs` compares every output with the Arb reference values,
+  computed without scatrs's algorithm by matching the fields at each interface directly
+  ({doc}`/theory/reference-suite`): 362 particles in the domain, from $x_L = 10^{-6}$ to
+  $10^4$, including thin and thick shells, absorbing cores in clear shells, metallic shells,
+  near-unity and high-contrast indices, air shells, and up to ten layers; and the derivatives
+  for 8 particles. The 8 reference particles outside the domain must be refused.
+- `scatrs/tests/layered_accuracy_map.rs` compares the double-precision results with
+  double-double on 101 outer size parameters from $10^{-6}$ to $10^4$ against 51 particles:
+  12 pairs of core and shell indices at core radius fractions $10^{-3}$, 0.3, 0.9 and 0.999,
+  and three- and ten-layer particles.
+- `scatrs/tests/layered_greek_accuracy_map.rs` does the same for the phase matrix and the
+  Greek coefficients, on 46 outer size parameters up to $10^3$ against 21 particles.
+- `scatrs/tests/layered.rs` checks the identities that need no reference: one layer, and
+  layers of one index, are bitwise the homogeneous sphere; a shell of zero thickness changes
+  nothing; an air shell gives the bare core; the Rayleigh limit; and the derivatives against
+  central differences.
+
+The worst $C$ of each map against its declared constant, and the worst $C$ over all particles
+at each size (empty above $x_L = 100$ for the derivatives):
+
+```{code-cell} python
+def worst_layered(name):
+    """Print the worst C of each output of a layered map; check the margin of 4."""
+    data = json.loads(Path("data", name).read_text())
+    print(f"{len(data['x'])} outer size parameters × {len(data['particles'])} particles")
+    print(f"{'output':<26}{'worst C':>10}{'declared':>10}")
+    for output, rows in data["c"].items():
+        # null: outside the (derivatives') domain.
+        c = np.array(rows, dtype=float)
+        worst = np.nanmax(c)
+        print(f"{output:<26}{worst:10.2f}{data['declared'][output]:10.0f}")
+        assert 4 * worst <= data["declared"][output], f"{output}: margin below 4"
+    return data
+
+
+layered_map = worst_layered("layered-accuracy-map.json")
+layered_greek = worst_layered("layered-greek-accuracy-map.json")
+```
+
+```{code-cell} python
+fig, axes = plt.subplots(1, 2, figsize=(11, 4), sharey=True, layout="constrained")
+for ax, data, title in [
+    (axes[0], layered_map, "coefficients, efficiencies, amplitudes"),
+    (axes[1], layered_greek, "phase matrix, Greek coefficients"),
+]:
+    x = np.array(data["x"])
+    for output, rows in data["c"].items():
+        c = np.array(rows, dtype=float)
+        with np.errstate(all="ignore"):
+            worst = np.nanmax(np.where(np.isnan(c), -np.inf, c), axis=1)
+        worst[~np.isfinite(worst)] = np.nan
+        ax.loglog(x, worst, lw=1, label=output)
+    ax.set(xlabel="outer size parameter $x_L$", title=title)
+axes[0].set_ylabel("worst $C$ over the particles")
+for ax in axes:
+    ax.legend(fontsize=7)
+plt.show()
+```
+
+The values use at most a quarter of their constants anywhere. The derivatives grow with the
+particle: for thin lossless shells (a real index of 10, or an air shell around a large core)
+the amplitude derivatives use about a fifth of their constant at $x_L = 50$, and would exceed it
+by up to 6 times at $x_L \sim 10^3$, which is why their domain ends at 100.
+
 (ensemble-accuracy)=
 ## Ensembles of spheres
 

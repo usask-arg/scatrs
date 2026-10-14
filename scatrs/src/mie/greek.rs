@@ -28,7 +28,7 @@ pub struct GreekCoefficients<T> {
 }
 
 impl<T: Real> GreekCoefficients<T> {
-    fn zeros(len: usize) -> Self {
+    pub(crate) fn zeros(len: usize) -> Self {
         let z = || vec![T::zero(); len];
         Self {
             alpha1: z(),
@@ -206,6 +206,74 @@ impl<T: Real> GreekProjector<T> {
                 c.alpha4[l] *= s;
                 c.alpha2[l] = s * half * (plus + minus);
                 c.alpha3[l] = s * half * (plus - minus);
+                c.beta1[l] *= s;
+                c.beta2[l] *= s;
+            }
+        }
+        Ok(out)
+    }
+}
+
+impl<T: Real> GreekProjector<T> {
+    /// Bounds on the coefficients' changes when each table value changes by at most the given
+    /// amount (the tables hold non-negative bounds on |ΔF₁₁|, |ΔF₁₂|, |ΔF₃₃|, |ΔF₃₄|): by the
+    /// triangle inequality, (2l + 1)/2·Σₖ wₖ|ΔF(μₖ)||dₗ(μₖ)| for α₁, α₄, β₁, β₂, and half the
+    /// sum of the bounds of α₂ + α₃ and α₂ − α₃ (each from |ΔF₁₁| + |ΔF₃₃|) for α₂ and α₃.
+    ///
+    /// # Errors
+    ///
+    /// As [`project`](Self::project).
+    pub fn project_bounds(
+        &self,
+        tables: &[PhaseTables<'_, T>],
+    ) -> Result<Vec<GreekCoefficients<T>>> {
+        let n = self.rule.nodes.len();
+        for t in tables {
+            let lens = [t.f11.len(), t.f12.len(), t.f33.len(), t.f34.len()];
+            if lens.iter().any(|&l| l != n) {
+                return Err(Error::InvalidInput(format!(
+                    "phase-matrix tables must have one value per node ({n}), got {lens:?}"
+                )));
+            }
+        }
+        if tables.is_empty() {
+            return Ok(Vec::new());
+        }
+        let len = self.order + 1;
+        let mut out: Vec<_> = tables
+            .iter()
+            .map(|_| GreekCoefficients::zeros(len))
+            .collect();
+        let mut d: [Vec<T>; 4] = core::array::from_fn(|_| vec![T::zero(); len]);
+        for (k, (&mu, &w)) in self.rule.nodes.iter().zip(&self.rule.weights).enumerate() {
+            let [d00, d22, d2m2, d02] = &mut d;
+            wigner_d(0, 0, mu, d00)?;
+            wigner_d(2, 2, mu, d22)?;
+            wigner_d(2, -2, mu, d2m2)?;
+            wigner_d(0, 2, mu, d02)?;
+            for (t, c) in tables.iter().zip(&mut out) {
+                let (f11, f33) = (w * t.f11[k], w * t.f33[k]);
+                let sum = f11 + f33;
+                let (f12, f34) = (w * t.f12[k], w * t.f34[k]);
+                for l in 0..len {
+                    c.alpha1[l] += f11 * d00[l].abs();
+                    c.alpha4[l] += f33 * d00[l].abs();
+                    c.alpha2[l] += sum * d22[l].abs(); // bound of α₂ + α₃ for now
+                    c.alpha3[l] += sum * d2m2[l].abs(); // bound of α₂ − α₃ for now
+                    c.beta1[l] += f12 * d02[l].abs();
+                    c.beta2[l] += f34 * d02[l].abs();
+                }
+            }
+        }
+        let half = T::from_f64(0.5);
+        for c in &mut out {
+            for l in 0..len {
+                let s = T::from_f64((2 * l + 1) as f64) * half;
+                let both = s * half * (c.alpha2[l] + c.alpha3[l]);
+                c.alpha1[l] *= s;
+                c.alpha4[l] *= s;
+                c.alpha2[l] = both;
+                c.alpha3[l] = both;
                 c.beta1[l] *= s;
                 c.beta2[l] *= s;
             }

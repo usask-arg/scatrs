@@ -571,3 +571,40 @@ path.
 - **Distributions over shape parameters**, such as aspect ratio (main spec §7.1). These are a
   property of the ensemble, not of the particle: phase 3 keeps every `Particle` field a single
   value per wavelength.
+
+## 16. Changes while implementing 3b
+
+Each change was forced or decided by a measurement. The plan, `docs/plans/2026-10-14-phase-3b-layered-kernel.md`, gives the numbers.
+
+**Algorithm (section 2):**
+
+- **The form is chosen per order.** The δ form is used unless D_n(z₂) and δ cancel by more than a factor 4, and the pole-free form otherwise. This replaces the fixed switch at ⌊|m_L|x_L⌋ of section 2.4. Every layer uses it, not only the outer one.
+- **D^ζ comes from the upward ratio recurrence of ζ** (w_{n+1} = (2n + 1)/z − 1/w_n). Computing it as D_n + W/Π_n subtracts two huge terms near the poles of D_n.
+- **The second solution is chosen per layer.** χ is used when Im m_l·x_l < ½, and ξ otherwise; the formulas hold for any ζ, with its Wronskian W. With ξ only, the error of Q_abs grew like 2⁻⁵²/Im m (10⁻⁵ at k = 10⁻¹²). The χ fallback of section 2.5 is thus used for every optically thin layer, real or not.
+- **Two more cancellations are removed.**
+  - The (n + 1)/x terms of G₁ are removed exactly. b_n lost four digits at x₀ = 10⁻⁹.
+  - In the outer step's upward region, δ·ψ_n is added to the outer layer's own numerator, which is exactly 0 for m_L = 1. An air shell lost a₁ to seven digits.
+- **The derivatives seed x_l and Re m_l only: 2L, not 3L** (section 2.7). Seeding Im m switched off the real recurrence and the exact Q_abs = 0 of lossless particles, so the values were not those of `compute`. ∂/∂(Im m_l) of the absorption sum now follows from the coefficients. Passes carry 2L derivatives for L ≤ 4, and 2 per layer above.
+
+**Domain and accuracy (section 6):**
+
+- **The values are validated up to |m_l|·x_L ≤ 3·10⁴.** Thin lossless shells of index 10 at x_L = 10⁴ lose 10⁹ ulps in either basis.
+- **The derivatives are validated up to x_L = 100.** Above it, the amplitude derivatives reach C ≈ 6000. `compute_with_derivatives` refuses larger particles unless `allow_unvalidated` is set. One layer keeps the sphere's domain.
+- **κ′ changes.**
+  - Its near-unity factor is the largest |m_l|/|m_l − 1| over the layers whose index is not exactly 1. It was the largest |m| over the largest |m − 1|, which understated a near-unity shell around another core.
+  - The coefficient and amplitude derivatives take κ, near-unity factor included.
+- **The layered constants are measured** (`layered::ValidatedDomain::constant`). They are 32, 16, 128, 64, 128, 1024, 256 and 64/256, against the sphere's 16 to 512.
+
+**APIs (sections 4 and 5):**
+
+- **Rust.** The per-layer derivative methods take a `layer` argument; there is no buffer per layer. `layered::n_terms` is added, and so are `ValidatedDomain::{max_phase, derivative_x_max, contains_derivatives}`.
+- **Python.** The results are subclasses of `scatrs.mie`'s classes. `scatrs.layered.parameters(L)` lists the names.
+
+**Validation and comparison (sections 7 to 10):**
+
+- **References.** Core fractions are {10⁻³, 0.3, 0.9, 0.999}, four not five, for the 5 MB budget: 3.9 MB went to values and 0.2 MB to derivatives. The derivative case at x_L = 200 moved to 100.
+- **BHCOAT.** It is represented by the textbook method it implements, direct interface matching in double precision, written in the comparison script, not by a port.
+- **Speed targets.**
+  - Two layers cost 2.5–2.65× a sphere, against a target of about 2.5×.
+  - scatrs is 4.3–8.4× faster than scattnlay.
+  - Derivatives meet (1 + 3L)× up to x_L ≈ 10. At x_L = 100 they cost 7.4× for two layers (target 7) and 32× for ten (target 31). The fallback is section 2.7's closed forms (follow-up).

@@ -608,3 +608,23 @@ Each change was forced or decided by a measurement. The plan, `docs/plans/2026-1
   - Two layers cost 2.5–2.65× a sphere, against a target of about 2.5×.
   - scatrs is 4.3–8.4× faster than scattnlay.
   - Derivatives meet (1 + 3L)× up to x_L ≈ 10. At x_L = 100 they cost 7.4× for two layers (target 7) and 32× for ten (target 31). The fallback is section 2.7's closed forms (follow-up).
+
+## 17. Closed-form derivatives
+
+The fallback of section 2.7 replaced the dual numbers for L ≥ 2, before 3c. The theory chapter ("Derivatives") gives the formulas.
+
+- **Method.** Within layer l, H solves the Riccati equation y′ = V − y², V = n(n + 1)/z² − 1, from t = m_l H^(l−1)/m_{l−1} at z₁ to H^(l) at z₂. Its sensitivities are:
+  - ∂H/∂t = R², with R = −m_{l−1}W S_n/(Π_n(z₂)G₂ − P_nG₁) and S_n = ζ_n(z₂)/ζ_n(z₁), from S_n = S_{n−1}w_n(z₂)/w_n(z₁);
+  - ∂H/∂z₂ = V − H²;
+  - ∂H/∂z₁ = −(V(z₁) − t²)R².
+
+  An adjoint sweep per order chains them from the outer layer inward. The outer step uses the sphere's closed forms with H in place of D. The `Dual` machinery of `layered` is gone.
+- **Three cancellations are removed.**
+  - The two terms of an interface x_{l−1} are combined into closed forms, which are exactly 0 for equal indices. For H_b at x = 10⁻⁶ the two terms cancelled to a few digits.
+  - A layer's own index, R²[±t − z₁(V(z₁) − t²)], is written with t = D_n(z₁) + e for small z₁. Near a pole of D_n(z₁) it keeps the t form, chosen by the same factor-4 test as H. In the D form alone, a metallic core in a thin shell lost 4·10⁻⁴ relative at x_L = 640.
+  - H′ is D′ − δ(2D + δ) in the δ form.
+- **The values are bitwise those of `compute`**, as before. Spheres and ensembles are bitwise unchanged.
+- **The derivatives' domain is x_L ≤ 1000** (it was 100).
+  - Up to there, the worst C on the maps is 22 for the coefficient derivatives, 37 for the Jacobian, 163 for the amplitude derivatives, and 53 for the phase-matrix and Greek derivatives. The constants are unchanged.
+  - Above 1000, the forward amplitude's derivative with respect to a thin air shell's index reaches C ≈ 1700 at x_L = 10⁴ (0.999 fraction, core 1.5 + 0.01i). The recurrence errors at the shell's two surfaces are independent of each other and coherent across orders, so they add up in the forward sum. Each coefficient's derivative stays within its tolerance.
+- **Cost.** Every derivative (3L of them) costs 1.6 to 2.8 times the values, for 2, 3 and 10 layers, from x_L = 0.1 to 1000. The target is (1 + 3L)×. With duals it was 4.6 to 7.4 times for two layers and 25 to 32 for ten.

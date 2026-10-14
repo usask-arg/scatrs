@@ -119,10 +119,10 @@ def test_errors():
     with pytest.raises(OutsideValidatedDomainError):
         layered.efficiencies([1.0, 2e4], [1.5, 1.33])
     assert layered.efficiencies([1.0, 2e4], [1.5, 1.33], allow_unvalidated=True).q_ext > 0
-    # Derivatives are validated up to an outer size parameter of 100.
+    # Derivatives are validated up to an outer size parameter of 1000.
     with pytest.raises(OutsideValidatedDomainError, match="derivatives"):
-        layered.efficiencies([50.0, 200.0], [1.5, 1.33], derivatives=True)
-    assert layered.efficiencies([50.0, 200.0], [1.5, 1.33]).q_ext > 0
+        layered.efficiencies([500.0, 2000.0], [1.5, 1.33], derivatives=True)
+    assert layered.efficiencies([500.0, 2000.0], [1.5, 1.33]).q_ext > 0
 
 
 def test_default_n_max_is_the_spheres_at_the_outer_size():

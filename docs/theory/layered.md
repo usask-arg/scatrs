@@ -144,28 +144,70 @@ absorbs nothing; scatrs sets its $Q_\text{abs}$ to exactly 0, as for a real sphe
 ## Derivatives
 
 The derivatives with respect to each layer's $x_l$, $\mathrm{Re}\,m_l$ and $\mathrm{Im}\,m_l$
-come from dual numbers ({doc}`scalar-types`) carried through the same code. The coefficients
-are holomorphic in each $m_l$, so seeding $x_l$ and $\mathrm{Re}\,m_l$ is enough: the
-derivative with respect to $\mathrm{Re}\,m_l$ is the complex derivative $d/dm_l$, and the
-one with respect to $\mathrm{Im}\,m_l$ is $i\,d/dm_l$. The absorption sum is not holomorphic;
-its derivative with respect to $\mathrm{Im}\,m_l$ follows from the coefficients',
+are in closed form. The coefficients are holomorphic in each $m_l$: the derivative with respect
+to $\mathrm{Re}\,m_l$ is the complex derivative $d/dm_l$, and the one with respect to
+$\mathrm{Im}\,m_l$ is $i\,d/dm_l$. The absorption sum is not holomorphic; its derivative with
+respect to $\mathrm{Im}\,m_l$ follows from the coefficients',
 
 $$
 \frac{\partial}{\partial\,\mathrm{Im}\,m_l}\bigl(\mathrm{Re}\,a_n - |a_n|^2\bigr)
   = 2\,\mathrm{Im}\bigl(\bar a_n a_n'\bigr) - \mathrm{Im}\,a_n',
 $$
 
-with $a_n' = da_n/dm_l$, likewise for $b_n$. Because $\mathrm{Im}\,m$ is never seeded, the values
-take the same paths as without derivatives and are bitwise the same: a real index keeps the
-cheaper real recurrence, and a lossless particle keeps $Q_\text{abs} = 0$. For up to four
-layers one pass carries all $2L$ derivatives; above, one pass per layer carries two. One layer
-uses the sphere's closed forms.
+with $a_n' = da_n/dm_l$, likewise for $b_n$.
 
-The derivatives lose accuracy faster than the values as the particle grows. The dual numbers
-differentiate every intermediate quantity, and for thin lossless shells some of those are far
-more sensitive than the result. Their validated domain therefore ends at $x_L = 100$
-({doc}`/validation/accuracy`). Derivatives in closed form, by the chain rule through the
-recursion, would avoid this; they are planned.
+Inside layer $l$ the logarithmic derivative $y = f'/f$ of the layer's field $f$ (of order $n$)
+solves the Riccati equation
+
+$$
+y' = V - y^2, \qquad V(z) = \frac{n(n + 1)}{z^2} - 1,
+$$
+
+from $y(z_1) = t = m_l H^{(l-1)}/m_{l-1}$ at the inner surface (for $H_a$; the indices are
+exchanged for $H_b$) to $y(z_2) = H^{(l)}$. Its sensitivities follow without differentiating
+the recursion:
+
+$$
+\frac{\partial H^{(l)}}{\partial t} = R^2, \qquad
+\frac{\partial H^{(l)}}{\partial z_2} = V(z_2) - \bigl(H^{(l)}\bigr)^2, \qquad
+\frac{\partial H^{(l)}}{\partial z_1} = -\bigl(V(z_1) - t^2\bigr)R^2,
+$$
+
+with $R = f(z_1)/f(z_2)$ the ratio of the field at the two surfaces,
+
+$$
+R = -\frac{m_{l-1} W S_n}{\Pi_n(z_2) G_2 - P_n G_1}, \qquad
+S_n = \frac{\zeta_n(z_2)}{\zeta_n(z_1)} = S_{n-1}\,\frac{w_n(z_2)}{w_n(z_1)},
+$$
+
+which reuses the recursion's quantities. At each order a sweep from the outer layer inward
+chains these sensitivities to give the outer $H_a$ and $H_b$'s derivatives with respect to
+every layer's $x_l$ and $m_l$; the outer step then differentiates as the sphere's closed forms
+do, with $H$ in place of $D_n(mx)$. All $3L$ derivatives cost one pass, and the values are
+bitwise those computed without derivatives.
+
+The sweep's terms need the same care as the values, for the same reasons:
+
+- **At an interface.** $x_{l-1}$ moves both the outer surface of layer $l - 1$ and the inner
+  surface of layer $l$. For $H_b$ the two terms cancel at leading order at small $x_{l-1}$.
+  Together they are, per unit of the outer $H$'s sensitivity to $t$,
+  $m_l(m_l^2 - m_{l-1}^2)\bigl[n(n + 1)/(x_{l-1}^2 m_{l-1}^2 m_l^2) + H^2/m_{l-1}^2\bigr]$ for
+  $H_a$ and $(m_l^2 - m_{l-1}^2)/m_l$ for $H_b$ ($H$ the inner layer's), which vanish exactly
+  for equal indices.
+- **A layer's own index** enters through $z_1$ and $t$ as
+  $R^2\bigl[\pm t - z_1\bigl(V(z_1) - t^2\bigr)\bigr]$, whose two terms are both about
+  $(n + 1)/z_1$ at small $z_1$. Written with $t = D_n(z_1) + e$ it is
+  $\pm D_n - z_1 D_n' + e\bigl(\pm 1 + z_1(2D_n + e)\bigr)$, free of that cancellation; near a
+  pole of $D_n(z_1)$, where $D_n$ and $e$ cancel instead, scatrs keeps the first form.
+- **The derivative of $H$** at $z_2$, $V - H^2$, is
+  $D_n'(z_2) - \delta\bigl(2D_n(z_2) + \delta\bigr)$ in the form $H = D_n(z_2) + \delta$.
+
+The derivatives' validated domain ends at $x_L = 1000$ ({doc}`/validation/accuracy`). For thin
+lossless shells around large particles, the rounding errors of the recurrences at a shell's
+two surfaces are independent of each other and alike from one order to the next. In the
+forward-scattering amplitude's derivative with respect to the shell's index they add up instead
+of averaging out. That derivative reaches about $1.7$ times its declared constant at
+$x_L = 10^4$, for an air shell of a thousandth of the radius.
 
 ## Truncation
 
@@ -186,8 +228,8 @@ $$
 $$
 
 The derivatives of the coefficients and the amplitudes take $\kappa$ itself, near-unity factor
-included, since they share the algorithm's losses near $m = 1$; a sphere's closed forms do
-not. The constants $C$ were measured on two accuracy maps and at the Arb references, each at
+included, since they are built from the recursion's $H$ and share its losses near $m = 1$; a
+sphere's closed forms do not. The constants $C$ were measured on two accuracy maps and at the Arb references, each at
 least four times the worst case found, and differ from the sphere's where the layered kernel
 needs more ({rust}`scatrs::layered::ValidatedDomain::constant`). The validated domain:
 
@@ -196,7 +238,7 @@ needs more ({rust}`scatrs::layered::ValidatedDomain::constant`). The validated d
   $10^9$ ulps;
 - every layer's index in the sphere's domain ($0 < \mathrm{Re}\,m \le 10$,
   $0 \le \mathrm{Im}\,m \le 10$, $|m| \ge 0.1$), and at most 16 layers;
-- the derivatives up to $x_L = 100$.
+- the derivatives up to $x_L = 1000$.
 
 ## Reference values
 
@@ -213,6 +255,6 @@ recurrences of $\Pi_n$, $w_n$ and $P_n$. Measured on one thread of an Apple M4 P
 (`cargo bench -p scatrs --bench layered`), the efficiencies of a coated sphere cost about 2.5
 to 2.7 times those of a homogeneous sphere of the same outer size: 1.7 µs at $x_L = 1$, 11 µs at
 100 and 94 µs at 1000. A three-layer particle costs 3.3 to 4 times a sphere, a ten-layer one 13
-to 16 times. Every derivative of a two-layer particle costs 4.6 to 7.4 times the values,
-of a three-layer one 5.6 to 8.9 times, and of a ten-layer one (one pass per layer) 25 to 32
-times.
+to 16 times. Every derivative ($3L$ of them) costs 1.6 to 2.8 times the values, for two,
+three or ten layers alike: 3.3 µs for a coated sphere at $x_L = 1$, 33 µs at 100 and 270 µs at
+1000.

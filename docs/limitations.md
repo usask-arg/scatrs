@@ -30,13 +30,11 @@ describes what the accuracy figures rest on.
   layer, every index in the sphere's domain, and at most 16 layers. Beyond
   $|m|\,x_L = 3\cdot10^4$ the narrow resonances of thin lossless shells of high index cost the
   coefficients up to $10^9$ ulps. A single layer is a sphere, with the sphere's domain.
-- **Derivatives up to $x_L = 100$.** The derivatives come from dual numbers through the
-  recursion, and lose accuracy faster than the values for larger particles, worst for thin
-  lossless shells (the amplitude derivatives of a thin air shell around a large core reached
-  errors of $10^{-8}$ relative at $x_L = 5\cdot10^3$). Above $x_L = 100$,
-  `compute_with_derivatives` and `derivatives=` raise `OutsideValidatedDomain` unless
-  `allow_unvalidated` is set. They also cost more than a sphere's closed forms: 4.6 to 7.4
-  times the values for two layers, up to 32 times for ten.
+- **Derivatives up to $x_L = 1000$.** Above it the derivatives lose accuracy faster than the
+  values for thin lossless shells (the forward amplitude's derivative with respect to the index
+  of a thin air shell around a large core reached errors of $2\cdot10^{-8}$ relative at
+  $x_L = 10^4$). Above $x_L = 1000$, `compute_with_derivatives` and `derivatives=` raise
+  `OutsideValidatedDomain` unless `allow_unvalidated` is set.
 - **Cost.** About 2.5 times a sphere of the outer size for a coated sphere, and roughly
   1.5 times more per further layer ({doc}`theory/layered`).
 

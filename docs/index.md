@@ -19,9 +19,9 @@ library for the optical properties of particles. Install it with `pip install sc
   parallel, with an error estimate for every output, and refractive indices that vary with
   wavelength ({mod}`scatrs.refractive`). Grids of distributions share their Mie solutions, for
   building optics tables.
-- **Derivatives** of every output: in closed form with respect to a sphere's size parameter and
-  refractive index, by dual numbers with respect to every layer of a layered sphere, and for
-  ensembles, the distribution parameters and the mixture weights.
+- **Derivatives** of every output, in closed form: with respect to a sphere's size parameter
+  and refractive index, to every layer's of a layered sphere, and for ensembles, the
+  distribution parameters and the mixture weights.
 - **Validated accuracy.** Every output has a declared accuracy, checked against independent
   reference values with rigorous error bounds across the whole validated domain, and against
   published results. See {doc}`validation/overview`.

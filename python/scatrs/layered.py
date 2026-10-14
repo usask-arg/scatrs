@@ -13,7 +13,7 @@ method and :doc:`/validation/accuracy` for the validated domain.
 ``derivatives`` is ``True`` (every layer's ``"layer{l}.x"``, ``"layer{l}.m_real"`` and
 ``"layer{l}.m_imag"``) or a sequence of those names; the result's ``d`` method returns the
 derivative with respect to one of them, or ``"layer{l}.m"`` (the complex derivative) for the
-complex outputs. The derivatives are validated up to an outer size parameter of 100.
+complex outputs. The derivatives are validated up to an outer size parameter of 1000.
 
 The results are those of :mod:`scatrs.mie` (:class:`~scatrs.mie.MieEfficiencies`, …), with
 ``d`` accepting the layers' parameter names.
@@ -215,7 +215,7 @@ _SHARED_DOC = """
     derivatives : bool or sequence of str, optional
         Also compute derivatives with respect to these of ``"layer{{l}}.x"``,
         ``"layer{{l}}.m_real"`` and ``"layer{{l}}.m_imag"`` (``True`` for all); read them with the
-        result's ``d`` method. Validated up to an outer size parameter of 100.
+        result's ``d`` method. Validated up to an outer size parameter of 1000.
     allow_unvalidated : bool, optional
         Compute outside the validated domain instead of raising
         :class:`~scatrs.errors.OutsideValidatedDomainError` (see

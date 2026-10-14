@@ -36,8 +36,9 @@
 //! (Yang 2003; Peña & Pal 2009) in a form without the poles of D_n(m_l x_l), and the outer step
 //! is the homogeneous sphere's with Hₐ and H_b in place of D_n(mx), keeping its numerators free
 //! of cancellation. A single layer is a sphere: it gives [`crate::mie`]'s results bitwise.
-//! Derivatives are forward-mode [`Dual`] numbers through the generic
-//! kernel (for one layer, the sphere's closed forms).
+//! The derivatives with respect to every layer's x and m are in closed form: within a layer, H
+//! solves a Riccati equation, whose sensitivities to its two surfaces and to its starting value
+//! are chained from the outer layer inward at each order (for one layer, the sphere's).
 //!
 //! # Accuracy
 //!
@@ -56,7 +57,7 @@ use crate::mie::{
     MAX_SIZE_PARAMETER, MIN_REFRACTIVE_INDEX, MIN_SIZE_PARAMETER, MieOptions, Normalization,
     PhaseBuffers, default_terms,
 };
-use crate::scalar::{Dual, Real};
+use crate::scalar::Real;
 use crate::{Error, Result};
 
 /// The largest number of layers [`Layered::compute`] accepts, 2¹⁰.
@@ -84,38 +85,6 @@ impl<T: Real> LayerDerivatives<T> {
     }
 }
 
-/// A kernel in dual numbers with `N` derivatives, allocated on first use.
-type DualKernel<T, const N: usize> = Option<Box<kernel::Kernel<Dual<T, N>>>>;
-
-/// The kernels in dual numbers of a workspace, one per number of derivatives.
-#[derive(Clone, Debug)]
-struct DualKernels<T: Real> {
-    k2: DualKernel<T, 2>,
-    k4: DualKernel<T, 4>,
-    k6: DualKernel<T, 6>,
-    k8: DualKernel<T, 8>,
-}
-
-/// The kernel with `N` derivatives.
-trait DualSlot<T: Real, const N: usize> {
-    fn kernel(&mut self) -> &mut kernel::Kernel<Dual<T, N>>;
-}
-
-macro_rules! dual_slot {
-    ($n:literal, $field:ident) => {
-        impl<T: Real> DualSlot<T, $n> for DualKernels<T> {
-            fn kernel(&mut self) -> &mut kernel::Kernel<Dual<T, $n>> {
-                self.$field
-                    .get_or_insert_with(|| Box::new(kernel::Kernel::new()))
-            }
-        }
-    };
-}
-dual_slot!(2, k2);
-dual_slot!(4, k4);
-dual_slot!(6, k6);
-dual_slot!(8, k8);
-
 /// A reusable workspace for layered spheres, one per thread.
 ///
 /// Its buffers grow to the largest number of terms and layers used and are then reused.
@@ -128,7 +97,6 @@ pub struct Layered<T: Real> {
     abs_sum: T,
     derivatives: bool,
     layers: Vec<LayerDerivatives<T>>,
-    duals: DualKernels<T>,
 }
 
 impl<T: Real> Default for Layered<T> {
@@ -148,12 +116,6 @@ impl<T: Real> Layered<T> {
             abs_sum: T::zero(),
             derivatives: false,
             layers: Vec::new(),
-            duals: DualKernels {
-                k2: None,
-                k4: None,
-                k6: None,
-                k8: None,
-            },
         }
     }
 
@@ -183,7 +145,7 @@ impl<T: Real> Layered<T> {
         if last == 0 {
             self.kernel.mie.solve(x[0], m[0], n, false);
         } else {
-            self.kernel.solve(x, m, n);
+            self.kernel.solve(x, m, n, false);
         }
         let s = &self.kernel.mie;
         self.x = x[last];
@@ -195,15 +157,11 @@ impl<T: Real> Layered<T> {
     }
 
     /// As [`compute`](Self::compute), also computing the derivatives of the coefficients with
-    /// respect to each layer's size parameter and refractive index: forward-mode dual numbers
-    /// through the kernel, seeded in every layer's x_l and Re m_l (the coefficients are
-    /// holomorphic in m_l, so ∂/∂(Re m_l) is the complex derivative), in one pass with 2L
-    /// derivatives for L ≤ 4 layers and one pass of 2 per layer above; for one layer, the
-    /// sphere's closed forms. The derivative of the absorption sum with respect to Im m_l follows
-    /// from the coefficients' (−Im aₙ′ + 2 Im(āₙaₙ′) and likewise for bₙ, per order). Im m is
-    /// never seeded, so the values take the same paths and are bitwise those of
-    /// [`compute`](Self::compute): a real index keeps its real recurrence, and a lossless particle
-    /// its Q_abs of exactly 0.
+    /// respect to each layer's size parameter and refractive index, in closed form: the
+    /// sensitivities of each layer's logarithmic derivative (a Riccati equation's), combined by
+    /// an adjoint sweep over the layers at every order, and the sphere's closed forms at the
+    /// outer surface (for one layer, the sphere's own). The values are bitwise those of
+    /// [`compute`](Self::compute).
     ///
     /// # Errors
     ///
@@ -225,97 +183,34 @@ impl<T: Real> Layered<T> {
             )));
         }
         let layers = x.len();
-        self.x = x[layers - 1];
+        let last = layers - 1;
+        self.x = x[last];
         self.layers.resize_with(layers, LayerDerivatives::new);
         self.layers.truncate(layers);
-        match layers {
-            1 => {
-                let s = &mut self.kernel.mie;
-                s.solve(x[0], m[0], n, true);
-                self.a.clone_from(&s.a);
-                self.b.clone_from(&s.b);
-                self.abs_sum = s.abs_sum;
-                let d = &mut self.layers[0];
-                d.da_dx.clone_from(&s.da_dx);
-                d.da_dm.clone_from(&s.da_dm);
-                d.db_dx.clone_from(&s.db_dx);
-                d.db_dm.clone_from(&s.db_dm);
-                d.abs_sum = s.abs_sum_jacobian;
-            }
-            2 => self.dual::<4>(x, m, n, 0),
-            3 => self.dual::<6>(x, m, n, 0),
-            4 => self.dual::<8>(x, m, n, 0),
-            _ => {
-                for l in 0..layers {
-                    self.dual::<2>(x, m, n, l);
-                }
+        if last == 0 {
+            self.kernel.mie.solve(x[0], m[0], n, true);
+        } else {
+            self.kernel.solve(x, m, n, true);
+            for (d, g) in self.layers.iter_mut().zip(&self.kernel.grads) {
+                d.da_dx.clone_from(&g.da_dx);
+                d.da_dm.clone_from(&g.da_dm);
+                d.db_dx.clone_from(&g.db_dx);
+                d.db_dm.clone_from(&g.db_dm);
+                d.abs_sum = g.abs_sum;
             }
         }
+        let s = &self.kernel.mie;
+        self.a.clone_from(&s.a);
+        self.b.clone_from(&s.b);
+        self.abs_sum = s.abs_sum;
+        let d = &mut self.layers[last];
+        d.da_dx.clone_from(&s.da_dx);
+        d.da_dm.clone_from(&s.da_dm);
+        d.db_dx.clone_from(&s.db_dx);
+        d.db_dm.clone_from(&s.db_dm);
+        d.abs_sum = s.abs_sum_jacobian;
         self.derivatives = true;
         Ok(LayeredSolution { s: self })
-    }
-
-    /// One pass in `Dual<T, N>`, seeding x and Re m of the N/2 layers from `first`; the first
-    /// pass also stores the values.
-    fn dual<const N: usize>(&mut self, x: &[T], m: &[Complex<T>], n: usize, first: usize)
-    where
-        DualKernels<T>: DualSlot<T, N>,
-    {
-        let seeded = first..first + N / 2;
-        let seed = |l: usize, k: usize, v: T| {
-            let mut eps = [T::zero(); N];
-            if seeded.contains(&l) {
-                eps[2 * (l - first) + k] = T::one();
-            }
-            Dual::new(v, eps)
-        };
-        let xd: Vec<Dual<T, N>> = x.iter().enumerate().map(|(l, &v)| seed(l, 0, v)).collect();
-        let md: Vec<Complex<Dual<T, N>>> = m
-            .iter()
-            .enumerate()
-            .map(|(l, v)| Complex::new(seed(l, 1, v.re), Dual::constant(v.im)))
-            .collect();
-        let kernel = DualSlot::<T, N>::kernel(&mut self.duals);
-        kernel.solve(&xd, &md, n);
-        let s = &kernel.mie;
-        let value = |z: &Complex<Dual<T, N>>| Complex::new(z.re.re(), z.im.re());
-        if first == 0 {
-            self.a.clear();
-            self.a.extend(s.a.iter().map(value));
-            self.b.clear();
-            self.b.extend(s.b.iter().map(value));
-            self.abs_sum = s.abs_sum.re();
-        }
-        let part = |z: &Complex<Dual<T, N>>, k: usize| Complex::new(z.re.eps()[k], z.im.eps()[k]);
-        for l in seeded.filter(|&l| l < x.len()) {
-            let j = 2 * (l - first);
-            let d = &mut self.layers[l];
-            for (out, c, k) in [
-                (&mut d.da_dx, &s.a, j),
-                (&mut d.da_dm, &s.a, j + 1),
-                (&mut d.db_dx, &s.b, j),
-                (&mut d.db_dm, &s.b, j + 1),
-            ] {
-                out.clear();
-                out.extend(c.iter().map(|z| part(z, k)));
-            }
-            // ∂/∂(Im m) of Σ (2n + 1)(Re aₙ − |aₙ|² + Re bₙ − |bₙ|²), with ∂aₙ/∂(Im m) = i aₙ′:
-            // Re(i a′) = −Im a′ and 2 Re(ā i a′) = −2 Im(ā a′).
-            let mut im = T::zero();
-            for (k, ((a, b), (da, db))) in self
-                .a
-                .iter()
-                .zip(&self.b)
-                .zip(d.da_dm.iter().zip(&d.db_dm))
-                .enumerate()
-            {
-                let w = T::from_f64((2 * k + 3) as f64);
-                let term = |c: &Complex<T>, dc: &Complex<T>| (c.conj() * dc).im * 2.0 - dc.im;
-                im += w * (term(a, da) + term(b, db));
-            }
-            let e = s.abs_sum.eps();
-            d.abs_sum = [e[j], e[j + 1], im];
-        }
     }
 }
 

@@ -6,7 +6,7 @@
 //! core fractions `FRACTIONS`, and three- and ten-layer particles. The amplitudes are at the
 //! sphere map's cosines. `DoubleDouble` is within 16 times the declared constants, in units of
 //! (κ′ + cond)·2⁻¹⁰⁴, of Arb on every output (tests/layered_reference.rs), so it stands in for
-//! the exact values. The derivative columns cover the derivatives' domain (x_L ≤ 100) for the
+//! the exact values. The derivative columns cover the derivatives' domain (x_L ≤ 1000) for the
 //! particles of at most four layers (the ten-layer particle takes other passes of the same code,
 //! which tests/layered.rs checks against differences); above it they are null.
 //!
@@ -337,7 +337,7 @@ fn accuracy_map_is_within_the_declared_tolerances() {
             let mut v: Vec<(f64, usize)> = results
                 .iter()
                 .enumerate()
-                .filter(|&(k, _)| inside(&points[k]) && points[k].0 <= 100.0)
+                .filter(|&(k, _)| inside(&points[k]))
                 .map(|(k, c)| (c[o], k))
                 .collect();
             v.sort_by(|a, b| b.0.total_cmp(&a.0));

@@ -11,7 +11,7 @@ use std::hint::black_box;
 
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use num_complex::Complex;
-use scatrs::layered::Layered;
+use scatrs::layered::{Layered, VALIDATED_DOMAIN};
 use scatrs::mie::{Mie, MieOptions};
 
 const SIZES: [f64; 5] = [0.1, 1.0, 10.0, 100.0, 1000.0];
@@ -57,7 +57,7 @@ fn layered(c: &mut Criterion) {
             group.bench_with_input(BenchmarkId::new(name, x_l), &x, |b, x| {
                 b.iter(|| lay.compute(black_box(x), &m, &opts).unwrap().efficiencies())
             });
-            if x_l <= 100.0 {
+            if x_l <= VALIDATED_DOMAIN.derivative_x_max {
                 let id = BenchmarkId::new(format!("{name}+derivatives"), x_l);
                 group.bench_with_input(id, &x, |b, x| {
                     b.iter(|| {

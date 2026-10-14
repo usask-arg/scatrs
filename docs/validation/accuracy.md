@@ -187,7 +187,7 @@ plot_map(greek, gx, gm, gnames, rows=2, height=7)
 The outputs of {mod}`scatrs.layered` follow the same model ({doc}`/theory/layered`), with the
 condition numbers summed over every layer's parameters and their own constants. Inside their
 validated domain ($10^{-6} \le x_L \le 10^4$ with $|m_l|\,x_L \le 3\cdot10^4$, every index in
-the sphere's domain, at most 16 layers; the derivatives up to $x_L = 100$), four tests enforce
+the sphere's domain, at most 16 layers; the derivatives up to $x_L = 1000$), four tests enforce
 them:
 
 - `scatrs/tests/layered_reference.rs` compares every output with the Arb reference values,
@@ -208,7 +208,7 @@ them:
   central differences.
 
 The worst $C$ of each map against its declared constant, and the worst $C$ over all particles
-at each size (empty above $x_L = 100$ for the derivatives):
+at each size (empty above $x_L = 1000$ for the derivatives):
 
 ```{code-cell} python
 def worst_layered(name):
@@ -249,10 +249,12 @@ for ax in axes:
 plt.show()
 ```
 
-The values use at most a quarter of their constants anywhere. The derivatives grow with the
-particle: for thin lossless shells (a real index of 10, or an air shell around a large core)
-the amplitude derivatives use about a fifth of their constant at $x_L = 50$, and would exceed it
-by up to 6 times at $x_L \sim 10^3$, which is why their domain ends at 100.
+The values use at most a quarter of their constants anywhere, and so do the derivatives up to
+$x_L = 1000$. Above it, the amplitude derivatives of thin lossless shells grow with the
+particle: for an air shell of a thousandth of the radius, the forward amplitude's derivative
+with respect to the shell's index would exceed its constant by 1.7 times at $x_L = 10^4$. The
+rounding errors of the recurrences at the shell's two surfaces are alike from one order to the
+next, so they add up in the forward sum, and the derivatives' domain ends at 1000.
 
 (ensemble-accuracy)=
 ## Ensembles of spheres

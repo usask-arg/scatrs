@@ -26,6 +26,17 @@ pub(crate) enum Side<T> {
 /// Hₐ and H_b at one order.
 pub(crate) type Outer<T> = (Side<T>, Side<T>);
 
+/// The outer layer's quantities for the closed-form derivatives of a layered sphere at one
+/// order, for Hₐ (index 0) and H_b (index 1): H′ = dH/dz at the outer surface, H + zH′ there
+/// (free of cancellation at small z), and the derivative of H with respect to the outer layer's
+/// index through its inner surface (beyond the outer surface's own).
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct OuterDerivs<T> {
+    pub(crate) hp: [Complex<T>; 2],
+    pub(crate) hplus: [Complex<T>; 2],
+    pub(crate) extra_m: [Complex<T>; 2],
+}
+
 #[derive(Clone, Debug)]
 pub(crate) struct State<T: Real> {
     pub(crate) x: T,
@@ -47,6 +58,9 @@ pub(crate) struct State<T: Real> {
     u_x: Vec<T>,
     /// u_k(mx) for real m, before conversion into `u_z`.
     u_real: Vec<T>,
+    /// For a layered sphere's derivatives, per order: 1/Δₐ, 1/Δ_b, ξ_n/Δₐ, ξ_n/Δ_b, Hₐ/m and m H_b
+    /// (what the inner layers' derivatives need).
+    pub(crate) stored: Vec<[Complex<T>; 6]>,
 }
 
 pub(crate) fn real<T: Real>(v: T) -> Complex<T> {
@@ -155,6 +169,7 @@ impl<T: Real> State<T> {
             u_z: Vec::new(),
             u_x: Vec::new(),
             u_real: Vec::new(),
+            stored: Vec::new(),
         }
     }
 
@@ -162,7 +177,7 @@ impl<T: Real> State<T> {
     /// absorption sum.
     pub(crate) fn solve(&mut self, x: T, m: Complex<T>, n: usize, derivatives: bool) {
         self.prepare(x, m, n);
-        self.finish(x, m, n, derivatives, None);
+        self.finish(x, m, n, derivatives, None, None);
     }
 
     /// The first step of [`solve`](Self::solve): u_k(mx) for k = 1, …, `n` + 1, which
@@ -180,7 +195,8 @@ impl<T: Real> State<T> {
 
     /// The rest of [`solve`](Self::solve), after [`prepare`](Self::prepare) with the same
     /// x, m and n. With `outer`, the effective log-derivatives of a layered sphere at each
-    /// order replace D_n(mx); derivatives are then not available.
+    /// order replace D_n(mx); its derivatives then need `outer_derivs`, and give those with
+    /// respect to the outer layer's x and m (and fill `stored` for the inner layers').
     pub(crate) fn finish(
         &mut self,
         x: T,
@@ -188,8 +204,10 @@ impl<T: Real> State<T> {
         n: usize,
         derivatives: bool,
         outer: Option<&[Outer<T>]>,
+        outer_derivs: Option<&[OuterDerivs<T>]>,
     ) {
-        debug_assert!(!(derivatives && outer.is_some()));
+        debug_assert!(!(derivatives && outer.is_some() && outer_derivs.is_none()));
+        self.stored.clear();
         let one = T::one();
         let two = T::from_f64(2.0);
         let i1 = Complex::new(T::zero(), one);
@@ -250,8 +268,9 @@ impl<T: Real> State<T> {
                 Some(Side::Delta(delta)) => d + delta,
                 Some(Side::Direct(h)) => h,
             };
-            let d_m = h(side.map(|s| s.0)) * inv_m;
-            let md = h(side.map(|s| s.1)) * m;
+            let (hh_a, hh_b) = (h(side.map(|s| s.0)), h(side.map(|s| s.1)));
+            let d_m = hh_a * inv_m;
+            let md = hh_b * m;
             let big_a = d_m + real(k_x);
             let big_b = md + real(k_x);
             // a_n, b_n, 1/Δ_a, 1/Δ_b, ξ_n/Δ and ξ_{n−1}/Δ.
@@ -346,7 +365,8 @@ impl<T: Real> State<T> {
             let weight: T = int(2 * k + 1);
             // Re a_n − |a_n|² and Re b_n − |b_n|².
             abs_sum += weight * (-(d_m.im * na) - md.im * nb);
-            if derivatives {
+            let od = outer_derivs.map(|o| o[k - 1]);
+            if derivatives && od.is_none() {
                 // D′ = n(n + 1)/z² − 1 − D², D + zD′ and D − zD′ in terms of u = u_{n+1}(z),
                 // with D = (n + 1)/z − u: the terms in 1/z² and 1/z that cancel at small z
                 // (D + zD′ = O(z)) are removed exactly.
@@ -380,6 +400,38 @@ impl<T: Real> State<T> {
                 jac[1] += weight * (term(d_m, fa_m, la_m, na) + term(md, fb_m, lb_m, nb));
                 jac[2] += weight
                     * (term(d_m, i1 * fa_m, i1 * la_m, na) + term(md, i1 * fb_m, i1 * lb_m, nb));
+            }
+            if let (true, Some(o)) = (derivatives, od) {
+                // A layered sphere: the sphere's formulas with Hₐ, H_b in place of D_n(mx)
+                // (∂a/∂B = −i/Δₐ², ∂a/∂x at fixed B = i(V − B²)/Δₐ², V = n(n + 1)/x² − 1, so
+                // that the outer surface's own terms reduce to the sphere's closed forms), plus
+                // the outer layer's index through its inner surface.
+                let kk1: T = int::<T>(k) * int::<T>(k + 1);
+                let ida2 = inv_da * inv_da;
+                let idb2 = inv_db * inv_db;
+                let [dpa, dpb] = o.hp;
+                let minus_a = hh_a.scale(two) - o.hplus[0]; // Hₐ − zHₐ′
+                let fa_m = -(minus_a * inv_m2) + o.extra_m[0] * inv_m; // dBₐ/dm
+                let fb_m = o.hplus[1] + m * o.extra_m[1]; // dB_b/dm
+                self.da_dm.push(-(i1 * fa_m * ida2));
+                self.db_dm.push(-(i1 * fb_m * idb2));
+                self.da_dx.push(
+                    i1 * m2_minus_1 * (hh_a * hh_a + real(kk1 * inv_x * inv_x)) * inv_m2 * ida2,
+                );
+                self.db_dx.push(i1 * m2_minus_1 * idb2);
+                let k_x2 = k_x * inv_x;
+                let la_x = g_a * (dpa - real(k_x2) - big_a.scale(k_x) + real(one)) + h_a * d_m;
+                let lb_x = g_b * (m2 * dpb - real(k_x2) - big_b.scale(k_x) + real(one)) + h_b * md;
+                let la_m = fa_m * g_a;
+                let lb_m = fb_m * g_b;
+                let term = |f: Complex<T>, df: Complex<T>, l: Complex<T>, n2: T| {
+                    -((df.im - two * f.im * l.re) * n2)
+                };
+                jac[0] += weight * (term(d_m, dpa, la_x, na) + term(md, m2 * dpb, lb_x, nb));
+                jac[1] += weight * (term(d_m, fa_m, la_m, na) + term(md, fb_m, lb_m, nb));
+                jac[2] += weight
+                    * (term(d_m, i1 * fa_m, i1 * la_m, na) + term(md, i1 * fb_m, i1 * lb_m, nb));
+                self.stored.push([inv_da, inv_db, g_a, g_b, d_m, md]);
             }
         }
         self.abs_sum = abs_sum;

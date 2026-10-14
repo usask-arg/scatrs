@@ -43,12 +43,13 @@ pub struct ValidatedDomain {
 
 /// The validated domain: x_L ∈ [10⁻⁶, 10⁴], every layer's m with 0 < Re m ≤ 10, 0 ≤ Im m ≤ 10,
 /// |m| ≥ 0.1 and |m|·x_L ≤ 3·10⁴, at most 16 layers, any radii; the derivatives up to
-/// x_L = 100.
+/// x_L = 1000.
 ///
 /// Beyond |m|·x_L = 3·10⁴ (x_L = 10⁴ with a real index of 10), the narrow resonances of thin
-/// lossless shells cost the coefficients up to 10⁹ ulps. Above x_L = 100 the derivatives
-/// (dual numbers through the recursion) lose accuracy faster than the values, worst for thin
-/// lossless shells: the amplitude derivatives reach C ≈ 6000 at x_L ~ 10³.
+/// lossless shells cost the coefficients up to 10⁹ ulps. Above x_L = 1000 the derivatives lose
+/// accuracy faster than the values for thin lossless shells, whose two surfaces' rounding errors
+/// add up over the orders in the forward amplitude: its derivative with respect to the index of
+/// an air shell of a thousandth of the radius reaches C ≈ 1700 at x_L = 10⁴.
 pub const VALIDATED_DOMAIN: ValidatedDomain = ValidatedDomain {
     x_min: 1e-6,
     x_max: 1e4,
@@ -57,7 +58,7 @@ pub const VALIDATED_DOMAIN: ValidatedDomain = ValidatedDomain {
     abs_m_min: 0.1,
     max_layers: 16,
     max_phase: 3e4,
-    derivative_x_max: 100.0,
+    derivative_x_max: 1e3,
 };
 
 impl ValidatedDomain {
@@ -119,8 +120,8 @@ impl ValidatedDomain {
         let near_one = (kappa / (1.0 + big * x)).max(1.0);
         let quadrature = |order: usize| ((order as f64 + 1.0).powi(2) + x * x) / 8.0;
         let prior = match output {
-            // The derivatives come from dual numbers through the algorithm, so they share its
-            // losses near m = 1 (a sphere's closed forms do not).
+            // The derivatives are built from the recursion's H, so they share its losses near
+            // m = 1 (a sphere's closed forms do not).
             MieOutput::CoefficientDerivatives | MieOutput::AmplitudeDerivatives => kappa,
             MieOutput::EfficiencyJacobian | MieOutput::PhaseMatrixDerivatives => kappa * near_one,
             MieOutput::GreekCoefficients { order } => kappa + quadrature(order),

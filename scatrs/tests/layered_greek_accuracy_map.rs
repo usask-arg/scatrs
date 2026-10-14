@@ -6,7 +6,7 @@
 //! against `PARTICLES`, with the phase matrix at the cosines of the sphere's Greek map,
 //! normalized, and the Greek coefficients up to all orders (2N) for x_L ≤ 160 and order 100
 //! above, as the sphere's Greek map (`tests/mie_greek_accuracy_map.rs`) has them. The derivative
-//! columns cover the derivatives' domain (x_L ≤ 100). The measures are the sphere's, with the
+//! columns cover the derivatives' domain (x_L ≤ 1000). The measures are the sphere's, with the
 //! condition numbers summed over every layer's x_l, Re m_l and Im m_l (`tests/common/layered.rs`).
 //!
 //! With `SCATRS_ACCURACY_MAP=path` the test writes every C as JSON:

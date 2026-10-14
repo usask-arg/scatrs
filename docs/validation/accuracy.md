@@ -6,26 +6,40 @@ kernelspec:
   language: python
 ---
 
-# Accuracy of the Mie outputs
+# Internal validation
 
-The accuracy of every Mie output is declared in the code, as a tolerance relative to the
-conditioning of the problem (see {ref}`mie-accuracy-model`), and enforced by two tests in
-continuous integration on Linux, macOS and Windows:
+<!-- synced with scatrs/src/mie/domain.rs rustdoc -->
 
-- `scatrs/tests/mie_reference.rs` compares every output with the Arb reference values
-  ({doc}`reference-suite`): 306 spheres for the values, 80 for the derivatives.
-- `scatrs/tests/mie_accuracy_map.rs` compares `f64` with `DoubleDouble` on a dense grid: 104
-  size parameters from $10^{-6}$ to $2\cdot10^4$ against 28 refractive indices, with the
-  amplitudes at 41 angles. `DoubleDouble` is itself checked against Arb, on every output:
-  within 16 times the declared constants in units of $2^{-104}$, so its own error moves no
-  value of the map by more than $2^{-48}$ of the declared constant.
+Every output of {mod}`scatrs.mie` has a declared accuracy, and the tests check it across the
+whole validated domain ({doc}`overview` explains why). This page shows what that accuracy is,
+how it is checked, and how much margin the checks leave. The averages over size distributions
+have error estimates instead, which are checked at the end of the page.
 
-This page plots the map. Each value is
+## The declared accuracy
 
-$$C = \frac{\text{error}}{(\kappa' + \mathrm{cond})\,2^{-52}},$$
+Inside the validated domain ($10^{-6} \le x \le 2\cdot10^4$, $0 < \mathrm{Re}\,m \le 10$,
+$0 \le \mathrm{Im}\,m \le 10$, $\lvert m\rvert \ge 0.1$), every output is within
 
-the constant the declared tolerance $C\,(\kappa' + \mathrm{cond})\,2^{-52}$ would need at that
-point; the declared constants are at least 4 times the largest value found.
+$$C\,(\kappa' + \mathrm{cond})\,2^{-52}$$
+
+of the exact value, where $2^{-52} \approx 2.2\cdot10^{-16}$ is the precision of a double:
+
+- **cond** is the output's condition number, how much it changes, relative to its size, when
+  $x$ and $m$ change by a relative amount. Rounding the inputs to double precision alone
+  moves the output by up to about $\mathrm{cond}\cdot2^{-53}$, so no method can do better.
+  It is large next to the sharp resonances of weakly absorbing spheres.
+- **κ′** grows with the size of the sphere, roughly like $\lvert m\rvert x$: the number of
+  terms of the series, and the cancellation between them, grow with it.
+- **C** is a constant for each kind of output, set at least four times the worst error found
+  anywhere in the tests (16 for the efficiencies and $g$, for example).
+
+The error is measured relative to the output (for amplitudes and phase-matrix elements,
+relative to their typical size, so that deep minima of the angular pattern are not held to a
+relative standard they cannot meet). {doc}`/theory/mie` gives the exact definitions.
+
+In practice the declared accuracy of the extinction efficiency runs from about $10^{-14}$ for
+small spheres to a few times $10^{-10}$ for the largest, with spikes at the resonances of
+non-absorbing spheres, where the output itself is that sensitive to the inputs:
 
 ```{code-cell} python
 import json
@@ -34,7 +48,48 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 
+from scatrs import mie
 
+xs = np.geomspace(1e-3, 2e4, 3000)
+fig, ax = plt.subplots(figsize=(7, 3.8), layout="constrained")
+for m in (1.33 + 0j, 1.5 + 0.01j, 2 + 1j):
+    q = mie.efficiencies(xs, m, derivatives=True)
+    d = {p: q.d(p).q_ext for p in ("x", "m_real", "m_imag")}
+    cond = (xs * abs(d["x"]) + abs(m.real) * abs(d["m_real"]) + abs(m.imag) * abs(d["m_imag"]))
+    cond /= q.q_ext
+    kappa = (1 + max(1, abs(m)) * xs) * max(1, abs(m) / abs(m - 1))
+    declared = 16 * (kappa + cond) * 2.0**-52
+    ax.loglog(xs, declared, lw=1, label=f"$m$ = {m.real:g} + {m.imag:g}i")
+    assert declared.max() < 1e-8
+ax.set(xlabel="size parameter $x$", ylabel="declared relative accuracy",
+       title="Extinction efficiency $Q_\\mathrm{ext}$")
+ax.legend()
+plt.show()
+```
+
+## How it is checked
+
+Two tests enforce the declared accuracy, on Linux, macOS and Windows, for every change:
+
+- **Against Arb.** `scatrs/tests/mie_reference.rs` compares every output with reference values
+  computed independently in Arb ball arithmetic, with rigorous error bounds
+  ({doc}`/theory/reference-suite`): 306 spheres for the values, 80 for the derivatives, at
+  size parameters from $10^{-6}$ to $2\cdot10^4$ and refractive indices from near 1 to
+  metal-like.
+- **On a dense grid.** `scatrs/tests/mie_accuracy_map.rs` compares the double-precision results
+  with the same computation in double-double arithmetic (about 32 digits, itself checked
+  against Arb) on a grid of 104 size parameters from $10^{-6}$ to $2\cdot10^4$ against 28
+  refractive indices, with the amplitudes at 41 angles.
+
+The maps below show the result of the second test. Each cell is the constant $C$ that the
+worst error at that point would need,
+
+$$C = \frac{\text{error}}{(\kappa' + \mathrm{cond})\,2^{-52}},$$
+
+so a cell below the declared constant passes, and the colour scale ends at the declared
+constant. The table gives the worst value of each map against its declared constant.
+
+```{code-cell} python
 def load(name):
     """An accuracy map: its size parameters, refractive indices and output names."""
     data = json.loads(Path("data", name).read_text())
@@ -75,61 +130,18 @@ def plot_map(data, x, m, names, rows, height):
     plt.show()
 
 
-def by_index(data, x, m, names):
-    """The worst C of each output over all size parameters, for each refractive index."""
-    print(f"{'m':<14}" + "".join(f"{n[:10]:>11}" for n in names))
-    for j, z in enumerate(m):
-        row = [max(data["c"][name][i][j] for i in range(len(x))) for name in names]
-        print(f"{z.real:g}{z.imag:+g}i".ljust(14) + "".join(f"{v:11.2f}" for v in row))
-
-
 data, x, m, names = load("mie-accuracy-map.json")
 print(f"{len(x)} size parameters × {len(m)} refractive indices")
 worst_c(data, names)
 ```
 
-## The map
-
-Each panel shows $\log_{10} C$ for one output: size parameter across, refractive index down.
-White cells are exact (for example $Q_\text{abs}$ of real $m$, which is exactly 0).
+Every output stays well inside its declared accuracy. The efficiencies and $g$ use at most a
+fifth of theirs, and the amplitudes at most about a seventh, largest for refractive indices
+below 1 and for metal-like spheres. White cells are exact, such as $Q_\text{abs}$ of a real
+refractive index, which is exactly 0.
 
 ```{code-cell} python
 plot_map(data, x, m, names, rows=5, height=16)
-```
-
-## Why the tolerance has two condition terms
-
-A tolerance proportional to the a-priori factor κ′ alone (for the values $\kappa(x, m) = (1 +
-\max(1, \lvert m\rvert)\,x)\max(1, \lvert m\rvert/\lvert m - 1\rvert)$) fails where the outputs
-are more sensitive to $x$ and $m$ than $\max(1, \lvert m\rvert)\,x$ suggests. That is mostly
-near the resonances of weakly absorbing and lossless spheres, which are arbitrarily sharp: on
-this grid, κ′ alone would need $C = 360$ for the coefficients ($x = 1250$, $m = 2$), 3700 and
-4000 for the derivatives of the coefficients and amplitudes ($x = 2500$, $m = 1.33 +
-10^{-8}i$), and 7600 for the efficiency Jacobian ($x = 1.6\cdot10^4$, $m = 10$) — and more on a
-denser grid, which lands closer to sharper resonances. But not only there: $g$ of a small,
-strongly absorbing sphere ($x = 0.125$, $m = 5 + 5i$), with no resonance, would need 98. The
-relative condition number, computed from double-double derivatives (and, for the derivatives,
-from central differences of them), measures that sensitivity at each point.
-
-The condition number alone is not enough either: the summed series lose accuracy to
-cancellation that the inputs' conditioning does not show. Under cond alone, backscattering by
-a metallic sphere ($m = 0.05 + 4i$, $x = 2500$), whose alternating series is far smaller than
-its terms, would need $C \approx 6\cdot10^5$; the amplitudes $10^5$, $g$ and $Q_\text{ext}$
-$6\cdot10^4$ and $5\cdot10^4$; and the efficiency Jacobian of large absorbing spheres, whose
-derivatives barely vary with $x$ and $m$, $10^{17}$. With both terms every value stays below
-$C = 3$ except the amplitudes (below 19), and every derivative below 70.
-
-## By refractive index
-
-The worst $C$ of each output over all size parameters, for each refractive index of the grid.
-The values stay within a few units everywhere except the amplitudes, which reach about 19 at
-$\lvert m\rvert < 1$ and 9 for metal-like spheres ($m = 0.5 + 2i$): their error grows like $x$
-whatever $m$. Among the derivatives, the coefficient derivatives of high-index spheres with
-some absorption ($m = 8 + 0.1i$, $3 + 0.001i$) and the efficiency Jacobian of lossless water
-spheres ($m = 1.33$) reach a few tens.
-
-```{code-cell} python
-by_index(data, x, m, names)
 ```
 
 (greek-accuracy)=
@@ -137,61 +149,34 @@ by_index(data, x, m, names)
 
 <!-- synced with scatrs/tests/mie_greek_accuracy_map.rs -->
 
-The phase matrix and the Greek coefficients follow the same model, with their own error
-measures and priors κ′, and a quadrature term for the Greek coefficients
-({ref}`mie-accuracy-model`). Two more tests enforce them in CI:
+The phase matrix and the Greek coefficients follow the same model, with a term for the
+quadrature added to the Greek coefficients ({ref}`mie-accuracy-model`). Two more tests
+enforce them:
 
-- `scatrs/tests/mie_greek_reference.rs` compares them with the Arb reference values
-  ({doc}`reference-suite`): 18 cases (17 spheres, one at two orders) from $x = 0.1$ to 200, where the worst $C$ is 0.59 for
-  the phase matrix and 0.61 for the Greek coefficients.
-- `scatrs/tests/mie_greek_accuracy_map.rs` compares `f64` with `DoubleDouble` on a grid of 46
+- `scatrs/tests/mie_greek_reference.rs` compares them with the Arb reference values: 18 cases
+  (17 spheres, one at two orders) from $x = 0.1$ to 200, where the worst $C$ is 0.59 for the
+  phase matrix and 0.61 for the Greek coefficients.
+- `scatrs/tests/mie_greek_accuracy_map.rs` compares them with double-double on a grid of 46
   size parameters from $10^{-6}$ to $10^3$ against the 28 refractive indices of the Mie map,
   with the normalized phase matrix at 13 cosines (through the forward peak, the sides and the
   glory) and the Greek coefficients up to all orders for $x \le 160$ and to order 100 above,
   each with its derivatives.
 
-The double-double Greek coefficients cost $O(x^2)$ (the amplitudes at about $x$ nodes, and
-about $x$ orders at each), and the derivative measures take seven of them per point, so the
-map stops at $x = 10^3$. A test marked `#[ignore]`, which CI runs weekly, checks the values
-beyond it: at $x = 2\cdot10^3$ up to all orders ($m = 1.33$ and $0.3 + 0.6i$), and at
-$x = 10^4$ ($m = 1.5 + 0.01i$) and $2\cdot10^4$ ($m = 1.33$) up to order 64. Its worst $C$ is
-2.7 for the phase matrix (at $x = 2\cdot10^3$, $m = 0.3 + 0.6i$) and 0.22 for the Greek
-coefficients (at $x = 2\cdot10^4$).
-
-The worst values of the map are 7.4 for the phase matrix ($x = 10^3$, $m = 0.5 +
-10^{-4}i$), 22 for its derivatives ($x = 10^{-3}$, same $m$), 1.7 for the Greek coefficients
-($x = 1$, $m = 1.0001$) and 2.8 for their derivatives ($x = 6.4\cdot10^{-6}$, $m = 0.1$),
-against declared constants of 32, 128, 8 and 16.
+The double-double Greek coefficients are slow for large spheres, so the map stops at
+$x = 10^3$. A weekly test checks larger spheres: at $x = 2\cdot10^3$ up to all orders
+($m = 1.33$ and $0.3 + 0.6i$), and at $x = 10^4$ ($m = 1.5 + 0.01i$) and $2\cdot10^4$
+($m = 1.33$) up to order 64. Its worst $C$ is 2.7 for the phase matrix (at $x = 2\cdot10^3$,
+$m = 0.3 + 0.6i$) and 0.22 for the Greek coefficients (at $x = 2\cdot10^4$). With the
+quadrature term, $C$ is at most 1.7 for the Greek coefficients everywhere it was measured.
 
 ```{code-cell} python
 greek, gx, gm, gnames = load("greek-accuracy-map.json")
 print(f"{len(gx)} size parameters × {len(gm)} refractive indices")
 worst_c(greek, gnames)
-# The worst values quoted above.
-quoted = {
-    "phase_matrix": 7.4, "phase_matrix_derivatives": 22, "greek": 1.7, "greek_derivatives": 2.8,
-}
-for name, c in quoted.items():
-    assert round(np.max(greek["c"][name]), 1 if c < 10 else 0) == c, name
 ```
-
-The quadrature term matters most at large $x$ and $L$. Without it, the Greek coefficients
-would need $C = 85$ at $x = 100$ (all orders) and $C = 100$ at $x = 2\cdot10^4$ (to order
-64), and more for larger spheres and orders, since the error of the rounded nodes grows like
-$L^2$ and $x^2$. With it, $C$ is at most 1.7 on the map. The phase matrix at given cosines has
-no quadrature and needs no such term.
 
 ```{code-cell} python
 plot_map(greek, gx, gm, gnames, rows=2, height=7)
-```
-
-By refractive index, the phase matrix is least accurate for $\lvert m\rvert < 1$ and, at about
-half that, for large $\lvert m\rvert$ or strong absorption, like the amplitudes it is computed
-from; the Greek coefficients
-stay within 1.7 everywhere, largest next to $m = 1$.
-
-```{code-cell} python
-by_index(greek, gx, gm, gnames)
 ```
 
 (ensemble-accuracy)=
@@ -200,14 +185,17 @@ by_index(greek, gx, gm, gnames)
 <!-- synced with scatrs/tests/ensemble.rs -->
 
 The averages over size distributions ({doc}`/theory/ensembles`) add the error of the size
-integration and of the cut-offs, which every output's error estimate covers; the Mie
-solutions' own errors, declared above, are far smaller at the tolerances the ensembles accept
-and are not included. The test `error_estimates_bound_the_true_errors` in
-`scatrs/tests/ensemble.rs` calibrates the estimates in CI. It computes nine distributions at
-rtol $10^{-6}$ and again at rtol $10^{-11}$ (the reference), with backscattering refined, the
-Greek coefficients to order 24, the phase matrix at $\mu = 1, 0.7, 0, -1$, and the derivatives
-with respect to every parameter of the distribution and to $\mathrm{Re}\,m$ and
-$\mathrm{Im}\,m$:
+integration and of the cut-offs of the distribution. Every output has an estimate of that
+error (`result.error`), and the integration is refined until the estimates of the cross
+sections, $g$ and the moments meet the tolerance `rtol` (default $10^{-6}$). The Mie
+solutions' own errors, declared above, are far smaller at the tolerances the ensembles accept,
+and are not included.
+
+The test `error_estimates_bound_the_true_errors` in `scatrs/tests/ensemble.rs` checks the
+estimates for every change. It computes nine distributions at rtol $10^{-6}$ and again at rtol
+$10^{-11}$ (the reference), with backscattering refined, the Greek coefficients to order 24,
+the phase matrix at $\mu = 1, 0.7, 0, -1$, and the derivatives with respect to every parameter
+of the distribution and to $\mathrm{Re}\,m$ and $\mathrm{Im}\,m$:
 
 | Distribution | $m$ | $\lambda$ |
 |---|---|---|
@@ -221,43 +209,37 @@ $\mathrm{Im}\,m$:
 | tabulated, $(0.05, 0.1, 0.4, 1)$, densities $(0, 3, 1, 0.2)$ | $2 + 0.5i$ | 0.4 |
 | multimodal: weight 1000, lognormal $r_g = 0.05$, $\sigma_g = 1.5$; weight 1, lognormal $r_g = 1$, $\sigma_g = 1.4$ | $1.53 + 0.005i$ | 0.55 |
 
-Both results must converge; the refined cross sections must be within rtol of the reference
-($g$ within $2\cdot10^{-6}$); the true errors of the refined outputs ($\langle
-C_\text{ext}\rangle$, $\langle C_\text{sca}\rangle$, $\langle C_\text{back}\rangle$, $g$ and
-the moments) must be within their estimates; and those of the others (the other values, the
-Greek coefficients, the phase matrix and every derivative) within `ESTIMATE_FACTOR` = 2 times
-their estimates, since $\lvert K_{15} - G_7\rvert$ is an estimate, not a bound. The worst ratio
-of true error to estimate is 0.003 for the refined outputs and 1.210 for the others.
+Both results must converge, and the refined cross sections must be within rtol of the
+reference ($g$ within $2\cdot10^{-6}$). The true errors of the refined outputs
+($\langle C_\text{ext}\rangle$, $\langle C_\text{sca}\rangle$, $\langle C_\text{back}\rangle$,
+$g$ and the moments) must be within their estimates, and those of the other outputs (the
+other values, the Greek coefficients, the phase matrix and every derivative) within 2 times
+their estimates. The worst ratio of true error to estimate is 0.003 for the refined outputs
+and 1.210 for the others. {doc}`/examples/ensemble` shows the same comparison for one
+distribution.
 
 What that supports:
 
-- **Refined quantities** ({ref}`the targets of pass 1 <ensemble-pass-1>`): when `converged` is
-  true, their estimates meet rtol, and on the grid they bounded the true errors with the margin
-  above. $\langle C_\text{abs}\rangle$ is refined to rtol of $\langle C_\text{ext}\rangle$
-  only, so it counts among the other outputs. The estimates of ratios ($\omega$, $g$, the lidar
-  ratio, $r_\text{eff}$ and the normalized forms) are propagated from those of their numerator
-  and denominator to first order.
-- **The other outputs** are integrated on the panels that the refined quantities chose, and
-  their estimates are only as good as those panels are for them. On the grid their true errors
-  reached 1.21 times their estimates; they are not guaranteed elsewhere.
-- **Backscattering is indicative unless refined.** Without `refine_backscatter`, the estimates
-  of $\langle C_\text{back}\rangle$ and the lidar ratio (and their derivatives) come from panels
-  that may not resolve the glory ripples: in {doc}`/examples/ensemble`, the true errors of both
-  exceed their estimates. With it, they are in the calibration above.
-- **The Greek coefficients' estimates** are bounds given the estimates of the tables, which
-  are projected with absolute values. Since every node of a panel fills the tables of the
-  panel's projector band, they are about as tight as the other estimates. See
-  {doc}`/examples/ensemble`.
+- **The refined outputs.** When `converged` is true, their estimates meet rtol, and on the
+  test grid they bounded the true errors with a wide margin. The estimates of ratios
+  ($\omega$, $g$, the lidar ratio, $r_\text{eff}$ and the normalized outputs) are propagated
+  from those of their numerator and denominator.
+- **The other outputs** are integrated on the size panels that the refined outputs chose, so
+  their estimates are only as good as those panels are for them. On the grid their true
+  errors reached 1.21 times their estimates. This includes $\langle C_\text{abs}\rangle$,
+  which is refined only to rtol of $\langle C_\text{ext}\rangle$.
+- **Backscattering is indicative unless refined.** Without `refine_backscatter=True`, the
+  estimates of $\langle C_\text{back}\rangle$ and the lidar ratio come from panels that may not
+  resolve the narrow glory ripples, and the true errors can exceed them.
 
 Two cases are flagged with `converged = false` rather than estimated well:
 
 - **Non-absorbing spheres.** Without absorption, the efficiencies of large spheres have narrow
-  resonance ripples, which can take more than `max_panels` panels. For a lognormal with
-  $r_g = 1$, $\sigma_g = 2$ and $m = 1.33$ at $\lambda = 0.5$, the integration stops at 4096
-  panels with an estimate of about $10^{-5}$ of $\langle C_\text{ext}\rangle$; the true error
-  of the stopped result is $1.0\cdot10^{-6}$. With `max_panels` raised it converges at 5020
-  panels, but its true error, $1.1\cdot10^{-6}$ of $\langle C_\text{ext}\rangle$, exceeds its
-  estimate, $9.7\cdot10^{-7}$: the estimate relies on the panels resolving the ripples.
+  resonance ripples, which can take more than `max_panels` panels to resolve. For a lognormal
+  with $r_g = 1$, $\sigma_g = 2$ and $m = 1.33$ at $\lambda = 0.5$, the integration stops at
+  4096 panels with an estimate of about $10^{-5}$ of $\langle C_\text{ext}\rangle$; the true
+  error of the stopped result is $1.0\cdot10^{-6}$. With `max_panels` raised it converges at
+  5020 panels, but its true error, $1.1\cdot10^{-6}$ of $\langle C_\text{ext}\rangle$, exceeds
+  its estimate, $9.7\cdot10^{-7}$.
 - **Derivatives with respect to $\mathrm{Im}\,m$ at $\mathrm{Im}\,m = 0$** have a spike at every
-  resonance and do not converge; the values do (the test `unresolvable_derivatives_are_flagged`
-  checks a gamma distribution with $m = 1.33$).
+  resonance and do not converge; the values do.

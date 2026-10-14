@@ -20,26 +20,43 @@ documentation is built; its checks are `assert`s, so a failing check fails the b
 A water droplet with $x = 10$ and $m = 1.33$. The phase function $F_{11}$ is normalized so
 that $\tfrac12\int_{-1}^1 F_{11}\,d\mu = 1$, and the degree of linear polarization of
 scattered unpolarized light is $-F_{12}/F_{11}$: positive when the light is polarized
-perpendicular to the scattering plane.
+perpendicular to the scattering plane. $F_{33}/F_{11}$ and $F_{34}/F_{11}$ complete the phase
+matrix of a sphere ($F_{22} = F_{11}$ and $F_{44} = F_{33}$).
 
 ```{code-cell} python
+import matplotlib.pyplot as plt
 import numpy as np
 
 from scatrs import mie
 from scatrs.special import gauss_legendre, wigner_d
 
 x, m = 10.0, 1.33
-angles = np.arange(0, 181, 10)
+angles = np.linspace(0, 180, 721)
 mu = np.cos(np.radians(angles))
 f = mie.phase_matrix(x, m, mu)
-print(f"{'angle':>6}{'F11':>14}{'-F12/F11':>11}")
-for a, f11, p in zip(angles, f.f11, -f.f12 / f.f11, strict=True):
-    print(f"{a:6d}{f11:14.6e}{p:+11.4f}")
+
+fig, axes = plt.subplots(2, 2, figsize=(10, 6), sharex=True, layout="constrained")
+axes[0, 0].semilogy(angles, f.f11)
+axes[0, 0].set(ylabel="$F_{11}$")
+for ax, ratio, label in [
+    (axes[0, 1], -f.f12 / f.f11, "$-F_{12}/F_{11}$"),
+    (axes[1, 0], f.f33 / f.f11, "$F_{33}/F_{11}$"),
+    (axes[1, 1], f.f34 / f.f11, "$F_{34}/F_{11}$"),
+]:
+    ax.plot(angles, ratio)
+    ax.axhline(0, color="0.6", lw=0.8)
+    ax.set(ylabel=label, ylim=(-1.05, 1.05))
+for ax in axes[1]:
+    ax.set(xlabel="scattering angle (°)", xticks=range(0, 181, 30))
+fig.suptitle(f"$x$ = {x:g}, $m$ = {m}")
+plt.show()
 ```
 
 The phase function is a polynomial of degree $2N$ in $\mu$, so a Gauss–Legendre rule with
 $N + 1$ points integrates it exactly. In the forward and backward directions
-$\lvert S_1\rvert = \lvert S_2\rvert$, so $F_{12} = 0$ and the light stays unpolarized.
+$\lvert S_1\rvert = \lvert S_2\rvert$, so $F_{12} = 0$ and the light stays unpolarized. And
+since a single sphere scatters coherently, its elements satisfy
+$F_{11}^2 = F_{12}^2 + F_{33}^2 + F_{34}^2$ at every angle.
 
 ```{code-cell} python
 n = int(mie.default_n_max(x))
@@ -49,6 +66,8 @@ print("normalization:", mean)
 assert abs(mean - 1) < 1e-13
 # Each end measured against its own F11 (the forward peak is far larger than the backward).
 assert abs(f.f12[0]) < 1e-13 * f.f11[0] and abs(f.f12[-1]) < 1e-13 * f.f11[-1]
+# A single sphere's phase matrix is a pure Mueller matrix: F11² = F12² + F33² + F34².
+assert np.allclose(f.f12**2 + f.f33**2 + f.f34**2, f.f11**2, rtol=1e-12, atol=0)
 ```
 
 ## Greek coefficients
@@ -69,13 +88,21 @@ for l in range(8):
     print(f"{l:3d}" + "".join(f"{c:12.6f}" for c in row))
 print("3g =", 3 * q.g)
 assert L == 2 * g.n_terms
+
+fig, ax = plt.subplots(figsize=(8, 3.8), layout="constrained")
+for name in names:
+    ax.plot(getattr(g, name), label=f"$\\{name[:-1]}_{name[-1]}$")
+ax.axhline(0, color="0.6", lw=0.8)
+ax.set(xlabel="order $l$", ylabel="coefficient", title=f"$x$ = {x:g}, $m$ = {m}, $L = 2N$ = {L}")
+ax.legend(ncols=2)
+plt.show()
 assert g.alpha1[0] == 1
 assert abs(g.alpha1[1] - 3 * q.g) < 1e-13 * 3 * q.g
 ```
 
 The expansion gives the phase matrix back. Here $F_{11}$ and $F_{12}$ are summed from the
 coefficients with {func}`scatrs.special.wigner_d` and compared with
-{func}`~scatrs.mie.phase_matrix` at every angle of the table above.
+{func}`~scatrs.mie.phase_matrix` at every angle of the figure above.
 
 ```{code-cell} python
 f11 = wigner_d(0, 0, L, mu) @ g.alpha1
@@ -103,6 +130,24 @@ for order in (8, 16, 24, 32, 36, L):
 assert abs(np.sum(g.alpha1[:17]) / peak - 1) > 0.1
 assert abs(np.sum(g.alpha1[:37]) / peak - 1) < 1e-13
 assert abs(np.sum(g.alpha1) / peak - 1) < 1e-12
+```
+
+Summed at every angle, the truncated expansions oscillate about the phase function and can go
+negative, while the full expansion reproduces it.
+
+```{code-cell} python
+fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(10, 3.8), layout="constrained")
+ax1.semilogy(angles, f.f11, color="k", lw=2.5, alpha=0.3, label="phase_matrix")
+for order in (8, 16, 20, L):
+    partial = wigner_d(0, 0, order, mu) @ g.alpha1[: order + 1]
+    ax1.semilogy(angles, np.where(partial > 0, partial, np.nan), lw=1, label=f"$L$ = {order}")
+ax1.set(xlabel="scattering angle (°)", ylabel="$F_{11}$", xticks=range(0, 181, 30),
+        title="Expansion summed to order $L$ (negative values not shown)")
+ax1.legend(loc="upper right")
+orders = np.arange(L + 1)
+ax2.semilogy(orders, abs(np.cumsum(g.alpha1) / peak - 1) + 1e-17, ".-")
+ax2.set(xlabel="order $L$", ylabel="relative error", title="Forward peak, $\\Theta = 0°$")
+plt.show()
 ```
 
 ## Derivatives

@@ -66,8 +66,8 @@
 //!
 //! Every method is generic over [`Real`]: `f64`, `DoubleDouble` and `Dual<T, N>`. With
 //! `Dual`, the derivatives are those of the computed values with respect to whatever the
-//! caller seeds in x and m, and the values are bitwise those of the underlying type: the
-//! derivative oracle for the closed forms.
+//! caller seeds in x and m, and the values are bitwise those of the underlying type. The tests
+//! use them to check the closed-form derivatives.
 
 mod amplitudes;
 mod domain;

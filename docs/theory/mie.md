@@ -1,9 +1,9 @@
 # Homogeneous spheres (Lorenz–Mie)
 
-This page derives the methods behind `scatrs::mie` (Python: `scatrs.mie`): the series
+This page derives the methods behind {rust}`scatrs::mie` (Python: {mod}`scatrs.mie`): the series
 and its truncation, the recurrences, the cancellation-free forms of the absorption and the
 derivatives, the phase matrix and its Greek coefficients, the accuracy model, and the rigorous
-reference values. The rustdoc of `scatrs::mie` is the authoritative statement of the
+reference values. The rustdoc of {rust}`scatrs::mie` is the authoritative statement of the
 contracts; the figures here repeat it.
 
 ## Conventions and the series
@@ -260,16 +260,15 @@ $Q_\text{sca}$.
 
 **Streaming.** For each node, the four Wigner recurrences ($d_{00}$, $d_{22}$, $d_{2,-2}$,
 $d_{02}$) run once up to $L$ and accumulate into the coefficient arrays: $O(n_q L)$ time and
-$O(n_q + L)$ memory (the phase-matrix tables at the nodes and the coefficients). Storing the d-functions at every node instead would take about 13 GB at
-$x = 10^4$ (four functions at about $2\cdot10^4$ nodes and $2\cdot10^4$ orders, in `f64`).
+$O(n_q + L)$ memory (the phase-matrix tables at the nodes and the coefficients).
 
 **Linearity.** The projection is linear in $F$, so projecting the derivative tables of the
 phase matrix gives the Jacobians of the Greek coefficients, in the same pass: the
 d-functions, which dominate the cost, are shared by any number of tables. The normalized
 derivatives then follow from the quotient rule, $d(r/r_0) = (dr - (r/r_0)\,dr_0)/r_0$. A
 `GreekProjector` holds a rule and its order and projects tables given at its nodes, for
-example the summed phase matrices of many spheres at once: the basis for size distributions
-in phase 2.
+example the summed phase matrices of many spheres at once: the basis of the size-distribution
+averages ({doc}`ensembles`).
 
 ### Sign conventions
 
@@ -459,7 +458,7 @@ runs:
 
 The Greek coefficients for all orders cost the amplitudes at $n_q \approx 2N$ nodes,
 $O(N^2)$, and the four Wigner recurrences up to $L = 2N$ at each node, also $O(N^2)$. In
-`f64` on the same machine they take 0.09 s at $x = 10^3$ and 7.6 s at $x = 10^4$ (measured
-during development, not by the benchmark). The Gauss–Legendre rule itself is negligible: above
+`f64` on the same machine they take 0.09 s at $x = 10^3$ and 7.6 s at $x = 10^4$ (a one-off
+measurement, not part of the benchmark). The Gauss–Legendre rule itself is negligible: above
 100 points it comes from $O(n)$ asymptotic expansions, 6 ms for the $2\cdot10^4$ nodes of
 $x = 10^4$ ({ref}`gauss-legendre`).

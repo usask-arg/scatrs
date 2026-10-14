@@ -1,4 +1,15 @@
 //! Error type shared by every scatrs computation.
+//!
+//! Every fallible function returns [`Result`], whose [`Error`] says what went wrong:
+//!
+//! * [`Error::InvalidInput`]: an argument is outside its valid range or a documented limit
+//!   (for example a negative imaginary part of the refractive index). Nothing is computed.
+//! * [`Error::OutsideValidatedDomain`]: the inputs are valid, but outside the domain where the
+//!   accuracy has been validated. Set `allow_unvalidated` to compute anyway.
+//! * [`Error::NotConverged`]: an iteration missed the accuracy it promises.
+//!
+//! An ensemble whose size integration does not meet its tolerance is not an error: its result
+//! is returned, with `converged` false.
 
 /// Errors returned by scatrs computations.
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]

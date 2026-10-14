@@ -2,12 +2,13 @@
 //! mixtures.
 //!
 //! [`compute`] averages the optical properties of spheres over a [`SizeDistribution`] at each
-//! wavelength; [`compute_mixture`] averages over several [`Component`]s. The size integral is
-//! adaptive (Gauss–Kronrod panels in ln r, refined until the cross sections and g meet `rtol`;
-//! the distribution's moments and normalization are integrated separately), and every output
-//! comes with an error estimate and, on request, derivatives with respect to the distribution
-//! parameters, the refractive indices and the mixture weights. See the theory chapter of the
-//! documentation.
+//! wavelength; [`compute_mixture`] averages over several [`Component`]s, and [`compute_batch`]
+//! over each of many distributions of one material (an optics database), sharing their Mie
+//! solutions. The size integral is adaptive (Gauss–Kronrod panels in ln r, refined until the
+//! cross sections and g meet `rtol`; the distribution's moments and normalization are
+//! integrated separately), and every output comes with an error estimate and, on request,
+//! derivatives with respect to the distribution parameters, the refractive indices and the
+//! mixture weights. See the theory chapter of the documentation.
 //!
 //! ```
 //! use num_complex::Complex;

@@ -38,7 +38,10 @@ uvx --from actionlint-py==1.7.12.25 actionlint   # after changing .github/workfl
 ```
 
 The documentation build runs the examples and downloads the Python and numpy inventories; see
-`docs/installation.md` for building it offline.
+`docs/installation.md` for building it offline. It also runs `cargo doc` (warnings are errors)
+and publishes the Rust API reference under `rustdoc/` in the site. In the pages, write
+``{rust}`scatrs::mie::Mie::compute` `` to link to a Rust item: a path that rustdoc did not
+document fails the build.
 
 CI also tests the packaged crate on its own, as `cargo test` on the crates.io sources would:
 extract `target/package/scatrs-*.crate` outside the repository and run `cargo test --locked`

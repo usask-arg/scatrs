@@ -1,8 +1,8 @@
 # Ensembles of spheres
 
-This page describes the methods behind `scatrs::ensemble` (Python: {mod}`scatrs.ensemble`): the
+This page describes the methods behind {rust}`scatrs::ensemble` (Python: {mod}`scatrs.ensemble`): the
 size distributions, their cut-offs, the adaptive size integration, the error estimates, the
-Jacobians and the mixtures. The rustdoc of `scatrs::ensemble` is the authoritative statement of
+Jacobians and the mixtures. The rustdoc of {rust}`scatrs::ensemble` is the authoritative statement of
 the interface; the single-sphere quantities come from {doc}`mie`.
 
 ## Averages
@@ -20,7 +20,7 @@ denominator over its wider moment range (below), so cross sections are per parti
 square of the unit of the radii. The outputs at each wavelength are
 
 - $\langle C_\text{ext}\rangle$, $\langle C_\text{sca}\rangle$ and $\langle C_\text{abs}\rangle$,
-  the last from $Q_\text{abs}$, which phase 1a computes without cancellation;
+  the last from $Q_\text{abs}$, which {doc}`mie` computes without cancellation;
 - the single-scattering albedo $\omega = \langle C_\text{sca}\rangle/\langle C_\text{ext}\rangle$
   and the asymmetry parameter $g = \langle C_\text{sca}\,g\rangle/\langle C_\text{sca}\rangle$;
 - $\langle C_\text{back}\rangle$, Bohren & Huffman's backscattering cross section ($4\pi$ times
@@ -167,8 +167,7 @@ Pass 1 evaluates only the efficiencies, $O(N)$ per radius for $N$ terms (and, wi
 | with `refine_backscatter`: $\int C_\text{back}u$ (and its derivatives) | rtol of the larger of itself and $\int C_\text{sca}u$ (derivatives: as above) |
 | with `refine_order` $L_r \le$ `MAX_REFINE_ORDER` = 1024 (Rust only): $\int \pi r^2\alpha^l u$ for every Greek coefficient up to $L_r$ | rtol of $\int C_\text{sca}u$ (derivatives: as above) |
 
-The derivatives with respect to $m$ are refined because, without it, their error estimates fell
-short of their true errors by a factor of 3. The targets of derivatives are relative to the
+The targets of derivatives are relative to the
 integrals of their absolute values because derivatives can cancel to near 0. $\langle
 C_\text{abs}\rangle$ is refined to rtol of $\langle C_\text{ext}\rangle$, the accuracy of
 $C_\text{ext} - C_\text{sca}$, and its derivatives against the matching $C_\text{ext}$
@@ -201,8 +200,8 @@ $\lvert K_{15} - G_7\rvert$ estimate.
 
 ### Greek coefficients and projector bands
 
-The Greek coefficients of the ensemble are those of the averaged phase matrix. Phase 1b's
-`GreekProjector` computes them exactly from tables of a phase matrix at its Gauss–Legendre
+The Greek coefficients of the ensemble are those of the averaged phase matrix. The
+`GreekProjector` of the Mie module computes them exactly from tables of a phase matrix at its Gauss–Legendre
 nodes: for a sphere of $N$ terms, coefficients up to order $L$ need
 $n_q = N + \lceil(L + 1)/2\rceil$ nodes. The tables $\pi r^2 F$ ($C_\text{sca}$ times the
 normalized phase matrix) are integrated over the size distribution at those nodes and
@@ -236,10 +235,9 @@ $$S_1(\pm\mu) = G_E u \pm G_O v,\qquad S_2(\pm\mu) = G_E v \pm G_O u$$
 at the non-negative nodes $\mu$ (the Gauss–Legendre nodes are exactly symmetric). For the 15
 nodes of a panel these are two real matrix products, $G_E$ and $G_O$ ($n_q/2 \times N$) times
 the nodes' coefficients ($N \times 60$; 120 with the $m$-derivatives $\mathrm{d}a_n/\mathrm{d}m$,
-$\mathrm{d}b_n/\mathrm{d}m$), computed with the [faer](https://docs.rs/faer) crate's matrix product
-on one thread. The products cost what the per-sphere sums did, $O(N\,n_q)$, but run at about
-55 GFLOP/s rather than a few (on an Apple M4 Pro), and the tables agree with the per-sphere
-phase matrix to $10^{-12}$ of its largest value (a unit test).
+$\mathrm{d}b_n/\mathrm{d}m$). The products cost $O(N\,n_q)$, like sums sphere by sphere, but
+run far faster, and the tables agree with the per-sphere phase matrix to $10^{-12}$ of its
+largest value (a unit test).
 
 The sums over the nodes are matrix products too: each panel's sums for every part and block
 (values, each $\theta$, $\mathrm{Re}\,m$, $\mathrm{Im}\,m$) are the weights at the nodes
@@ -363,7 +361,6 @@ $m = 1.33 + 10^{-4}i$, at rtol $10^{-6}$ and the other options default:
 | 0.5 | 2630 | 0.11 s | 0.31 s |
 | 0.3 | 4092 | 0.20 s | 0.90 s |
 
-All three converge. Before the matrix products (phase 2a) the Greek coefficients took 0.62 s,
-2.9 s and 10.4 s. A narrow fine-mode aerosol takes milliseconds ({doc}`/examples/ensemble`).
+All three converge. A narrow fine-mode aerosol takes milliseconds ({doc}`/examples/ensemble`).
 {doc}`/validation/sasktran2` compares the speed and accuracy with sasktran2's at matched
 accuracy, for one distribution and for a database grid.

@@ -1,9 +1,7 @@
-# API reference
+# Python API
 
-This is the Python API. It returns `float64` and `complex128` results: double-double values
-are available from Rust. The Rust API reference will be on
-[docs.rs](https://docs.rs/scatrs) once the crate is published; see {doc}`installation` to
-build it locally. Both APIs follow the {doc}`conventions`.
+The Python package returns `float64` and `complex128` results; double-double values are
+available from Rust ({doc}`rust-api`). Both APIs follow the {doc}`/theory/conventions`.
 
 ## `scatrs`
 

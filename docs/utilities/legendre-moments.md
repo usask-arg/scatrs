@@ -6,11 +6,11 @@ kernelspec:
   language: python
 ---
 
-# Example: Legendre moments of a phase function
+# Legendre moments of a phase function
 
 Radiative-transfer solvers take a phase function as its Legendre expansion
 $p(\mu) = \sum_l \alpha_l P_l(\mu)$, normalised so that $\tfrac12\int_{-1}^{1} p\,d\mu = 1$
-(see {doc}`../conventions`). The moments are
+(see {doc}`/theory/conventions`). The moments are
 
 $$\alpha_l = \frac{2l+1}{2}\int_{-1}^{1} p(\mu)\,P_l(\mu)\,d\mu ,$$
 

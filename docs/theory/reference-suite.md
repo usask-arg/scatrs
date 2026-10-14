@@ -45,7 +45,7 @@ A record is **certified** when every source of error is rigorously bounded, incl
 truncation of a series. It is **high-precision** when some error, such as a series tail, is
 not yet rigorously bounded. Labels are never overstated.
 
-The 358 records of phase 0 are all certified:
+The 358 records of the arithmetic, the constants and the special functions are all certified:
 
 - the arithmetic, constants and decimal values are exact rationals or Arb balls;
 - the elementary and complex functions are Arb's rigorous implementations;

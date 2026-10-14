@@ -65,10 +65,10 @@ DUAL_RS = "scatrs/src/scalar/dual/mod.rs"
 THEORY = "docs/theory/special-functions.md"
 SCALARS = "docs/theory/scalar-types.md"
 LIMITATIONS = "docs/limitations.md"
-WIGNER_EXAMPLE = "docs/examples/wigner-d.md"
-HG_EXAMPLE = "docs/examples/henyey-greenstein.md"
-QUADRATURE = "docs/examples/quadrature.md"
-REFERENCE_SUITE = "docs/validation/reference-suite.md"
+WIGNER_EXAMPLE = "docs/utilities/wigner-d.md"
+HG_EXAMPLE = "docs/utilities/legendre-moments.md"
+QUADRATURE = "docs/utilities/quadrature.md"
+REFERENCE_SUITE = "docs/theory/reference-suite.md"
 DOMAIN_RS = "scatrs/src/mie/domain.rs"
 MIE_THEORY = "docs/theory/mie.md"
 MIE_RS = "scatrs/src/mie/mod.rs"
@@ -81,7 +81,7 @@ ENSEMBLE_THEORY = "docs/theory/ensembles.md"
 ENSEMBLE_RS = "scatrs/src/ensemble/mod.rs"
 ENSEMBLE_TESTS = "scatrs/tests/ensemble.rs"
 ACCURACY = "docs/validation/accuracy.md"
-FOLLOWUPS_2A = "docs/plans/phase-2a-followups.md"
+OVERVIEW = "docs/validation/overview.md"
 
 CONTRACTS = [
     # (what, normalised text, files that must state it)
@@ -156,17 +156,7 @@ CONTRACTS = [
         "x^22^-54",
         [DOMAIN_RS, MIE_THEORY, "docs/plans/phase-1b-followups.md"],
     ),
-    (
-        "Greek C without the term",
-        "C=85atx=100(allorders)",
-        [MIE_THEORY, "docs/validation/accuracy.md"],
-    ),
-    (
-        "Greek C without the term",
-        "C=100atx=210^4(toorder64)",
-        [MIE_THEORY, "docs/validation/accuracy.md"],
-    ),
-    ("Greek worst C", "Cisatmost1.7", [MIE_THEORY, "docs/validation/accuracy.md"]),
+    ("Greek worst C", "Cisatmost1.7", [MIE_THEORY, ACCURACY]),
     ("Greek node-rounding error", "210^-9", [LIMITATIONS, "docs/plans/phase-1b-followups.md"]),
     ("Greek node-rounding error", "210^-11", [LIMITATIONS, "docs/plans/phase-1b-followups.md"]),
     # Ensembles of spheres: the measured cost (lognormal r_g = 1, σ_g = 2, m = 1.33 + 1e-4i).
@@ -174,12 +164,8 @@ CONTRACTS = [
         ("Ensemble cost", t, [ENSEMBLE_THEORY, LIMITATIONS])
         for t in ("0.037s", "0.11s", "0.20s", "0.093s", "0.31s", "0.90s")
     ),
-    *(
-        ("Ensemble cost before the matrix products", t, [ENSEMBLE_THEORY, FOLLOWUPS_2A])
-        for t in ("0.62s", "2.9s", "10.4s")
-    ),
     ("Ensemble max_panels default", "default4096", [ENSEMBLE_RS, ENSEMBLE_THEORY, LIMITATIONS]),
-    ("Ensemble calibration grid", "ninedistributions", [ACCURACY, LIMITATIONS]),
+    ("Ensemble calibration grid", "ninedistributions", [ACCURACY, OVERVIEW]),
     ("Ensemble calibration, refined outputs", "0.003", [ENSEMBLE_TESTS, ACCURACY]),
     ("Ensemble calibration, other outputs", "1.210", [ENSEMBLE_TESTS, ACCURACY]),
     ("Ensemble non-absorbing estimate", "estimateofabout10^-5of", [ACCURACY, LIMITATIONS]),

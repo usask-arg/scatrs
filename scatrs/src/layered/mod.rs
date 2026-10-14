@@ -319,6 +319,17 @@ impl<T: Real> Layered<T> {
     }
 }
 
+/// The number of terms [`Layered::compute`] would use for `f64` at (`x`, `m`) with `opts`
+/// (the sphere's default at x_L unless `opts.n_max` is set), after the same checks, without
+/// solving: for sizing outputs before computing them.
+///
+/// # Errors
+///
+/// As [`Layered::compute`].
+pub fn n_terms(x: &[f64], m: &[Complex<f64>], opts: &MieOptions) -> Result<usize> {
+    check_inputs(x, m, opts)
+}
+
 /// Validates the inputs and returns the number of terms.
 fn check_inputs<T: Real>(x: &[T], m: &[Complex<T>], opts: &MieOptions) -> Result<usize> {
     let invalid = |s: String| Err(Error::InvalidInput(s));

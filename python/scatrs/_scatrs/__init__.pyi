@@ -9,6 +9,7 @@ from . import _testing as _testing
 __all__ = [
     "MAX_GAUSS_LEGENDRE_POINTS",
     "MAX_GREEK_ORDER",
+    "MAX_LAYERS",
     "MAX_MIE_ORDER",
     "MAX_MIE_VALUES",
     "MAX_WIGNER_D_VALUES",
@@ -17,6 +18,11 @@ __all__ = [
     "ensemble_compute_batch",
     "ensemble_parameters",
     "gauss_legendre",
+    "layered_amplitudes",
+    "layered_coefficients",
+    "layered_efficiencies",
+    "layered_greek",
+    "layered_phase_matrix",
     "mie_amplitudes",
     "mie_coefficients",
     "mie_default_n_max",
@@ -73,6 +79,54 @@ def mie_phase_matrix(
     normalized: bool,
 ) -> tuple[NDArray[np.float64], NDArray[np.float64] | None]: ...
 def mie_greek(
+    x: NDArray[np.float64],
+    m: NDArray[np.complex128],
+    order: int | None,
+    n_max: int | None,
+    derivatives: bool,
+    allow_unvalidated: bool,
+    normalized: bool,
+) -> tuple[NDArray[np.uint64], NDArray[np.float64], NDArray[np.float64] | None]: ...
+
+MAX_LAYERS: Final[int]
+
+def layered_efficiencies(
+    x: NDArray[np.float64],
+    m: NDArray[np.complex128],
+    n_max: int | None,
+    derivatives: bool,
+    allow_unvalidated: bool,
+) -> tuple[NDArray[np.float64], NDArray[np.float64] | None]: ...
+def layered_coefficients(
+    x: NDArray[np.float64],
+    m: NDArray[np.complex128],
+    n_max: int | None,
+    derivatives: bool,
+    allow_unvalidated: bool,
+) -> tuple[
+    NDArray[np.uint64],
+    NDArray[np.complex128],
+    NDArray[np.complex128],
+    NDArray[np.complex128] | None,
+]: ...
+def layered_amplitudes(
+    x: NDArray[np.float64],
+    m: NDArray[np.complex128],
+    mu: NDArray[np.float64],
+    n_max: int | None,
+    derivatives: bool,
+    allow_unvalidated: bool,
+) -> tuple[NDArray[np.complex128], NDArray[np.complex128] | None]: ...
+def layered_phase_matrix(
+    x: NDArray[np.float64],
+    m: NDArray[np.complex128],
+    mu: NDArray[np.float64],
+    n_max: int | None,
+    derivatives: bool,
+    allow_unvalidated: bool,
+    normalized: bool,
+) -> tuple[NDArray[np.float64], NDArray[np.float64] | None]: ...
+def layered_greek(
     x: NDArray[np.float64],
     m: NDArray[np.complex128],
     order: int | None,

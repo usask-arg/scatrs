@@ -30,6 +30,7 @@ mod kronrod;
 mod lin;
 mod matrix;
 mod moments;
+mod particle;
 mod range;
 
 use num_complex::Complex;
@@ -39,29 +40,63 @@ pub use distribution::SizeDistribution;
 use crate::mie::{GreekCoefficients, MAX_GREEK_ORDER, Normalization};
 use crate::{Error, Result};
 
-/// One component of an external mixture: spheres of one size distribution and refractive
-/// index (one per wavelength), in relative number concentration `weight`.
+/// The particles of a component, given at each wavelength.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub enum Particle {
+    /// Homogeneous spheres.
+    Sphere {
+        /// The refractive index at each wavelength.
+        refractive_index: Vec<Complex<f64>>,
+    },
+}
+
+impl Particle {
+    /// Homogeneous spheres of refractive index `refractive_index[i]` at wavelength i.
+    pub fn sphere(refractive_index: Vec<Complex<f64>>) -> Self {
+        Particle::Sphere { refractive_index }
+    }
+}
+
+/// One component of an external mixture: particles of one size distribution, in relative
+/// number concentration `weight`.
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct Component {
     /// The size distribution.
     pub distribution: SizeDistribution,
-    /// The refractive index at each wavelength.
-    pub refractive_index: Vec<Complex<f64>>,
+    /// The particles.
+    pub particle: Particle,
     /// The relative number concentration, ≥ 0.
     pub weight: f64,
 }
 
 impl Component {
-    /// A component of weight `weight`.
+    /// A component of spheres of refractive index `refractive_index[i]` at wavelength i, of
+    /// weight `weight`.
     pub fn new(
         distribution: SizeDistribution,
         refractive_index: Vec<Complex<f64>>,
         weight: f64,
     ) -> Self {
+        Self::with_particle(distribution, Particle::sphere(refractive_index), weight)
+    }
+
+    /// A component of `particle`s, of weight `weight`.
+    ///
+    /// ```
+    /// use num_complex::Complex;
+    /// use scatrs::ensemble::{Component, Particle, SizeDistribution};
+    ///
+    /// let size = SizeDistribution::LogNormal { median_radius: 0.1, width: 1.5 };
+    /// let m = vec![Complex::new(1.45, 1e-3)];
+    /// let c = Component::with_particle(size.clone(), Particle::sphere(m.clone()), 2.0);
+    /// assert_eq!(c, Component::new(size, m, 2.0));
+    /// ```
+    pub fn with_particle(distribution: SizeDistribution, particle: Particle, weight: f64) -> Self {
         Self {
             distribution,
-            refractive_index,
+            particle,
             weight,
         }
     }
@@ -140,6 +175,7 @@ impl EnsembleParam {
 fn component_parameters(
     index: usize,
     distribution: &SizeDistribution,
+    particle: &Particle,
     weight: bool,
 ) -> Vec<EnsembleParam> {
     let mut out = Vec::new();
@@ -163,8 +199,12 @@ fn component_parameters(
             ));
         }
     }
-    out.push(EnsembleParam::new(index, None, ParamKind::RefrReal));
-    out.push(EnsembleParam::new(index, None, ParamKind::RefrImag));
+    match particle {
+        Particle::Sphere { .. } => {
+            out.push(EnsembleParam::new(index, None, ParamKind::RefrReal));
+            out.push(EnsembleParam::new(index, None, ParamKind::RefrImag));
+        }
+    }
     if weight {
         out.push(EnsembleParam::new(index, None, ParamKind::Weight));
     }
@@ -173,7 +213,7 @@ fn component_parameters(
 
 /// Every parameter of a single distribution, for [`compute`].
 pub fn parameters(distribution: &SizeDistribution) -> Vec<EnsembleParam> {
-    component_parameters(0, distribution, false)
+    component_parameters(0, distribution, &Particle::sphere(Vec::new()), false)
 }
 
 /// Every parameter of a mixture, for [`compute_mixture`].
@@ -181,7 +221,7 @@ pub fn mixture_parameters(components: &[Component]) -> Vec<EnsembleParam> {
     components
         .iter()
         .enumerate()
-        .flat_map(|(i, c)| component_parameters(i, &c.distribution, true))
+        .flat_map(|(i, c)| component_parameters(i, &c.distribution, &c.particle, true))
         .collect()
 }
 
@@ -535,10 +575,10 @@ fn validate(
                 )));
             }
         }
-        if c.refractive_index.len() != wavelengths.len() {
+        if c.particle.wavelengths() != wavelengths.len() {
             return Err(invalid(format!(
                 "component {i} has {} refractive indices for {} wavelengths",
-                c.refractive_index.len(),
+                c.particle.wavelengths(),
                 wavelengths.len()
             )));
         }

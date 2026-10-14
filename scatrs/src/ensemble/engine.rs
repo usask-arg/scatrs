@@ -5,21 +5,21 @@
 use core::f64::consts::PI;
 
 use super::matrix::{Mat, matmul};
-use num_complex::Complex;
 use rayon::prelude::*;
 
 use super::distribution::{SizeDistribution, Support};
 use super::fast::{BandProjection, BandTables, PanelProducts};
 use super::lin::Lin;
 use super::moments::{Moments, moments};
+use super::particle::{Optics, Solver};
 use super::range::{self, MIE_POWERS, MOMENT_POWERS, STEP};
 use super::{
-    Component, EnsembleOptions, EnsembleResult, GreekOrder, Outputs, ParamKind, PhaseValues,
-    kronrod,
+    Component, EnsembleOptions, EnsembleResult, GreekOrder, Outputs, ParamKind, Particle,
+    PhaseValues, kronrod,
 };
 use crate::mie::{
-    GreekCoefficients, GreekProjector, MAX_SIZE_PARAMETER, Mie, MieOptions, MieSolution,
-    Normalization, PhaseBuffers, n_terms,
+    Coefficients, EfficiencyJacobian, GreekCoefficients, GreekProjector, MAX_SIZE_PARAMETER,
+    MieOptions, Normalization, PhaseBuffers,
 };
 use crate::{Error, Result};
 
@@ -41,8 +41,8 @@ const SCALARS: usize = 8;
 /// Pass 1 integrates the per-sphere quantities 1, C_ext, C_sca, C_sca·g, C_back and C_abs (the
 /// first four at the indices of the flat layout, C_back at `P1_BACK`, C_abs at `P1_ABS`), then the
 /// optional Greek coefficients (each πr²·α, 6 arrays of `refine_order` + 1) and the
-/// refractive-index derivatives (`M_GROUP` per part of m: C_ext, C_sca, C_sca·g, C_back,
-/// C_abs), and refines on all of them but C_back and its derivatives unless
+/// derivatives along the requested directions of the particle (`M_GROUP` per direction: C_ext,
+/// C_sca, C_sca·g, C_back, C_abs), and refines on all of them but C_back and its derivatives unless
 /// `refine_backscatter`. The moments r² and r³ come from their own integration (`moments`).
 const N_BASE: usize = 6;
 const P1_BACK: usize = 4;
@@ -68,7 +68,7 @@ struct Part<'a> {
     component: usize,
     mode: Option<usize>,
     dist: &'a SizeDistribution,
-    m: &'a [Complex<f64>],
+    particle: &'a Particle,
     /// The component's weight, and the mode's weight and the sum of the component's mode
     /// weights (1 and 1 without modes).
     w: f64,
@@ -82,14 +82,21 @@ struct Part<'a> {
     /// The requested distribution parameters: (column of the result, index into the
     /// distribution's gradient).
     theta: Vec<(usize, usize)>,
-    /// The result columns of ∂/∂(Re m) and ∂/∂(Im m), if requested.
-    m_cols: [Option<usize>; 2],
+    /// The result column of each of the particle's derivative directions, if requested.
+    dir_cols: Vec<Option<usize>>,
 }
 
 impl Part<'_> {
-    fn m_derivatives(&self) -> bool {
-        self.m_cols.iter().any(Option::is_some)
+    /// Whether any derivative along the particle's directions is requested.
+    fn dir_derivatives(&self) -> bool {
+        self.dir_cols.iter().any(Option::is_some)
     }
+}
+
+/// The derivative of the efficiencies along direction `k`: Re m or Im m of group k/2.
+fn direction(jacs: &[EfficiencyJacobian<f64>], k: usize) -> &crate::mie::Efficiencies<f64> {
+    let j = &jacs[k / 2];
+    if k % 2 == 0 { &j.m_re } else { &j.m_im }
 }
 
 fn context(e: Error, lambda: f64, r: f64) -> Error {
@@ -128,7 +135,7 @@ fn parts<'a>(
         for (mode, v, dist) in modes {
             let names = dist.parameter_names();
             let mut theta = Vec::new();
-            let mut m_cols = [None, None];
+            let mut dir_cols = vec![None; c.particle.directions()];
             for (col, p) in options.derivatives.iter().enumerate() {
                 if p.component != ci {
                     continue;
@@ -138,8 +145,8 @@ fn parts<'a>(
                         let k = names.iter().position(|n| *n == name).expect("validated");
                         theta.push((col, k));
                     }
-                    ParamKind::RefrReal => m_cols[0] = Some(col),
-                    ParamKind::RefrImag => m_cols[1] = Some(col),
+                    ParamKind::RefrReal => dir_cols[0] = Some(col),
+                    ParamKind::RefrImag => dir_cols[1] = Some(col),
                     _ => {}
                 }
             }
@@ -172,7 +179,7 @@ fn parts<'a>(
                 component: ci,
                 mode,
                 dist,
-                m: &c.refractive_index,
+                particle: &c.particle,
                 w: c.weight,
                 v,
                 v_total,
@@ -180,7 +187,7 @@ fn parts<'a>(
                 cutoffs,
                 moments,
                 theta,
-                m_cols,
+                dir_cols,
             });
         }
     }
@@ -327,7 +334,7 @@ struct Sums1 {
     err: Vec<f64>,
     /// Kronrod sums of |∂u/∂θ|·r·|q|, the scales of the θ blocks.
     abs: Vec<f64>,
-    /// Kronrod sums of u·r·|q|, the scales of the refractive-index derivatives.
+    /// Kronrod sums of u·r·|q|, the scales of the derivatives along the particle's directions.
     absv: Vec<f64>,
     /// The largest number of terms at the nodes.
     n_terms: usize,
@@ -337,26 +344,25 @@ struct Sums1 {
 }
 
 /// The pass-1 quantities at radius r: 1, C_ext, C_sca, C_sca·g, C_back, then the Greek
-/// coefficients up to `refine_order` (πr²·α), then the derivatives of C_ext, C_sca, C_sca·g and
-/// C_back with respect to Re m and Im m where `m_derivatives` asks for them; and the number of
-/// terms.
+/// coefficients up to `refine_order` (πr²·α), then the derivatives of C_ext, C_sca, C_sca·g,
+/// C_back and C_abs along each of the particle's directions that `dirs` asks for; and the
+/// number of terms.
+#[allow(clippy::too_many_arguments)]
 fn quantities1(
-    mie: &mut Mie<f64>,
+    solver: &mut Solver,
     r: f64,
     lambda: f64,
-    m: Complex<f64>,
+    optics: Optics,
     opts: &MieOptions,
     refine_order: Option<usize>,
-    m_derivatives: [bool; 2],
+    dirs: &[bool],
 ) -> Result<(Vec<f64>, usize)> {
     let x = size(r, lambda);
-    let s = if m_derivatives.iter().any(|&b| b) {
-        mie.compute_with_derivatives(x, m, opts)
-    } else {
-        mie.compute(x, m, opts)
-    }
-    .map_err(|e| context(e, lambda, r))?;
-    let q = s.efficiencies();
+    let s = solver
+        .solve(optics, x, opts, dirs.iter().any(|&b| b))
+        .map_err(|e| context(e, lambda, r))?;
+    let c = s.c;
+    let q = c.efficiencies();
     let area = PI * r * r;
     let mut out = vec![
         1.0,
@@ -367,7 +373,7 @@ fn quantities1(
         area * q.q_abs,
     ];
     if let Some(order) = refine_order {
-        let g = s
+        let g = c
             .greek(Some(order), Normalization::Unnormalized)
             .map_err(|e| context(e, lambda, r))?;
         for a in [
@@ -376,26 +382,28 @@ fn quantities1(
             out.extend(a.iter().map(|v| area * v));
         }
     }
-    if let Some(jac) = s.efficiencies_jacobian() {
-        for (want, d) in m_derivatives.into_iter().zip([jac.m_re, jac.m_im]) {
-            if want {
-                out.extend([
-                    area * d.q_ext,
-                    area * d.q_sca,
-                    area * (d.q_sca * q.g + q.q_sca * d.g),
-                    area * d.q_back,
-                    area * d.q_abs,
-                ]);
-            }
-        }
+    let jacs: Vec<_> = s
+        .groups
+        .iter()
+        .map(|g| c.efficiencies_jacobian(g))
+        .collect();
+    for (k, _) in dirs.iter().enumerate().filter(|&(_, &want)| want) {
+        let d = direction(&jacs, k);
+        out.extend([
+            area * d.q_ext,
+            area * d.q_sca,
+            area * (d.q_sca * q.g + q.q_sca * d.g),
+            area * d.q_back,
+            area * d.q_abs,
+        ]);
     }
-    Ok((out, s.n_terms()))
+    Ok((out, c.n_terms()))
 }
 
 /// The number of pass-1 quantities: the base ones, the Greek coefficients, and `M_GROUP`
-/// derivatives per requested refractive-index part.
+/// derivatives per requested direction.
 fn n_refined(refine_order: Option<usize>, part: &Part<'_>) -> usize {
-    let md = part.m_cols.iter().filter(|c| c.is_some()).count();
+    let md = part.dir_cols.iter().filter(|c| c.is_some()).count();
     N_BASE + refine_order.map_or(0, |l| 6 * (l + 1)) + M_GROUP * md
 }
 
@@ -403,22 +411,22 @@ fn n_refined(refine_order: Option<usize>, part: &Part<'_>) -> usize {
 /// its quantities weighted by each part's density.
 #[allow(clippy::too_many_arguments)]
 fn panel1(
-    mie: &mut Mie<f64>,
+    solver: &mut Solver,
     group: &[&Part<'_>],
     (a, b): (f64, f64),
     lambda: f64,
-    m: Complex<f64>,
+    optics: Optics,
     opts: &MieOptions,
     refine_order: Option<usize>,
     n_refined: usize,
 ) -> Result<Vec<Sums1>> {
     let nodes = kronrod::panel(a, b);
     let first = group.first().expect("a part");
-    let m_derivatives = [first.m_cols[0].is_some(), first.m_cols[1].is_some()];
+    let dirs: Vec<bool> = first.dir_cols.iter().map(Option::is_some).collect();
     let mut n_max = 0;
     let mut qs = Vec::with_capacity(nodes.len());
     for &(t, _, _) in &nodes {
-        let (q, n) = quantities1(mie, t.exp(), lambda, m, opts, refine_order, m_derivatives)?;
+        let (q, n) = quantities1(solver, t.exp(), lambda, optics, opts, refine_order, &dirs)?;
         n_max = n_max.max(n);
         qs.push(q);
     }
@@ -497,7 +505,7 @@ fn evaluate(
     panels: &mut Panels1,
     group: &[&Part<'_>],
     lambda: f64,
-    m: Complex<f64>,
+    optics: Optics,
     opts: &MieOptions,
     refine_order: Option<usize>,
     n_refined: usize,
@@ -506,13 +514,13 @@ fn evaluate(
     let results: Vec<Result<()>> = panels
         .par_iter_mut()
         .filter(|(_, s)| s.is_none())
-        .map_init(Mie::<f64>::new, |mie, (ab, s)| {
+        .map_init(Solver::new, |solver, (ab, s)| {
             *s = Some(panel1(
-                mie,
+                solver,
                 group,
                 *ab,
                 lambda,
-                m,
+                optics,
                 opts,
                 refine_order,
                 n_refined,
@@ -564,7 +572,8 @@ fn status(
             // of ⟨C_back⟩ and ⟨C_sca⟩, since backscattering by large weakly absorbing
             // spheres is a sum of narrow glory ripples orders of magnitude below C_sca.
             P1_BACK => total(P1_BACK).abs().max(c_sca),
-            // The refractive-index derivatives can cancel: their absolute integrands.
+            // The derivatives along the particle's directions can cancel: their absolute
+            // integrands.
             j if j >= n_greek => sums.iter().map(|s| s.absv[scale_of(j)]).sum::<f64>(),
             j if j >= N_BASE => c_sca,
             j => total(scale_of(j)).abs(),
@@ -581,15 +590,15 @@ fn status(
     for b in 0..=nt {
         target[b * n_refined + ONE] = f64::INFINITY;
     }
-    // ∫∂u/∂θ·∂C/∂m is no output: no targets for the refractive-index derivatives in the θ
-    // blocks.
+    // ∫∂u/∂θ·∂C/∂m is no output: no targets for the derivatives along the particle's
+    // directions in the θ blocks.
     for b in 1..=nt {
         for j in n_greek..n_refined {
             target[b * n_refined + j] = f64::INFINITY;
         }
     }
     if !options.refine_backscatter {
-        // C_back and its derivatives (the fourth of each refractive-index group) are only
+        // C_back and its derivatives (the fourth of each direction's group) are only
         // integrated.
         for b in 0..=nt {
             target[b * n_refined + P1_BACK] = f64::INFINITY;
@@ -636,12 +645,12 @@ fn status(
     }
 }
 
-/// Pass 1: the adaptive panels of a group of parts (sharing m) at one wavelength, refined
-/// until every part meets its targets.
+/// Pass 1: the adaptive panels of a group of parts (sharing a particle) at one wavelength,
+/// refined until every part meets its targets.
 fn pass1(
     group: &[&Part<'_>],
     lambda: f64,
-    m: Complex<f64>,
+    optics: Optics,
     options: &EnsembleOptions,
     mie_opts: &MieOptions,
 ) -> Result<Pass1> {
@@ -718,7 +727,7 @@ fn pass1(
             &mut panels,
             group,
             lambda,
-            m,
+            optics,
             mie_opts,
             refine_order,
             n_refined,
@@ -869,11 +878,15 @@ fn bucket(n: usize) -> usize {
 
 /// The largest number of terms at the nodes of the panel [a, b] (t = ln r), which chooses the
 /// panel's band.
-fn panel_terms(a: f64, b: f64, lambda: f64, m: Complex<f64>, opts: &MieOptions) -> Result<usize> {
+fn panel_terms(a: f64, b: f64, lambda: f64, optics: Optics, opts: &MieOptions) -> Result<usize> {
     let mut most = 0;
     for &(t, _, _) in &kronrod::panel(a, b) {
         let r = t.exp();
-        most = most.max(n_terms(size(r, lambda), m, opts).map_err(|e| context(e, lambda, r))?);
+        most = most.max(
+            optics
+                .n_terms(size(r, lambda), opts)
+                .map_err(|e| context(e, lambda, r))?,
+        );
     }
     Ok(most)
 }
@@ -910,34 +923,32 @@ impl Layout<'_> {
 }
 
 /// The per-sphere quantities of pass 2 at radius r into `g` (the common part and the node's
-/// band, whose (start, length) it returns), and their derivatives with respect to Re m, Im m
-/// into `dm` and with respect to r into `dr`, if given. With `products` (the panel's products
-/// and the node's index in them), the band's tables are left to the products: the node's Mie
-/// coefficients go into them instead.
+/// band, whose (start, length) it returns), their derivatives along each of the particle's
+/// directions into `dm` and with respect to r into `dr`, if given. With `products` (the panel's
+/// products and the node's index in them), the band's tables are left to the products: the
+/// node's coefficients go into them instead.
 #[allow(clippy::too_many_arguments)]
 fn quantities2(
-    mie: &mut Mie<f64>,
+    solver: &mut Solver,
     r: f64,
     lambda: f64,
-    m: Complex<f64>,
+    optics: Optics,
     opts: &MieOptions,
     layout: &Layout<'_>,
     g: &mut [f64],
-    mut dm: Option<[&mut [f64]; 2]>,
+    mut dm: Option<&mut [&mut [f64]]>,
     dr: Option<&mut [f64]>,
     band_terms: usize,
     products: Option<(&mut PanelProducts, usize)>,
 ) -> Result<Option<(usize, usize)>> {
     let x = size(r, lambda);
     let derivatives = dm.is_some() || dr.is_some();
-    let s = if derivatives {
-        mie.compute_with_derivatives(x, m, opts)
-    } else {
-        mie.compute(x, m, opts)
-    }
-    .map_err(|e| context(e, lambda, r))?;
+    let s = solver
+        .solve(optics, x, opts, derivatives)
+        .map_err(|e| context(e, lambda, r))?;
+    let c = s.c;
     let area = PI * r * r;
-    let q = s.efficiencies();
+    let q = c.efficiencies();
     g[..SCALARS].copy_from_slice(&[
         1.0,
         area * q.q_ext,
@@ -951,7 +962,7 @@ fn quantities2(
     // The band of the panel (its largest number of terms), so that every node of a panel
     // fills the same tables: per-node bands would make each band's table a step function
     // within the panel, and its Kronrod–Gauss difference a measure of the step.
-    let n = band_terms.max(s.n_terms());
+    let n = band_terms.max(c.n_terms());
     let band = layout.band(n).map(|b| (b.start, b.projector.nodes()));
     if !layout.bands.is_empty() && band.is_none() {
         return Err(context(
@@ -962,7 +973,7 @@ fn quantities2(
     }
     let mut tables = vec![(SCALARS, layout.mu)];
     match products {
-        Some((p, k)) => p.set(k, &s),
+        Some((p, k)) => p.set(k, &c, &s.groups),
         None => tables.extend(band),
     }
     let segment = band.map(|(start, nodes)| (start, 4 * nodes.len()));
@@ -972,15 +983,17 @@ fn quantities2(
             if n == 0 {
                 continue;
             }
-            phase_into(&s, cosines, &mut g[start..start + 4 * n])
+            phase_into(&c, cosines, &mut g[start..start + 4 * n])
                 .map_err(|e| context(e, lambda, r))?;
             g[start..start + 4 * n].iter_mut().for_each(|v| *v *= area);
         }
         return Ok(segment);
     }
-    let jac = s
-        .efficiencies_jacobian()
-        .expect("computed with derivatives");
+    let jacs: Vec<_> = s
+        .groups
+        .iter()
+        .map(|gr| c.efficiencies_jacobian(gr))
+        .collect();
     let scalar_d = |e: &crate::mie::Efficiencies<f64>| {
         [
             0.0,
@@ -994,14 +1007,15 @@ fn quantities2(
         ]
     };
     let k = 2.0 * PI / lambda;
-    if let Some([dre, dim]) = dm.as_mut() {
-        dre[..SCALARS].copy_from_slice(&scalar_d(&jac.m_re));
-        dim[..SCALARS].copy_from_slice(&scalar_d(&jac.m_im));
+    if let Some(dm) = dm.as_deref_mut() {
+        for (dir, d) in dm.iter_mut().enumerate() {
+            d[..SCALARS].copy_from_slice(&scalar_d(direction(&jacs, dir)));
+        }
     }
     let mut dr = dr;
     if let Some(dr) = dr.as_deref_mut() {
         // ∂(πr²Q)/∂r = 2πr Q + πr² (2π/λ) ∂Q/∂x.
-        let dx = scalar_d(&jac.x);
+        let dx = scalar_d(&jacs[0].x);
         let values = [0.0, q.q_ext, q.q_sca, q.q_sca * q.g, q.q_abs, q.q_back];
         for j in 1..6 {
             dr[j] = 2.0 * PI * r * values[j] + k * dx[j];
@@ -1016,15 +1030,20 @@ fn quantities2(
             continue;
         }
         let span = start..start + 4 * n;
-        let mut dx = vec![0.0; 4 * n];
-        let (mut dre_buf, mut dim_buf) = (vec![0.0; 4 * n], vec![0.0; 4 * n]);
-        {
+        // Per group: ∂/∂x, ∂/∂(Re m), ∂/∂(Im m).
+        let mut d: Vec<[Vec<f64>; 3]> = s
+            .groups
+            .iter()
+            .map(|_| core::array::from_fn(|_| vec![0.0; 4 * n]))
+            .collect();
+        for (group, [dx, dre_buf, dim_buf]) in s.groups.iter().zip(&mut d) {
             let [v11, v12, v33, v34] = quarter(&mut g[span.clone()]);
-            let [x11, x12, x33, x34] = quarter(&mut dx);
-            let [r11, r12, r33, r34] = quarter(&mut dre_buf);
-            let [i11, i12, i33, i34] = quarter(&mut dim_buf);
-            s.phase_matrix_with_derivatives(
+            let [x11, x12, x33, x34] = quarter(dx);
+            let [r11, r12, r33, r34] = quarter(dre_buf);
+            let [i11, i12, i33, i34] = quarter(dim_buf);
+            c.phase_matrix_with_derivatives(
                 cosines,
+                group,
                 Normalization::Unnormalized,
                 PhaseBuffers {
                     f11: v11,
@@ -1057,13 +1076,15 @@ fn quantities2(
         }
         if let Some(dr) = dr.as_deref_mut() {
             for (j, o) in span.clone().enumerate() {
-                dr[o] = 2.0 * PI * r * g[o] + area * k * dx[j];
+                dr[o] = 2.0 * PI * r * g[o] + area * k * d[0][0][j];
             }
         }
-        if let Some([dre, dim]) = dm.as_mut() {
-            for (j, o) in span.clone().enumerate() {
-                dre[o] = area * dre_buf[j];
-                dim[o] = area * dim_buf[j];
+        if let Some(dm) = dm.as_deref_mut() {
+            for (dir, out) in dm.iter_mut().enumerate() {
+                let buf = &d[dir / 2][1 + dir % 2];
+                for (j, o) in span.clone().enumerate() {
+                    out[o] = area * buf[j];
+                }
             }
         }
         g[span].iter_mut().for_each(|v| *v *= area);
@@ -1080,22 +1101,33 @@ fn quarter(t: &mut [f64]) -> [&mut [f64]; 4] {
     [a, b, c, d]
 }
 
-/// The unnormalized phase matrix of `s` at `cosines` into the 4·n values of `out`.
-fn phase_into(s: &MieSolution<'_, f64>, cosines: &[f64], out: &mut [f64]) -> Result<()> {
+/// The unnormalized phase matrix of `c` at `cosines` into the 4·n values of `out`.
+fn phase_into(c: &Coefficients<'_, f64>, cosines: &[f64], out: &mut [f64]) -> Result<()> {
     let [f11, f12, f33, f34] = quarter(out);
-    s.phase_matrix(
+    c.phase_matrix(
         cosines,
         Normalization::Unnormalized,
         PhaseBuffers { f11, f12, f33, f34 },
     )
 }
 
-/// Pass-2 integrals of one part: blocks of the flat layout (values; each requested θ;
-/// Re m, Im m if requested), Kronrod sums and Σ over panels of |Kronrod − Gauss|.
+/// Pass-2 integrals of one part: blocks of the flat layout (values; each requested θ; every
+/// direction of the particle if any is requested), Kronrod sums and Σ over panels of
+/// |Kronrod − Gauss|.
 struct Sums2 {
     s: Vec<f64>,
     err: Vec<f64>,
     blocks: usize,
+}
+
+/// The number of pass-2 blocks of a part.
+fn blocks(part: &Part<'_>) -> usize {
+    let dirs = if part.dir_derivatives() {
+        part.dir_cols.len()
+    } else {
+        0
+    };
+    1 + part.theta.len() + dirs
 }
 
 /// At most this many `CHUNK`s of panels have their sums held at once before they are added up
@@ -1106,13 +1138,13 @@ const WINDOW_BYTES: usize = 64 << 20;
 
 /// The weights of a group's blocks at a panel's nodes: a row per (part, block) for the
 /// values (the values block, weight u·r, and each θ block, ∂u/∂θ·r) and a row per part with
-/// refractive-index derivatives (weight u·r, applied to the Re m and Im m derivatives),
-/// Kronrod rows first, then Gauss rows. A panel's sums for every part and block are then
+/// derivatives along the particle's directions (weight u·r, applied to each direction's
+/// derivatives), Kronrod rows first, then Gauss rows. A panel's sums for every part and block are then
 /// matrix products of these weights with the nodes' values.
 struct Rows {
     /// The first values row of each part.
     first: Vec<usize>,
-    /// The derivative row of each part with refractive-index derivatives.
+    /// The derivative row of each part with derivatives along the particle's directions.
     m_row: Vec<Option<usize>>,
     values: usize,
     m: usize,
@@ -1125,7 +1157,7 @@ impl Rows {
         for part in group {
             first.push(values);
             values += 1 + part.theta.len();
-            m_row.push(part.m_derivatives().then(|| {
+            m_row.push(part.dir_derivatives().then(|| {
                 m += 1;
                 m - 1
             }));
@@ -1139,42 +1171,45 @@ impl Rows {
     }
 }
 
-/// Pass 2 of a group of parts (sharing m) over their shared final panels: each node's Mie
-/// solution and tables once; each part's panel sums as matrix products of its weights with
-/// the nodes' values.
+/// Pass 2 of a group of parts (sharing a particle) over their shared final panels: each node's
+/// solution and tables once; each part's panel sums as matrix products of its weights with the
+/// nodes' values.
 fn pass2(
     group: &[&Part<'_>],
     panels: &[(f64, f64)],
     lambda: f64,
-    m: Complex<f64>,
+    optics: Optics,
     opts: &MieOptions,
     layout: &Layout<'_>,
 ) -> Result<Vec<Sums2>> {
     let len = layout.len;
     let common = layout.common();
-    let blocks: Vec<usize> = group
-        .iter()
-        .map(|p| 1 + p.theta.len() + if p.m_derivatives() { 2 } else { 0 })
-        .collect();
-    let derivatives = group.iter().any(|p| p.m_derivatives());
+    let blocks: Vec<usize> = group.iter().map(|p| blocks(p)).collect();
+    let derivatives = group.iter().any(|p| p.dir_derivatives());
+    // Every direction of the particle when any is requested.
+    let n_dirs = if derivatives {
+        group[0].dir_cols.len()
+    } else {
+        0
+    };
     let rows = Rows::new(group);
     let n_nodes = kronrod::panel(0.0, 1.0).len();
     // Per-thread scratch. A panel touches the common part of the layout and its band's
     // tables: `stride` values, the common part first.
     struct Scratch {
-        mie: Mie<f64>,
+        solver: Solver,
         grads: Vec<Vec<f64>>,
         g: Vec<f64>,
         dmv: Vec<f64>,
         products: Option<PanelProducts>,
-        /// The nodes' values (nodes × stride), and their Re m and Im m derivatives.
+        /// The nodes' values (nodes × stride), and their derivatives along each direction.
         v: Mat,
-        dv: [Mat; 2],
+        dv: Vec<Mat>,
         /// The weights (2·rows × nodes) and the products (2·rows × stride).
         w: Mat,
         wm: Mat,
         pv: Mat,
-        pm: [Mat; 2],
+        pm: Vec<Mat>,
     }
     /// A chunk's sums and errors on one range [lo, hi) of the layout, every block.
     type Segment = ((usize, usize), Vec<f64>, Vec<f64>);
@@ -1202,20 +1237,20 @@ fn pass2(
             .par_chunks(CHUNK)
             .map_init(
                 || Scratch {
-                    mie: Mie::new(),
+                    solver: Solver::new(),
                     grads: group
                         .iter()
                         .map(|p| vec![0.0; p.dist.parameter_names().len()])
                         .collect(),
                     g: vec![0.0; len],
-                    dmv: vec![0.0; 2 * len],
+                    dmv: vec![0.0; n_dirs * len],
                     products: None,
                     v: Mat::zeros(0, 0),
-                    dv: [Mat::zeros(0, 0), Mat::zeros(0, 0)],
+                    dv: (0..n_dirs).map(|_| Mat::zeros(0, 0)).collect(),
                     w: Mat::zeros(2 * rows.values, n_nodes),
                     wm: Mat::zeros(2 * rows.m, n_nodes),
                     pv: Mat::zeros(0, 0),
-                    pm: [Mat::zeros(0, 0), Mat::zeros(0, 0)],
+                    pm: (0..n_dirs).map(|_| Mat::zeros(0, 0)).collect(),
                 },
                 |sc, chunk| {
                     let densities: Vec<_> = group.iter().map(|p| p.dist.prepare()).collect();
@@ -1224,7 +1259,7 @@ fn pass2(
                         let band_terms = if layout.bands.is_empty() {
                             0
                         } else {
-                            panel_terms(a, b, lambda, m, opts)?
+                            panel_terms(a, b, lambda, optics, opts)?
                         };
                         let band = if layout.bands.is_empty() {
                             None
@@ -1240,13 +1275,10 @@ fn pass2(
                             let fits = sc
                                 .products
                                 .as_ref()
-                                .is_some_and(|p| p.fits(&band.tables, nodes.len(), derivatives));
+                                .is_some_and(|p| p.fits(&band.tables, nodes.len(), n_dirs / 2));
                             if !fits {
-                                sc.products = Some(PanelProducts::new(
-                                    &band.tables,
-                                    nodes.len(),
-                                    derivatives,
-                                ));
+                                sc.products =
+                                    Some(PanelProducts::new(&band.tables, nodes.len(), n_dirs / 2));
                             }
                         }
                         let (lo, hi) = band.map_or((0, 0), |b| {
@@ -1255,34 +1287,26 @@ fn pass2(
                         let stride = common + (hi - lo);
                         if sc.v.nrows() != nodes.len() || sc.v.ncols() != stride {
                             sc.v = Mat::zeros(nodes.len(), stride);
-                            if derivatives {
-                                sc.dv = [
-                                    Mat::zeros(nodes.len(), stride),
-                                    Mat::zeros(nodes.len(), stride),
-                                ];
+                            for dv in &mut sc.dv {
+                                *dv = Mat::zeros(nodes.len(), stride);
                             }
                         }
                         for (k, &(t, wk, wg)) in nodes.iter().enumerate() {
                             let r = t.exp();
-                            let dm = if derivatives {
-                                let (re, im) = sc.dmv.split_at_mut(len);
-                                Some([re, im])
-                            } else {
-                                None
-                            };
+                            let mut dm: Vec<&mut [f64]> = sc.dmv.chunks_mut(len).collect();
                             let products = match (band, sc.products.as_mut()) {
                                 (Some(_), Some(p)) => Some((p, k)),
                                 _ => None,
                             };
                             quantities2(
-                                &mut sc.mie,
+                                &mut sc.solver,
                                 r,
                                 lambda,
-                                m,
+                                optics,
                                 opts,
                                 layout,
                                 &mut sc.g,
-                                dm,
+                                derivatives.then_some(&mut dm[..]),
                                 None,
                                 band_terms,
                                 products,
@@ -1321,13 +1345,9 @@ fn pass2(
                                 let r = t.exp();
                                 let x = size(r, lambda);
                                 let scale = 4.0 / (x * x) * (PI * r * r);
-                                let dm = if derivatives {
-                                    let (re, im) = sc.dmv.split_at_mut(len);
-                                    Some([&mut re[lo..hi], &mut im[lo..hi]])
-                                } else {
-                                    None
-                                };
-                                prod.phase(&band.tables, k, scale, &mut sc.g[lo..hi], dm);
+                                let mut dm: Vec<&mut [f64]> =
+                                    sc.dmv.chunks_mut(len).map(|d| &mut d[lo..hi]).collect();
+                                prod.phase(&band.tables, k, scale, &mut sc.g[lo..hi], &mut dm);
                                 for (j, &gv) in sc.g[lo..hi].iter().enumerate() {
                                     sc.v[(k, common + j)] = gv;
                                 }
@@ -1342,9 +1362,9 @@ fn pass2(
                         }
                         gemm(&mut sc.pv, &sc.w, &sc.v);
                         if rows.m > 0 {
-                            let [re, im] = &mut sc.pm;
-                            gemm(re, &sc.wm, &sc.dv[0]);
-                            gemm(im, &sc.wm, &sc.dv[1]);
+                            for (pm, dv) in sc.pm.iter_mut().zip(&sc.dv) {
+                                gemm(pm, &sc.wm, dv);
+                            }
                         }
                         // Each part's panel sums into the chunk's segments.
                         for (p, part) in group.iter().enumerate() {
@@ -1445,18 +1465,14 @@ fn averages(part: &Part<'_>, sums: &Sums2, len: usize, truncation: f64) -> PartA
         d.push((col, dv, de));
     }
     let nt = part.theta.len();
-    let mut c = 0;
-    for col in part.m_cols {
-        if let Some(col) = col {
+    for (c, col) in part.dir_cols.iter().enumerate() {
+        if let &Some(col) = col {
             let (sb, eb) = (block(1 + nt + c), eblock(1 + nt + c));
             let dv: Vec<f64> = (0..len).map(|i| sb[i] / z).collect();
             let de: Vec<f64> = (0..len)
                 .map(|i| (eb[i] + dv[i].abs() * ez) / z + truncation * dv[i].abs())
                 .collect();
             d.push((col, dv, de));
-        }
-        if part.m_derivatives() {
-            c += 1;
         }
     }
     let mut out = PartAverages { v, e, d };
@@ -1486,27 +1502,35 @@ fn monodisperse(
     part: &Part<'_>,
     r: f64,
     lambda: f64,
-    m: Complex<f64>,
+    optics: Optics,
     opts: &MieOptions,
     layout: &Layout<'_>,
 ) -> Result<PartAverages> {
     let len = layout.len;
-    let mut mie = Mie::<f64>::new();
+    let mut solver = Solver::new();
     let mut g = vec![0.0; len];
-    let mut dmv = vec![0.0; 2 * len];
+    let mut dmv = vec![0.0; part.dir_cols.len() * len];
     let mut drv = vec![0.0; len];
     let radius_col = part.theta.first().map(|&(col, _)| col);
     {
-        let dm = if part.m_derivatives() {
-            let (re, im) = dmv.split_at_mut(len);
-            Some([re, im])
-        } else {
-            None
-        };
+        let mut dm: Vec<&mut [f64]> = dmv.chunks_mut(len).collect();
+        let dm = part.dir_derivatives().then_some(&mut dm[..]);
         let dr = radius_col.map(|_| drv.as_mut_slice());
-        let n = n_terms(size(r, lambda), m, opts).map_err(|e| context(e, lambda, r))?;
+        let n = optics
+            .n_terms(size(r, lambda), opts)
+            .map_err(|e| context(e, lambda, r))?;
         quantities2(
-            &mut mie, r, lambda, m, opts, layout, &mut g, dm, dr, n, None,
+            &mut solver,
+            r,
+            lambda,
+            optics,
+            opts,
+            layout,
+            &mut g,
+            dm,
+            dr,
+            n,
+            None,
         )?;
     }
     let zeros = vec![0.0; len];
@@ -1514,7 +1538,7 @@ fn monodisperse(
     if let Some(col) = radius_col {
         d.push((col, drv, zeros.clone()));
     }
-    for (c, col) in part.m_cols.iter().enumerate() {
+    for (c, col) in part.dir_cols.iter().enumerate() {
         if let Some(col) = col {
             d.push((*col, dmv[c * len..(c + 1) * len].to_vec(), zeros.clone()));
         }
@@ -1540,11 +1564,12 @@ fn wavelength(
     let mut n_max = 0;
     for group in groups {
         let g = members(group);
-        let m = g[0].m[index];
+        let optics = g[0].particle.optics(index);
         let p1 = match g[0].support {
             Support::Point(r) => {
-                let n =
-                    n_terms(size(r, lambda), m, &mie_opts).map_err(|e| context(e, lambda, r))?;
+                let n = optics
+                    .n_terms(size(r, lambda), &mie_opts)
+                    .map_err(|e| context(e, lambda, r))?;
                 Pass1 {
                     panels: Vec::new(),
                     converged: vec![true],
@@ -1552,7 +1577,7 @@ fn wavelength(
                     range: (r, r),
                 }
             }
-            _ => pass1(&g, lambda, m, options, &mie_opts)?,
+            _ => pass1(&g, lambda, optics, options, &mie_opts)?,
         };
         n_max = n_max.max(p1.n_terms);
         firsts.push(p1);
@@ -1574,13 +1599,13 @@ fn wavelength(
     if options.greek.is_some() {
         for (group, p1) in groups.iter().zip(&firsts) {
             let first = &parts[group[0]];
-            let m = first.m[index];
+            let optics = first.particle.optics(index);
             if let Support::Point(_) = first.support {
                 uppers.insert(bucket(p1.n_terms));
                 continue;
             }
             for &(a, b) in &p1.panels {
-                uppers.insert(bucket(panel_terms(a, b, lambda, m, &mie_opts)?));
+                uppers.insert(bucket(panel_terms(a, b, lambda, optics, &mie_opts)?));
             }
         }
     }
@@ -1610,17 +1635,15 @@ fn wavelength(
     let mut averages_of: Vec<Option<PartAverages>> = (0..parts.len()).map(|_| None).collect();
     for (group, p1) in groups.iter().zip(&firsts) {
         let g = members(group);
-        let m = g[0].m[index];
+        let optics = g[0].particle.optics(index);
         if let Support::Point(r) = g[0].support {
-            averages_of[group[0]] = Some(monodisperse(g[0], r, lambda, m, &mie_opts, &layout)?);
+            averages_of[group[0]] =
+                Some(monodisperse(g[0], r, lambda, optics, &mie_opts, &layout)?);
             continue;
         }
-        let sums = pass2(&g, &p1.panels, lambda, m, &mie_opts, &layout)?;
+        let sums = pass2(&g, &p1.panels, lambda, optics, &mie_opts, &layout)?;
         for ((&p, part), sums) in group.iter().zip(&g).zip(&sums) {
-            debug_assert_eq!(
-                sums.blocks,
-                1 + part.theta.len() + if part.m_derivatives() { 2 } else { 0 }
-            );
+            debug_assert_eq!(sums.blocks, blocks(part));
             let truncation = if matches!(part.support, Support::Unbounded(_)) {
                 0.2 * options.rtol
             } else {

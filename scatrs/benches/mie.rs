@@ -1,8 +1,9 @@
 //! Wall-clock benchmarks of the Mie kernel (criterion): values, values with the full
-//! (x, Re m, Im m) Jacobian, and amplitudes at 100 angles, across size parameters, at
-//! m = 1.5 + 0.01i; and the values and Jacobian at the real m = 1.5 (`-real-m`), whose values
-//! take the cheaper real recurrence, so the Jacobian costs relatively more there. The theory
-//! chapter's "Cost" section records the results.
+//! (x, Re m, Im m) Jacobian, and amplitudes at 100 angles, from the cosines and from an
+//! `AngularTable` built beforehand (`-table`), across size parameters, at m = 1.5 + 0.01i; and
+//! the values and Jacobian at the real m = 1.5 (`-real-m`), whose values take the cheaper real
+//! recurrence, so the Jacobian costs relatively more there. The theory chapter's "Cost" section
+//! records the results.
 //!
 //! ```text
 //! cargo bench -p scatrs --bench mie
@@ -12,7 +13,7 @@ use std::hint::black_box;
 
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use num_complex::Complex;
-use scatrs::mie::{AmplitudeBuffers, Mie, MieOptions};
+use scatrs::mie::{AmplitudeBuffers, AngularTable, Mie, MieOptions};
 
 const SIZES: [f64; 6] = [0.1, 1.0, 10.0, 100.0, 1000.0, 10000.0];
 
@@ -51,6 +52,22 @@ fn mie(c: &mut Criterion) {
                 let sol = ws.compute(black_box(x), m, &opts).unwrap();
                 sol.amplitudes(
                     &mu,
+                    AmplitudeBuffers {
+                        s1: &mut s1,
+                        s2: &mut s2,
+                    },
+                )
+                .unwrap();
+                black_box((&s1, &s2));
+            })
+        });
+        let n = ws.compute(x, m, &opts).unwrap().n_terms();
+        let table = AngularTable::new(&mu, n).unwrap();
+        group.bench_with_input(BenchmarkId::new("amplitudes-100-table", x), &x, |b, &x| {
+            b.iter(|| {
+                let sol = ws.compute(black_box(x), m, &opts).unwrap();
+                sol.amplitudes_from_table(
+                    &table,
                     AmplitudeBuffers {
                         s1: &mut s1,
                         s2: &mut s2,

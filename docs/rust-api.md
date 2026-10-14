@@ -23,7 +23,9 @@ The two APIs compute the same things with the same conventions, but differ in sh
 - **Vectorization.** Python functions take arrays and loop over them in Rust. In Rust, a
   {rust}`Mie <scatrs::mie::Mie>` workspace solves one sphere at a time, and the outputs are
   read from the {rust}`MieSolution <scatrs::mie::MieSolution>`, into caller-owned buffers
-  where they are arrays.
+  where they are arrays. For many spheres at the same angles, an
+  {rust}`AngularTable <scatrs::mie::AngularTable>` evaluates the angular functions once for
+  all of them (the Python amplitude and phase-matrix functions use one).
 - **Precision and derivatives.** The Rust kernels are generic over
   {rust}`Real <scatrs::scalar::Real>`, so they also run in double-double precision and with
   {rust}`Dual <scatrs::scalar::Dual>` numbers, for higher derivatives too. Python returns

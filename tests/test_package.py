@@ -7,7 +7,7 @@ from pathlib import Path
 from packaging.version import Version
 
 import scatrs
-from scatrs import _scatrs, ensemble, mie, special
+from scatrs import _scatrs, ensemble, mie, particles, refractive, size, special
 
 ROOT = Path(__file__).parents[1]
 
@@ -48,8 +48,17 @@ def test_crate_license_is_the_repository_license():
 
 def test_public_names():
     for name in (
+        "Ensemble",
+        "Mixture",
+        "Sphere",
+        "LogNormal",
+        "Tabulated",
+        "EnsembleResult",
         "ensemble",
         "mie",
+        "particles",
+        "refractive",
+        "size",
         "special",
         "ScatrsError",
         "InvalidInputError",
@@ -58,9 +67,11 @@ def test_public_names():
         "__version__",
     ):
         assert hasattr(scatrs, name)
-    for module in (special, mie, ensemble):
+    for module in (scatrs, special, mie, ensemble, particles, refractive, size):
         for name in module.__all__:
             assert hasattr(module, name)
+    # The classes re-exported at the top level are those of their modules.
+    assert scatrs.LogNormal is size.LogNormal and scatrs.Ensemble is ensemble.Ensemble
 
 
 def test_limits_are_exposed():

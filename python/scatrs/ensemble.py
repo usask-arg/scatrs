@@ -1,16 +1,20 @@
-"""Ensembles of spheres: size distributions, adaptive size integration and mixtures.
+"""Ensembles of particles: size distributions, adaptive size integration and mixtures.
 
-:func:`compute` averages the optical properties of spheres over a size distribution at each
-wavelength; :func:`compute_mixture` averages over several :class:`Component` s. Radii and
-wavelengths are in the same (any) unit; cross sections are per particle, averaged over the
-number distribution, in that unit squared. See :doc:`/theory/ensembles` for the method and
-the error estimates.
+An :class:`Ensemble` is a particle (:class:`~scatrs.Sphere`) and a size distribution
+(:mod:`scatrs.size`); a :class:`Mixture` is several ensembles with relative number
+concentrations. Their ``compute`` methods average the optical properties over the sizes at
+each wavelength. Radii and wavelengths are in the same (any) unit; cross sections are per
+particle, averaged over the number distribution, in that unit squared. See
+:doc:`/theory/ensembles` for the method and the error estimates.
 
 The size integral is adaptive (Gauss–Kronrod panels in ln r, refined until the cross
 sections, g and the distribution moments, and optionally the backscattering, meet ``rtol``).
-Every output comes with an error estimate (:attr:`EnsembleResult.error`) and, with
+Every output comes with an error estimate (:attr:`~scatrs.EnsembleResult.error`) and, with
 ``derivatives``, its derivatives with respect to the distribution parameters, ``"m_real"``,
-``"m_imag"`` and the mixture weights (:meth:`EnsembleResult.d`).
+``"m_imag"`` and the mixture weights (:meth:`~scatrs.EnsembleResult.d`).
+
+A distribution whose parameters are arrays is a grid of distributions, computed at once with
+shared size nodes (as an optics table needs): the results have the grid's axes first.
 
 Each call runs in Rust with the GIL released, in parallel over wavelengths and size panels;
 results are bitwise the same for any number of threads. Results are frozen dataclasses of
@@ -19,32 +23,26 @@ read-only arrays.
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import Literal, SupportsIndex, TypeAlias
+from types import MappingProxyType
+from typing import Literal, SupportsIndex
 
 import numpy as np
 from numpy.typing import ArrayLike, NDArray
 
 from scatrs import _args, _scatrs
+from scatrs.particles import Sphere
+from scatrs.size import Distribution, _check, _grid, _specs
 
 __all__ = [
     "SCALARS",
-    "Component",
+    "Ensemble",
     "EnsembleGreek",
     "EnsembleOutputs",
     "EnsemblePhase",
     "EnsembleResult",
-    "Gamma",
-    "LogNormal",
-    "ModifiedGamma",
-    "Monodisperse",
-    "MultiModal",
-    "PowerLaw",
-    "Tabulated",
-    "compute",
-    "compute_batch",
-    "compute_mixture",
+    "Mixture",
 ]
 
 SCALARS = (
@@ -63,130 +61,6 @@ SCALARS = (
 """The scalar outputs of :class:`EnsembleOutputs`, in order."""
 
 
-@dataclass(frozen=True)
-class LogNormal:
-    """n(r) ∝ exp(−(ln r − ln r_g)²/(2 ln²σ_g))/r: ``median_radius`` r_g > 0, ``width``
-    σ_g > 1."""
-
-    median_radius: float
-    width: float
-
-    def _spec(self) -> tuple:
-        return ("lognormal", float(self.median_radius), float(self.width))
-
-
-@dataclass(frozen=True)
-class Gamma:
-    """Hansen & Travis's gamma distribution, n(r) ∝ r^((1−3b)/b) exp(−r/(ab)):
-    ``effective_radius`` a > 0, ``effective_variance`` 0 < b < 1/2."""
-
-    effective_radius: float
-    effective_variance: float
-
-    def _spec(self) -> tuple:
-        return ("gamma", float(self.effective_radius), float(self.effective_variance))
-
-
-@dataclass(frozen=True)
-class ModifiedGamma:
-    """Deirmendjian's modified gamma distribution, n(r) ∝ r^α exp(−b r^γ): ``alpha`` > −1,
-    ``b`` > 0, ``gamma`` > 0."""
-
-    alpha: float
-    b: float
-    gamma: float
-
-    def _spec(self) -> tuple:
-        return ("modified_gamma", float(self.alpha), float(self.b), float(self.gamma))
-
-
-@dataclass(frozen=True)
-class PowerLaw:
-    """n(r) ∝ r^(−α) on [``min_radius``, ``max_radius``]: ``exponent`` α (the limits are not
-    differentiable)."""
-
-    exponent: float
-    min_radius: float
-    max_radius: float
-
-    def _spec(self) -> tuple:
-        return (
-            "power_law",
-            float(self.exponent),
-            float(self.min_radius),
-            float(self.max_radius),
-        )
-
-
-@dataclass(frozen=True)
-class Monodisperse:
-    """Spheres of one ``radius``."""
-
-    radius: float
-
-    def _spec(self) -> tuple:
-        return ("monodisperse", float(self.radius))
-
-
-@dataclass(frozen=True)
-class Tabulated:
-    """n(r) linear between the points (``radius[i]``, ``density[i]``) and 0 outside: radii
-    increasing, densities ≥ 0. No parameters."""
-
-    radius: Sequence[float]
-    density: Sequence[float]
-
-    def __post_init__(self) -> None:
-        # Tuples of floats, so that the distribution compares and hashes by value.
-        for name in ("radius", "density"):
-            values = np.asarray(getattr(self, name), dtype=float).ravel()
-            object.__setattr__(self, name, tuple(float(v) for v in values))
-
-    def _spec(self) -> tuple:
-        return ("tabulated", list(self.radius), list(self.density))
-
-
-@dataclass(frozen=True)
-class MultiModal:
-    """Σⱼ wⱼ nⱼ(r), each mode normalized: ``modes`` is a sequence of (weight wⱼ > 0, mode).
-    The modes' parameters are named ``"mode{j}.<name>"``, their weights ``"mode{j}.weight"``.
-    """
-
-    modes: Sequence[tuple[float, Distribution]]
-
-    def __post_init__(self) -> None:
-        modes = tuple((float(w), _check(d, f"mode {j}")) for j, (w, d) in enumerate(self.modes))
-        object.__setattr__(self, "modes", modes)
-
-    def _spec(self) -> tuple:
-        return ("multimodal", [(w, d._spec()) for w, d in self.modes])
-
-
-Distribution: TypeAlias = (
-    LogNormal | Gamma | ModifiedGamma | PowerLaw | Monodisperse | Tabulated | MultiModal
-)
-
-_DISTRIBUTIONS = (LogNormal, Gamma, ModifiedGamma, PowerLaw, Monodisperse, Tabulated, MultiModal)
-
-
-def _check(d: object, what: str) -> Distribution:
-    if not isinstance(d, _DISTRIBUTIONS):
-        names = ", ".join(c.__name__ for c in _DISTRIBUTIONS)
-        raise TypeError(f"{what} must be one of {names}, not {type(d).__name__}")
-    return d
-
-
-@dataclass(frozen=True, eq=False)
-class Component:
-    """One component of an external mixture: a size distribution, its refractive index
-    (broadcast to the wavelengths' shape), and its relative number concentration ``weight``
-    ≥ 0. Components compare by identity."""
-
-    distribution: Distribution
-    refractive_index: ArrayLike
-    weight: float = 1.0
-
-
 def _frozen(a: np.ndarray) -> np.ndarray:
     """A read-only view of ``a``: an array that owns its data can be made writeable again, a
     view of a read-only array cannot."""
@@ -196,8 +70,9 @@ def _frozen(a: np.ndarray) -> np.ndarray:
 
 @dataclass(frozen=True, eq=False)
 class EnsembleGreek:
-    """Greek coefficients per wavelength, arrays of shape ``wavelength.shape + (L + 1,)``,
-    zero-padded to the largest order (see :class:`scatrs.mie.MieGreek` for the expansion)."""
+    """Greek coefficients per wavelength, arrays of shape ``wavelength.shape + (L + 1,)``
+    (after the grid's axes), zero-padded to the largest order (see
+    :class:`scatrs.mie.MieGreek` for the expansion)."""
 
     alpha1: NDArray[np.float64]
     alpha2: NDArray[np.float64]
@@ -210,7 +85,7 @@ class EnsembleGreek:
 @dataclass(frozen=True, eq=False)
 class EnsemblePhase:
     """The phase matrix per wavelength at the cosines ``mu``, arrays of shape
-    ``wavelength.shape + mu.shape``."""
+    ``wavelength.shape + mu.shape`` (after the grid's axes)."""
 
     f11: NDArray[np.float64]
     f12: NDArray[np.float64]
@@ -221,7 +96,7 @@ class EnsemblePhase:
 @dataclass(frozen=True, eq=False)
 class EnsembleOutputs:
     """The outputs of an ensemble (or their error estimates, or their derivatives with
-    respect to one parameter), each an array of the wavelengths' shape.
+    respect to one parameter), each an array of shape ``grid + wavelength.shape``.
 
     Attributes
     ----------
@@ -255,7 +130,7 @@ class EnsembleOutputs:
     phase: EnsemblePhase | None = None
 
 
-@dataclass(frozen=True, eq=False)
+@dataclass(frozen=True, eq=False, repr=False)
 class EnsembleResult(EnsembleOutputs):
     """:class:`EnsembleOutputs` with their error estimates and derivatives.
 
@@ -264,20 +139,31 @@ class EnsembleResult(EnsembleOutputs):
     error : EnsembleOutputs
         Non-negative error estimates of every output (see :doc:`/validation/accuracy`).
     converged : numpy.ndarray
-        bool per wavelength: whether every refined quantity met ``rtol`` within
-        ``max_panels`` panels.
+        bool per point: whether every refined quantity met ``rtol`` within ``max_panels``
+        panels.
     panels : numpy.ndarray
-        int64 per wavelength: the number of size panels.
+        int64 per point: the number of size panels (shared by the points of a grid).
     params : tuple of str
         The parameters :meth:`d` accepts.
+    wavelength : numpy.ndarray
+        The wavelengths, as given.
+    refractive_index : numpy.ndarray
+        m at the wavelengths: of the wavelengths' shape, or ``(components,) +
+        wavelength.shape`` for a :class:`Mixture`.
+    grid : Mapping[str, numpy.ndarray]
+        Each array-valued distribution parameter, by name (as in :attr:`params`), broadcast
+        to the grid's shape; empty if there is no grid.
     """
 
     error: EnsembleOutputs = field(kw_only=True)
     converged: NDArray[np.bool_] = field(kw_only=True)
     panels: NDArray[np.int64] = field(kw_only=True)
+    wavelength: NDArray[np.float64] = field(kw_only=True)
+    refractive_index: NDArray[np.complex128] = field(kw_only=True)
+    grid: Mapping[str, NDArray[np.float64]] = field(kw_only=True)
     params: tuple[str, ...] = field(default=(), kw_only=True)
-    _d: tuple[EnsembleOutputs, ...] = field(default=(), repr=False, kw_only=True)
-    _d_errors: tuple[EnsembleOutputs, ...] = field(default=(), repr=False, kw_only=True)
+    _d: tuple[EnsembleOutputs, ...] = field(default=(), kw_only=True)
+    _d_errors: tuple[EnsembleOutputs, ...] = field(default=(), kw_only=True)
 
     def _index(self, param: str) -> int:
         if param not in self.params:
@@ -304,6 +190,18 @@ class EnsembleResult(EnsembleOutputs):
         """
         return self._d_errors[self._index(param)]
 
+    def __repr__(self) -> str:
+        parts = [f"shape={self.c_ext.shape}"]
+        if self.greek is not None:
+            parts.append(f"greek={self.greek.alpha1.shape}")
+        if self.phase is not None:
+            parts.append(f"phase={self.phase.f11.shape}")
+        parts.append(f"params={self.params}")
+        if self.grid:
+            parts.append(f"grid={tuple(self.grid)}")
+        parts.append(f"converged={int(self.converged.sum())}/{self.converged.size}")
+        return f"EnsembleResult({', '.join(parts)})"
+
 
 def _outputs(
     raw: dict, which: str, k: int | None, shape: tuple[int, ...], mu_shape
@@ -326,29 +224,6 @@ def _outputs(
     return EnsembleOutputs(*scalars, greek=greek, phase=phase)
 
 
-def _refractive_index(refractive_index: ArrayLike, shape: tuple[int, ...]) -> np.ndarray:
-    """The refractive index broadcast to the wavelengths' ``shape``, flattened."""
-    m = _args.complex_array(refractive_index, "refractive_index")
-    try:
-        m = np.broadcast_to(m, shape)
-    except ValueError:
-        raise ValueError(
-            f"refractive_index of shape {m.shape} does not broadcast to the wavelengths' "
-            f"shape {shape}"
-        ) from None
-    return np.ascontiguousarray(m.reshape(-1))
-
-
-def _specs(components: Sequence[Component], shape: tuple[int, ...]) -> list:
-    out = []
-    for i, c in enumerate(components):
-        if not isinstance(c, Component):
-            raise TypeError(f"component {i} must be a Component, not {type(c).__name__}")
-        spec = _check(c.distribution, f"the distribution of component {i}")._spec()
-        out.append((spec, _refractive_index(c.refractive_index, shape), float(c.weight)))
-    return out
-
-
 def _greek_order(greek: SupportsIndex | Literal["all"] | None) -> tuple[int | None, bool]:
     """The order and whether every order is wanted."""
     if greek is None:
@@ -360,74 +235,131 @@ def _greek_order(greek: SupportsIndex | Literal["all"] | None) -> tuple[int | No
     return _args.size(greek, "greek"), False
 
 
-def _run(
-    items: list,
-    wavelength: ArrayLike,
-    mixture: bool,
-    greek: SupportsIndex | Literal["all"] | None,
-    mu: ArrayLike | None,
-    normalized: bool,
-    derivatives: bool | Sequence[str],
-    rtol: float,
-    max_panels: SupportsIndex,
-    allow_unvalidated: bool,
-    refine_backscatter: bool,
-) -> EnsembleResult:
-    wl = _args.real_array(wavelength, "wavelength")
-    shape = wl.shape
-    names = tuple(_scatrs.ensemble_parameters(items, mixture))
+def _parameters(names: tuple[str, ...], derivatives: bool | Sequence[str]) -> tuple[str, ...]:
+    """The requested parameters, checked against ``names``."""
     if isinstance(derivatives, (bool, np.bool_)):
-        params = names if derivatives else ()
-    elif isinstance(derivatives, (str, bytes)) or not isinstance(derivatives, Iterable):
+        return names if derivatives else ()
+    if isinstance(derivatives, (str, bytes)) or not isinstance(derivatives, Iterable):
         raise TypeError(
             "derivatives must be a bool or a sequence of parameter names, "
             f"not {type(derivatives).__name__}"
         )
-    else:
-        params = tuple(derivatives)
-        for p in params:
-            if p not in names:
-                raise ValueError(f"unknown parameter {p!r}; expected one of {names}")
-        if len(set(params)) != len(params):
-            raise ValueError(f"a parameter is requested twice: {params}")
-    mus = None if mu is None else _args.real_array(mu, "mu")
-    order, all_orders = _greek_order(greek)
-    raw = _scatrs.ensemble_compute(
-        items,
-        np.ascontiguousarray(wl.reshape(-1)),
-        mixture,
-        order,
-        all_orders,
-        np.ascontiguousarray(np.zeros(0) if mus is None else mus.reshape(-1)),
-        _args.flag(normalized, "normalized"),
-        [names.index(p) for p in params],
-        float(rtol),
-        _args.size(max_panels, "max_panels"),
-        _args.flag(allow_unvalidated, "allow_unvalidated"),
-        _args.flag(refine_backscatter, "refine_backscatter"),
-    )
+    params = tuple(derivatives)
+    for p in params:
+        if p not in names:
+            raise ValueError(f"unknown parameter {p!r}; expected one of {names}")
+    if len(set(params)) != len(params):
+        raise ValueError(f"a parameter is requested twice: {params}")
+    return params
+
+
+@dataclass(frozen=True, eq=False)
+class _Options:
+    """The options shared by every ``compute``, converted for the engine."""
+
+    order: int | None
+    all_orders: bool
+    mu: NDArray[np.float64] | None
+    normalized: bool
+    rtol: float
+    max_panels: int
+    allow_unvalidated: bool
+    refine_backscatter: bool
+
+    @classmethod
+    def of(
+        cls,
+        greek: SupportsIndex | Literal["all"] | None,
+        mu: ArrayLike | None,
+        normalized: bool,
+        rtol: float,
+        max_panels: SupportsIndex,
+        allow_unvalidated: bool,
+        refine_backscatter: bool,
+    ) -> _Options:
+        order, all_orders = _greek_order(greek)
+        return cls(
+            order,
+            all_orders,
+            None if mu is None else _args.real_array(mu, "mu"),
+            _args.flag(normalized, "normalized"),
+            float(rtol),
+            _args.size(max_panels, "max_panels"),
+            _args.flag(allow_unvalidated, "allow_unvalidated"),
+            _args.flag(refine_backscatter, "refine_backscatter"),
+        )
+
+    def flat_mu(self) -> NDArray[np.float64]:
+        return np.ascontiguousarray(np.zeros(0) if self.mu is None else self.mu.reshape(-1))
+
+    def mu_shape(self) -> tuple[int, ...]:
+        return () if self.mu is None else self.mu.shape
+
+
+def _result(
+    raw: dict,
+    shape: tuple[int, ...],
+    o: _Options,
+    wavelength: NDArray[np.float64],
+    m: NDArray[np.complex128],
+    grid: dict[str, NDArray[np.float64]],
+    params: tuple[str, ...] = (),
+) -> EnsembleResult:
+    """The result from the engine's dict ``raw``, every array of shape ``shape`` (+ trailing)."""
     raw["panels"] = raw["panels"].astype(np.int64)
     for a in raw.values():
         a.flags.writeable = False
-    mu_shape = () if mus is None else mus.shape
+    mu_shape = o.mu_shape()
     values = _outputs(raw, "", None, shape, mu_shape)
     return EnsembleResult(
         **{f: getattr(values, f) for f in (*SCALARS, "greek", "phase")},
         error=_outputs(raw, "_errors", None, shape, mu_shape),
         converged=raw["converged"].reshape(shape),
         panels=raw["panels"].reshape(shape),
+        wavelength=_frozen(wavelength.copy()),
+        refractive_index=_frozen(m),
+        grid=MappingProxyType({n: _frozen(a.copy()) for n, a in grid.items()}),
         params=params,
         _d=tuple(_outputs(raw, "_d", k, shape, mu_shape) for k in range(len(params))),
         _d_errors=tuple(_outputs(raw, "_d_errors", k, shape, mu_shape) for k in range(len(params))),
     )
 
 
-_SHARED_DOC = """
+def _single(
+    items: list, mixture: bool, wl: NDArray[np.float64], derivatives, o: _Options
+) -> tuple[dict, tuple[str, ...]]:
+    """The engine's single-distribution or mixture path."""
+    names = tuple(_scatrs.ensemble_parameters(items, mixture))
+    params = _parameters(names, derivatives)
+    raw = _scatrs.ensemble_compute(
+        items,
+        np.ascontiguousarray(wl.reshape(-1)),
+        mixture,
+        o.order,
+        o.all_orders,
+        o.flat_mu(),
+        o.normalized,
+        [names.index(p) for p in params],
+        o.rtol,
+        o.max_panels,
+        o.allow_unvalidated,
+        o.refine_backscatter,
+    )
+    return raw, params
+
+
+def _sphere(particle: object, what: str) -> Sphere:
+    if not isinstance(particle, Sphere):
+        raise TypeError(f"{what} must be a Sphere, not {type(particle).__name__}")
+    return particle
+
+
+_COMPUTE_DOC = """{summary}
+
     Parameters
     ----------
-    {first}wavelength : array_like
+    wavelength : array_like
         Wavelengths, in the unit of the radii (real, scalar or any shape).
-    {second}
     greek : int, "all" or None, optional
         The Greek coefficients to compute: up to this order, every order, or none (the
         default).
@@ -437,14 +369,11 @@ _SHARED_DOC = """
         Normalize the phase matrix and the Greek coefficients (``alpha1[..., 0]`` = 1, the
         default) or give them per particle (``alpha1[..., 0]`` = ``c_sca``).
     derivatives : bool or sequence of str, optional
-        The parameters to differentiate with respect to (``True`` for all): the
-        distribution's (``"median_radius"``, …), ``"m_real"``,
-        ``"m_imag"``{weights}.
+        The parameters to differentiate with respect to (``True`` for all): {derivatives}
     rtol : float, optional
         Relative tolerance of the size integration, in [1e-13, 0.1].
     max_panels : int, optional
-        The most size panels per component and wavelength; reaching it sets ``converged``
-        to False.
+        The most size panels per {per}; reaching it sets ``converged`` to False.
     allow_unvalidated : bool, optional
         Compute sizes outside the validated domain of the Mie solution instead of raising.
     refine_backscatter : bool, optional
@@ -456,19 +385,20 @@ _SHARED_DOC = """
     Returns
     -------
     EnsembleResult
+        {returns}
 
     Raises
     ------
     InvalidInputError
-        For invalid distribution parameters, wavelengths, refractive indices or options, or
-        outputs that would exceed ``2 * MAX_MIE_VALUES`` real values (the bound of
-        :mod:`scatrs.mie`; with ``greek="all"``, known only after the computation).
+        For invalid distribution parameters, wavelengths, refractive indices (including a
+        model with no valid value at a wavelength) or options, or outputs that would exceed
+        ``2 * MAX_MIE_VALUES`` real values (the bound of :mod:`scatrs.mie`; with
+        ``greek="all"``, known only after the computation).
     OutsideValidatedDomainError
         If a size node is outside the validated domain, unless ``allow_unvalidated``; the
         message names the wavelength and the radius.
     TypeError, ValueError
-        For arguments of the wrong type, refractive indices that do not broadcast to the
-        wavelengths, or unknown or repeated parameter names.
+        For arguments of the wrong type, or unknown or repeated parameter names.{raises}
     BufferError
         If another rust-numpy extension holds a writeable borrow of an input.
     MemoryError
@@ -482,170 +412,171 @@ _SHARED_DOC = """
 """
 
 
-def compute(
-    distribution: Distribution,
-    wavelength: ArrayLike,
-    refractive_index: ArrayLike,
-    *,
-    greek: SupportsIndex | Literal["all"] | None = None,
-    mu: ArrayLike | None = None,
-    normalized: bool = True,
-    derivatives: bool | Sequence[str] = False,
-    rtol: float = 1e-6,
-    max_panels: SupportsIndex = 4096,
-    allow_unvalidated: bool = False,
-    refine_backscatter: bool = False,
-) -> EnsembleResult:
-    wl = _args.real_array(wavelength, "wavelength")
-    items = _specs([Component(distribution, refractive_index)], wl.shape)
-    return _run(
-        items,
-        wl,
-        False,
-        greek,
-        mu,
-        normalized,
-        derivatives,
-        rtol,
-        max_panels,
-        allow_unvalidated,
-        refine_backscatter,
-    )
-
-
-compute.__doc__ = """Averages over spheres of one size distribution.
-""" + _SHARED_DOC.format(
-    first="distribution : LogNormal, Gamma, ModifiedGamma, PowerLaw, Monodisperse, Tabulated "
-    "or MultiModal\n        The number size distribution.\n    ",
-    second="refractive_index : array_like\n        The refractive index, broadcast to the "
-    "wavelengths' shape.\n    ",
-    weights=', and ``"mode{j}.weight"`` for multimodal distributions',
-)
-
-
-def compute_mixture(
-    components: Sequence[Component],
-    wavelength: ArrayLike,
-    *,
-    greek: SupportsIndex | Literal["all"] | None = None,
-    mu: ArrayLike | None = None,
-    normalized: bool = True,
-    derivatives: bool | Sequence[str] = False,
-    rtol: float = 1e-6,
-    max_panels: SupportsIndex = 4096,
-    allow_unvalidated: bool = False,
-    refine_backscatter: bool = False,
-) -> EnsembleResult:
-    wl = _args.real_array(wavelength, "wavelength")
-    items = _specs(list(components), wl.shape)
-    return _run(
-        items,
-        wl,
-        True,
-        greek,
-        mu,
-        normalized,
-        derivatives,
-        rtol,
-        max_panels,
-        allow_unvalidated,
-        refine_backscatter,
-    )
-
-
-compute_mixture.__doc__ = """Averages over an external mixture: cross sections and moments
-    weighted by wᵢ/Σw, phase matrices by wᵢ C_sca,ᵢ.
-""" + _SHARED_DOC.format(
-    first="components : sequence of Component\n        The components.\n    ",
-    second="",
-    weights=' (each prefixed by ``"c{i}."``), and the weights ``"c{i}.weight"``',
-)
-
-
-def compute_batch(
-    distributions: Sequence[Distribution],
-    wavelength: ArrayLike,
-    refractive_index: ArrayLike,
-    *,
-    greek: SupportsIndex | Literal["all"] | None = None,
-    mu: ArrayLike | None = None,
-    normalized: bool = True,
-    rtol: float = 1e-6,
-    max_panels: SupportsIndex = 4096,
-    allow_unvalidated: bool = False,
-    refine_backscatter: bool = False,
-) -> EnsembleResult:
-    """Averages over spheres of each of many size distributions of one material, sharing the
-    size nodes.
-
-    One set of size panels per wavelength covers every distribution, refined until each meets
-    its own targets, so every Mie solution and phase-matrix table serves all of them: for a
-    grid of distributions (an optics database) this costs about as much as the broadest
-    distribution alone. Each distribution's result has its own error estimates and
-    ``converged`` flag; being at least as refined as on its own, its values differ from
-    :func:`compute`'s within the error estimates. No derivatives: use :func:`compute`.
+@dataclass(frozen=True)
+class Ensemble:
+    """Particles of one kind over a size distribution.
 
     Parameters
     ----------
-    distributions : sequence of LogNormal, Gamma, ModifiedGamma, PowerLaw, Monodisperse, \
-Tabulated or MultiModal
-        The number size distributions.
-    wavelength : array_like
-        Wavelengths, in the unit of the radii.
-    refractive_index : array_like
-        The refractive index, broadcast to the wavelengths' shape.
-    greek, mu, normalized, rtol, max_panels, allow_unvalidated, refine_backscatter
-        As for :func:`compute`.
-
-    Returns
-    -------
-    EnsembleResult
-        Every array with a leading axis of the distributions, then the wavelengths' shape;
-        ``panels`` counts the shared panels.
+    particle : Sphere
+        The particle, with its refractive-index model.
+    size : LogNormal, Gamma, ModifiedGamma, PowerLaw, Monodisperse, Tabulated or MultiModal
+        The number size distribution. If its parameters are arrays, the ensemble is a grid
+        of distributions, one per point of their broadcast shape.
 
     Raises
     ------
-    InvalidInputError
-        For no distributions, invalid parameters, wavelengths, refractive indices or options,
-        or outputs that would exceed ``2 * MAX_MIE_VALUES`` real values.
-    OutsideValidatedDomainError
-        If a size node is outside the validated domain, unless ``allow_unvalidated``.
-    TypeError, ValueError
-        For arguments of the wrong type, or refractive indices that do not broadcast to the
-        wavelengths.
+    TypeError
+        If ``particle`` is not a :class:`~scatrs.Sphere` or ``size`` not a distribution.
+    ValueError
+        If the distribution's array-valued parameters do not broadcast together.
     """
-    wl = _args.real_array(wavelength, "wavelength")
-    if isinstance(distributions, (str, bytes)) or not isinstance(distributions, Iterable):
-        raise TypeError(
-            f"distributions must be a sequence of distributions, not {type(distributions).__name__}"
+
+    particle: Sphere
+    size: Distribution
+
+    def __post_init__(self) -> None:
+        _sphere(self.particle, "particle")
+        _check(self.size, "size")
+        _grid(self.size)
+
+    @property
+    def grid_shape(self) -> tuple[int, ...]:
+        """The shape of the grid of distributions: ``()`` if no parameter is an array."""
+        return _grid(self.size)[0]
+
+    def compute(
+        self,
+        wavelength: ArrayLike,
+        *,
+        greek: SupportsIndex | Literal["all"] | None = None,
+        mu: ArrayLike | None = None,
+        normalized: bool = True,
+        derivatives: bool | Sequence[str] = False,
+        rtol: float = 1e-6,
+        max_panels: SupportsIndex = 4096,
+        allow_unvalidated: bool = False,
+        refine_backscatter: bool = False,
+    ) -> EnsembleResult:
+        wl = _args.real_array(wavelength, "wavelength")
+        m = self.particle.refractive_index.evaluate(wl)
+        o = _Options.of(
+            greek, mu, normalized, rtol, max_panels, allow_unvalidated, refine_backscatter
         )
-    dists = list(distributions)
-    specs = [_check(d, f"distribution {i}")._spec() for i, d in enumerate(dists)]
-    m = _refractive_index(refractive_index, wl.shape)
-    mus = None if mu is None else _args.real_array(mu, "mu")
-    order, all_orders = _greek_order(greek)
-    raw = _scatrs.ensemble_compute_batch(
-        specs,
-        m,
-        np.ascontiguousarray(wl.reshape(-1)),
-        order,
-        all_orders,
-        np.ascontiguousarray(np.zeros(0) if mus is None else mus.reshape(-1)),
-        _args.flag(normalized, "normalized"),
-        float(rtol),
-        _args.size(max_panels, "max_panels"),
-        _args.flag(allow_unvalidated, "allow_unvalidated"),
-        _args.flag(refine_backscatter, "refine_backscatter"),
-    )
-    raw["panels"] = raw["panels"].astype(np.int64)
-    for a in raw.values():
-        a.flags.writeable = False
-    shape = (len(dists), *wl.shape)
-    mu_shape = () if mus is None else mus.shape
-    values = _outputs(raw, "", None, shape, mu_shape)
-    return EnsembleResult(
-        **{f: getattr(values, f) for f in (*SCALARS, "greek", "phase")},
-        error=_outputs(raw, "_errors", None, shape, mu_shape),
-        converged=raw["converged"].reshape(shape),
-        panels=raw["panels"].reshape(shape),
-    )
+        shape, grid = _grid(self.size)
+        flat_m = np.ascontiguousarray(m.reshape(-1))
+        if shape == ():
+            items = [(_specs(self.size)[1][0], flat_m, 1.0)]
+            raw, params = _single(items, False, wl, derivatives, o)
+            return _result(raw, wl.shape, o, wl, m, grid, params)
+        if not (isinstance(derivatives, (bool, np.bool_)) and not derivatives):
+            raise NotImplementedError(
+                "derivatives of a grid of distributions are not available yet; compute each "
+                "point as its own Ensemble"
+            )
+        raw = _scatrs.ensemble_compute_batch(
+            _specs(self.size)[1],
+            flat_m,
+            np.ascontiguousarray(wl.reshape(-1)),
+            o.order,
+            o.all_orders,
+            o.flat_mu(),
+            o.normalized,
+            o.rtol,
+            o.max_panels,
+            o.allow_unvalidated,
+            o.refine_backscatter,
+        )
+        return _result(raw, (*shape, *wl.shape), o, wl, m, grid)
+
+
+Ensemble.compute.__doc__ = _COMPUTE_DOC.format(
+    summary="Averages over the ensemble at each wavelength.",
+    derivatives='the distribution\'s (``"median_radius"``, …; ``"mode{j}.<name>"`` and '
+    '``"mode{j}.weight"`` for a multimodal one), ``"m_real"`` and ``"m_imag"`` (Re m and Im m '
+    "at each wavelength). Not available for a grid.",
+    per="wavelength (shared by a grid's points)",
+    returns="Every array of shape ``grid + wavelength.shape``. A grid's points share their "
+    "size nodes and each meets its own ``rtol``: being at least as refined as on its own, a "
+    "point's values differ from those of its own ensemble within the error estimates.",
+    raises="\n    NotImplementedError\n        For ``derivatives`` of a grid.",
+)
+
+
+@dataclass(frozen=True)
+class Mixture:
+    """An external mixture: ensembles with relative number concentrations.
+
+    Cross sections and moments are averaged with the number fractions wᵢ/Σw, phase matrices
+    with wᵢ times the ``c_sca`` of ensemble i.
+
+    Parameters
+    ----------
+    components : sequence of (float, Ensemble)
+        The weights wᵢ ≥ 0 (finite, not all zero) and the ensembles, whose distributions
+        must not be grids.
+
+    Raises
+    ------
+    TypeError
+        If a component is not a (weight, Ensemble) pair.
+    ValueError
+        If an ensemble is a grid.
+    """
+
+    components: Sequence[tuple[float, Ensemble]]
+
+    def __post_init__(self) -> None:
+        out = []
+        for i, c in enumerate(self.components):
+            try:
+                w, e = c
+            except (TypeError, ValueError):
+                raise TypeError(
+                    f"component {i} must be a (weight, Ensemble) pair, not {type(c).__name__}"
+                ) from None
+            if not isinstance(e, Ensemble):
+                raise TypeError(f"component {i} must be a (weight, Ensemble) pair")
+            if e.grid_shape != ():
+                raise ValueError(
+                    f"the distribution of component {i} is a grid of shape {e.grid_shape}; "
+                    "a mixture needs scalar parameters"
+                )
+            out.append((float(w), e))
+        object.__setattr__(self, "components", tuple(out))
+
+    def compute(
+        self,
+        wavelength: ArrayLike,
+        *,
+        greek: SupportsIndex | Literal["all"] | None = None,
+        mu: ArrayLike | None = None,
+        normalized: bool = True,
+        derivatives: bool | Sequence[str] = False,
+        rtol: float = 1e-6,
+        max_panels: SupportsIndex = 4096,
+        allow_unvalidated: bool = False,
+        refine_backscatter: bool = False,
+    ) -> EnsembleResult:
+        wl = _args.real_array(wavelength, "wavelength")
+        ms = [e.particle.refractive_index.evaluate(wl) for _, e in self.components]
+        o = _Options.of(
+            greek, mu, normalized, rtol, max_panels, allow_unvalidated, refine_backscatter
+        )
+        items = [
+            (_specs(e.size)[1][0], np.ascontiguousarray(m.reshape(-1)), w)
+            for (w, e), m in zip(self.components, ms, strict=True)
+        ]
+        raw, params = _single(items, True, wl, derivatives, o)
+        m = np.stack(ms) if ms else np.zeros((0, *wl.shape), dtype=complex)
+        return _result(raw, wl.shape, o, wl, m, {}, params)
+
+
+Mixture.compute.__doc__ = _COMPUTE_DOC.format(
+    summary="Averages over the mixture at each wavelength.",
+    derivatives='each component\'s distribution parameters, ``"m_real"`` and ``"m_imag"``, '
+    'prefixed by ``"c{i}."``, and the weights ``"c{i}.weight"``.',
+    per="component and wavelength",
+    returns="Every array of the wavelengths' shape.",
+    raises="",
+)

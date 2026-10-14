@@ -6,6 +6,37 @@ All notable changes are documented here. The format follows
 
 ## [Unreleased]
 
+### Breaking
+
+The functions of `scatrs.ensemble` are replaced by objects. Each removed call and its
+replacement:
+
+- `ensemble.compute(dist, wavelength, m, ...)` →
+  `scatrs.Ensemble(scatrs.Sphere(m), dist).compute(wavelength, ...)`.
+- `ensemble.compute_mixture([ensemble.Component(dist, m, w), ...], wavelength, ...)` →
+  `scatrs.Mixture([(w, scatrs.Ensemble(scatrs.Sphere(m), dist)), ...]).compute(wavelength, ...)`.
+- `ensemble.compute_batch([LogNormal(r1, s1), LogNormal(r2, s2), ...], wavelength, m, ...)` →
+  `scatrs.Ensemble(scatrs.Sphere(m), scatrs.LogNormal([r1, r2, ...], [s1, s2, ...])).compute(wavelength, ...)`:
+  array-valued distribution parameters broadcast into a grid of distributions.
+- `ensemble.Component` is removed; the size distributions move from `scatrs.ensemble` to
+  `scatrs.size` and the top level (`scatrs.LogNormal`, …).
+- A refractive index given as an array of values per wavelength is no longer accepted: use
+  `scatrs.refractive.Table` (or `scatrs.refractive.Function`).
+
+The keyword options, the outputs, their values and the parameter names of `derivatives` are
+unchanged.
+
+### Added
+
+- `scatrs.Sphere`, `scatrs.Ensemble` and `scatrs.Mixture`: immutable, hashable descriptions of
+  particles, ensembles and mixtures, each ensemble and mixture with a `compute` method.
+- `scatrs.refractive`: refractive-index models `Constant`, `Table` (linear, or log-linear in
+  k), `Cauchy`, `Sellmeier` and `Function`, with the names of their parameters and ∂m/∂θ.
+- Grids of distributions: any numeric distribution parameter can be an array; the grid is
+  computed at once with shared size nodes, and the results have the grid's axes first.
+- `EnsembleResult.wavelength`, `.refractive_index` (the m used) and `.grid` (the array-valued
+  parameters, broadcast), and a short `repr`.
+
 ## [0.1.0] - Unreleased
 
 The first release: a standalone library built out of the scattering core of the

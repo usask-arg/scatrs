@@ -32,15 +32,19 @@ cargo add scatrs
 
 ```python
 import numpy as np
-from scatrs import ensemble, mie
+import scatrs
+from scatrs import mie
 
 # One water droplet: efficiencies, asymmetry parameter and the phase matrix.
 q = mie.efficiencies(10.0, 1.33 + 1e-8j)  # size parameter, refractive index n + ik
 f = mie.phase_matrix(10.0, 1.33 + 1e-8j, np.cos(np.radians([0, 90, 180])))
 
 # A lognormal aerosol at three wavelengths (µm), with Greek coefficients to order 32.
-sulfate = ensemble.LogNormal(median_radius=0.08, width=1.6)
-r = ensemble.compute(sulfate, [0.35, 0.55, 1.0], 1.43 + 1e-8j, greek=32)
+sulfate = scatrs.Ensemble(
+    scatrs.Sphere(refractive_index=1.43 + 1e-8j),
+    scatrs.LogNormal(median_radius=0.08, width=1.6),
+)
+r = sulfate.compute([0.35, 0.55, 1.0], greek=32)
 print(r.c_ext, r.ssa, r.g, r.greek.alpha1[:, :4])
 ```
 

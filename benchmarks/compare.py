@@ -74,12 +74,11 @@ def best_of(f, repeats: int = REPEATS):
 
 def run_scatrs(w: dict, rtol: float, max_panels: int = 4096):
     """scatrs's outputs as arrays (distribution, wavelength[, order])."""
-    from scatrs import ensemble
+    import scatrs
 
-    dists = [ensemble.LogNormal(r, s) for r, s in w["lognormals"]]
-    r = ensemble.compute_batch(
-        dists, w["wavelengths"], w["m"], greek=ORDER, rtol=rtol, max_panels=max_panels
-    )
+    radii, widths = np.array(w["lognormals"]).T
+    grid = scatrs.Ensemble(scatrs.Sphere(w["m"]), scatrs.LogNormal(radii, widths))
+    r = grid.compute(w["wavelengths"], greek=ORDER, rtol=rtol, max_panels=max_panels)
     out = {"c_ext": r.c_ext, "c_sca": r.c_sca, "converged": r.converged, "panels": r.panels}
     out.update({k: getattr(r.greek, k) for k in GREEK})
     return out

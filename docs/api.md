@@ -17,19 +17,70 @@ available from Rust ({doc}`rust-api`). Both APIs follow the {doc}`/theory/conven
 ```
 
 The package also re-exports the exceptions of {mod}`scatrs.errors` and the modules
-{mod}`scatrs.mie`, {mod}`scatrs.ensemble` and {mod}`scatrs.special`.
+{mod}`scatrs.mie`, {mod}`scatrs.ensemble`, {mod}`scatrs.refractive`, {mod}`scatrs.size` and
+{mod}`scatrs.special`. The classes below are defined in `scatrs.particles`,
+{mod}`scatrs.size` and {mod}`scatrs.ensemble`, and used from the top level.
 
-## `scatrs.mie`
+### Particles, ensembles and mixtures
 
 ```{eval-rst}
-.. automodule:: scatrs.mie
-   :members:
+.. autoclass:: scatrs.Sphere
+
+.. autoclass:: scatrs.Ensemble
+   :members: compute, grid_shape
+
+.. autoclass:: scatrs.Mixture
+   :members: compute
+```
+
+### Size distributions
+
+```{eval-rst}
+.. automodule:: scatrs.size
+   :no-members:
+
+.. autoclass:: scatrs.LogNormal
+.. autoclass:: scatrs.Gamma
+.. autoclass:: scatrs.ModifiedGamma
+.. autoclass:: scatrs.PowerLaw
+.. autoclass:: scatrs.Monodisperse
+.. autoclass:: scatrs.Tabulated
+.. autoclass:: scatrs.MultiModal
+```
+
+### Results
+
+```{eval-rst}
+.. autoclass:: scatrs.EnsembleResult
+   :members: d, d_error
+
+.. autoclass:: scatrs.EnsembleOutputs
+
+.. autoclass:: scatrs.EnsembleGreek
+
+.. autoclass:: scatrs.EnsemblePhase
+
+.. autodata:: scatrs.ensemble.SCALARS
 ```
 
 ## `scatrs.ensemble`
 
 ```{eval-rst}
 .. automodule:: scatrs.ensemble
+   :no-members:
+```
+
+## `scatrs.refractive`
+
+```{eval-rst}
+.. automodule:: scatrs.refractive
+   :members:
+```
+
+## `scatrs.mie`
+
+```{eval-rst}
+.. automodule:: scatrs.mie
    :members:
 ```
 

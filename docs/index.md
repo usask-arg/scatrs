@@ -11,10 +11,11 @@ library for the optical properties of particles. Install it with `pip install sc
 - **Mie scattering by homogeneous spheres** ({mod}`scatrs.mie`): Mie coefficients,
   efficiencies, asymmetry parameter, amplitudes, phase matrix and Greek coefficients to every
   order, vectorized over size parameter and refractive index.
-- **Ensembles of spheres** ({mod}`scatrs.ensemble`): averages over seven kinds of size
-  distribution and over external mixtures, at many wavelengths in parallel, with an error
-  estimate for every output. Batches of distributions share their Mie solutions, for building
-  optics databases.
+- **Ensembles of spheres** ({class}`scatrs.Ensemble`, {class}`scatrs.Mixture`): averages over
+  seven kinds of size distribution and over external mixtures, at many wavelengths in
+  parallel, with an error estimate for every output, and refractive indices that vary with
+  wavelength ({mod}`scatrs.refractive`). Grids of distributions share their Mie solutions, for
+  building optics tables.
 - **Derivatives** of every output, in closed form: with respect to the size parameter and the
   refractive index, and for ensembles, the distribution parameters and the mixture weights.
 - **Validated accuracy.** Every output has a declared accuracy, checked against independent
@@ -61,6 +62,7 @@ limitations
 :caption: Theory
 
 theory/conventions
+theory/refractive-index
 theory/mie
 theory/ensembles
 theory/special-functions

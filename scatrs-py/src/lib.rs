@@ -6,6 +6,7 @@
 
 use pyo3::prelude::*;
 
+mod ensemble;
 mod errors;
 mod mie;
 mod special;
@@ -30,6 +31,9 @@ fn _scatrs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("MAX_GREEK_ORDER", scatrs::mie::MAX_GREEK_ORDER)?;
     m.add_function(wrap_pyfunction!(mie::mie_phase_matrix, m)?)?;
     m.add_function(wrap_pyfunction!(mie::mie_greek, m)?)?;
+    m.add_function(wrap_pyfunction!(ensemble::ensemble_parameters, m)?)?;
+    m.add_function(wrap_pyfunction!(ensemble::ensemble_compute, m)?)?;
+    m.add_function(wrap_pyfunction!(ensemble::ensemble_compute_batch, m)?)?;
     testing::register(m)?;
     Ok(())
 }

@@ -28,11 +28,33 @@ All notable changes are documented here. The format follows
   order, with derivatives, and `GreekProjector`, which projects any phase-matrix tables given
   at its Gauss–Legendre nodes; Arb references and an accuracy map for both.
 - Python `scatrs.mie.phase_matrix` and `scatrs.mie.greek`.
+- Ensembles of spheres (`scatrs::ensemble`, Python `scatrs.ensemble`): seven size
+  distributions (lognormal, gamma, modified gamma, power law, monodisperse, tabulated,
+  multimodal) and external mixtures, averaged at many wavelengths by two-pass adaptive
+  Gauss–Kronrod integration in ln r, with an error estimate for every output (calibrated in CI)
+  and derivatives with respect to the distribution parameters, the refractive indices and the
+  mixture weights; cross sections, single-scattering albedo, asymmetry parameter,
+  backscattering, lidar and depolarization ratios, moments, phase matrix and exact Greek
+  coefficients. Parallel over wavelengths and size panels with rayon, with results bitwise
+  identical, and the same errors, for any number of threads. `MAX_REFINE_ORDER` bounds the
+  optional refinement on the Greek coefficients.
+- `GreekProjector::project_bounds`, which projects bounds on phase-matrix table errors to
+  bounds on the Greek coefficients.
+- `ensemble::compute_batch` (Python `scatrs.ensemble.compute_batch`): many distributions of one
+  material on shared size nodes, each with its own error estimates, for optics databases.
+- `benchmarks/compare.py`: accuracy and speed against sasktran2's Mie integration, published in
+  the documentation.
 
 ### Changed
+- Ensembles with Greek coefficients are 7–12 times faster (the lognormal of the theory
+  chapter's cost table, λ = 1 to 0.3): the phase-matrix tables of a panel's
+  spheres come from matrix products against tables of πₙ and τₙ shared by every sphere of a
+  projector band, and the sums and projections are matrix products too. The core crate now
+  depends on `faer` (without default features) for them.
 - Gauss–Legendre rules of `f64` precision above 100 points come from the asymptotic
   expansions, within 32·2⁻⁵² (measured 2.8 and 4.0 units of 2⁻⁵² for nodes and weights),
   instead of the double-double Newton rule rounded to within half an ulp. The Newton rule
   remains up to 100 points and for double-double precision.
 - `GaussLegendre` is `#[non_exhaustive]`: code outside the crate can no longer build one with a
   struct literal.
+- The core crate depends on `rayon`.

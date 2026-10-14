@@ -60,7 +60,7 @@ fn invalid(message: String) -> scatrs::Error {
     scatrs::Error::InvalidInput(message)
 }
 
-fn borrow<'py, T: numpy::Element>(
+pub(crate) fn borrow<'py, T: numpy::Element>(
     a: &'py Bound<'py, PyArrayDyn<T>>,
     name: &str,
 ) -> PyResult<PyReadonlyArrayDyn<'py, T>> {

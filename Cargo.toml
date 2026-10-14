@@ -12,7 +12,9 @@ repository = "https://github.com/usask-arg/scatrs"
 [workspace.dependencies]
 num-complex = "0.4.6"
 num-traits = "0.2.19"
+rayon = "1.10"
 thiserror = "2"
+faer = { version = "0.24.4", default-features = false, features = ["std"] }
 
 [profile.release]
 lto = "fat"

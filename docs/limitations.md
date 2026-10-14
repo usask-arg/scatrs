@@ -2,10 +2,12 @@
 
 <!-- synced with docs/plans/phase-0-followups.md -->
 <!-- synced with docs/plans/phase-1b-followups.md -->
+<!-- synced with docs/plans/phase-2a-followups.md -->
 
 scatrs is pre-alpha. This page lists what users should know: missing pieces, costs,
 and behaviour at the edges. The repository tracks each item, with the phase that is to address
-it, in `docs/plans/phase-0-followups.md` and `docs/plans/phase-1b-followups.md`.
+it, in `docs/plans/phase-0-followups.md`, `docs/plans/phase-1b-followups.md` and
+`docs/plans/phase-2a-followups.md`.
 
 (what-backs-the-numbers)=
 ## What backs the accuracy figures
@@ -19,14 +21,18 @@ it, in `docs/plans/phase-0-followups.md` and `docs/plans/phase-1b-followups.md`.
   checked in CI against the Arb references (certified, or high-precision for the series of
   derivatives and the largest |m|x) and a dense double-double map. See
   {doc}`validation/accuracy`.
+- **Calibrated:** the error estimates of the ensembles, which are estimates, not proved bounds.
+  A CI test checks them against the same integrals at a tight tolerance, on a grid of nine
+  distributions. See {ref}`ensemble-accuracy`.
 - **Measured:** worst-case errors and timings quoted from test output, and from probes run
   during code review that are not in the repository (marked as such).
 
 ## Scope and availability
 
 - Mie scattering by homogeneous spheres is the only scattering method yet; layered spheres and
-  the T-matrix follow. The phase matrix and Greek coefficients are those of single spheres:
-  size distributions and mixtures arrive in phase 2.
+  the T-matrix follow. Size distributions and external mixtures of spheres are in
+  `scatrs::ensemble` (Python {mod}`scatrs.ensemble`); the comparison with sasktran2 and the
+  declarative Python API are still to come (phases 2b and 2c).
 - Python exposes only `f64` results. `DoubleDouble` and the `Dual` derivatives are
   available from Rust only.
 - Neither wheels nor the Rust crate are published, and the Rust API is not on docs.rs. See
@@ -171,6 +177,58 @@ the same treatment when a kernel needs them.
   (the efficiencies are at rounding level).
 - **Series derivatives in the reference suite** have no tail bound yet, so they are labelled
   high-precision.
+
+## Ensembles of spheres
+
+- **Cost of the Greek coefficients.** Pass 2 computes each size node's amplitudes at about
+  $N + L/2$ cosines to get exact Greek coefficients, $O(N^2)$ for large spheres (as matrix
+  products), whatever the order $L$. Measured on an Apple M4 Pro (12 cores), per wavelength, a
+  lognormal with $r_g = 1$ µm, $\sigma_g = 2$ and $m = 1.33 + 10^{-4}i$ at rtol $10^{-6}$: the
+  cross sections, $g$ and the moments take 0.037 s, 0.11 s and 0.20 s at $\lambda$ = 1, 0.5 and
+  0.3 µm; with the Greek coefficients to order 32, 0.093 s, 0.31 s and 0.90 s. A cheaper method
+  for low orders was measured and not adopted (`docs/plans/phase-2b-followups.md`). See
+  {doc}`theory/ensembles` and {doc}`validation/sasktran2`.
+- **Batches compute values only.** `compute_batch` shares the size nodes of many
+  distributions; their Jacobians come from `compute`, one distribution at a time.
+- **Memory of batches.** Each distribution of a batch holds sums over every band's tables:
+  about 2.5 MB per distribution and wavelength in flight at $\lambda = 0.28$ µm for the
+  database grid of {doc}`validation/sasktran2` (2 GB for 800 distributions on one thread; more
+  wavelengths run at once on more threads). Split very large batches.
+- **Tables can exceed `max_panels`.** Every radius of a `Tabulated` distribution is a panel
+  edge, so a table of more radii than `max_panels`, or a batch of many tables, takes more
+  panels than `max_panels` (still converging).
+- **⟨C_abs⟩ of weak absorbers.** ⟨C_abs⟩ is refined to rtol of ⟨C_ext⟩, so for weak absorbers
+  its relative accuracy, and that of the co-albedo, is far worse than rtol, and its estimate is
+  indicative: for the database grid of {doc}`validation/sasktran2` ($m = 1.43 + 10^{-8}i$) it
+  fell up to 1.6 times short of the true error. The single-scattering albedo itself is accurate
+  to about rtol, and its estimate is conservative.
+- **Non-absorbing spheres.** Without absorption the efficiencies of large spheres have narrow
+  resonance ripples that the size integration may not resolve within `max_panels` (default
+  4096). For the lognormal above with $m = 1.33$ at $\lambda = 0.5$ µm, the result has
+  `converged = false` at 4096 panels and an estimate of about $10^{-5}$ of
+  $\langle C_\text{ext}\rangle$. Check `converged`; a little absorption, or a larger
+  `max_panels`, helps, though with `max_panels` raised the estimate of the converged result,
+  $9.7\cdot10^{-7}$ of $\langle C_\text{ext}\rangle$, fell short of its true error,
+  $1.1\cdot10^{-6}$. See {ref}`ensemble-accuracy`.
+- **Derivatives with respect to $\mathrm{Im}\,m$ at $\mathrm{Im}\,m = 0$** have a spike at every
+  resonance and do not converge (`converged = false`); the values do.
+- **Backscattering is not refined by default.** The estimates of $\langle C_\text{back}\rangle$
+  and the lidar ratio are indicative unless `refine_backscatter` is set, which can cost many
+  more panels for weakly absorbing spheres. See {ref}`ensemble-accuracy`.
+- **`f64` only.** The ensemble engine is not generic over `Real`: no double-double or `Dual`
+  ensembles. Its derivatives come from the closed-form single-sphere derivatives instead.
+- **Validated domain.** Every size node must be in the validated domain of the Mie solution;
+  the tails of broad distributions can reach $x > 2\cdot10^4$. Outside it, calls raise
+  `OutsideValidatedDomain` (naming the wavelength and the radius) unless `allow_unvalidated` is
+  set. A range that reaches $x > 10^6$, beyond any Mie solution, raises `InvalidInput`.
+- **No scattering, no ratios.** A zero or non-finite $\langle C_\text{ext}\rangle$,
+  $\langle C_\text{sca}\rangle$ or $\langle C_\text{back}\rangle$ (for $m = 1$, say) raises
+  `InvalidInput`: the albedo, the asymmetry parameter and the lidar ratio are undefined.
+- **Distributions over size only.** Distributions over other parameters, such as shape, need
+  the T-matrix (phase 4).
+- **Threads.** The computation runs on rayon's global pool (in Rust, a caller can `install` its
+  own pool). Python has no call to set the number of threads yet; it arrives with the
+  declarative API (phase 2c).
 
 ## Python bindings
 

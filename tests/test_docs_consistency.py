@@ -77,6 +77,11 @@ MIE_BINDINGS_RS = "scatrs-py/src/mie.rs"
 GREEK_RS = "scatrs/src/mie/greek.rs"
 INSTALLATION = "docs/installation.md"
 CONTRIBUTING = "CONTRIBUTING.md"
+ENSEMBLE_THEORY = "docs/theory/ensembles.md"
+ENSEMBLE_RS = "scatrs/src/ensemble/mod.rs"
+ENSEMBLE_TESTS = "scatrs/tests/ensemble.rs"
+ACCURACY = "docs/validation/accuracy.md"
+FOLLOWUPS_2A = "docs/plans/phase-2a-followups.md"
 
 CONTRACTS = [
     # (what, normalised text, files that must state it)
@@ -164,6 +169,20 @@ CONTRACTS = [
     ("Greek worst C", "Cisatmost1.7", [MIE_THEORY, "docs/validation/accuracy.md"]),
     ("Greek node-rounding error", "210^-9", [LIMITATIONS, "docs/plans/phase-1b-followups.md"]),
     ("Greek node-rounding error", "210^-11", [LIMITATIONS, "docs/plans/phase-1b-followups.md"]),
+    # Ensembles of spheres: the measured cost (lognormal r_g = 1, σ_g = 2, m = 1.33 + 1e-4i).
+    *(
+        ("Ensemble cost", t, [ENSEMBLE_THEORY, LIMITATIONS])
+        for t in ("0.037s", "0.11s", "0.20s", "0.093s", "0.31s", "0.90s")
+    ),
+    *(
+        ("Ensemble cost before the matrix products", t, [ENSEMBLE_THEORY, FOLLOWUPS_2A])
+        for t in ("0.62s", "2.9s", "10.4s")
+    ),
+    ("Ensemble max_panels default", "default4096", [ENSEMBLE_RS, ENSEMBLE_THEORY, LIMITATIONS]),
+    ("Ensemble calibration grid", "ninedistributions", [ACCURACY, LIMITATIONS]),
+    ("Ensemble calibration, refined outputs", "0.003", [ENSEMBLE_TESTS, ACCURACY]),
+    ("Ensemble calibration, other outputs", "1.210", [ENSEMBLE_TESTS, ACCURACY]),
+    ("Ensemble non-absorbing estimate", "estimateofabout10^-5of", [ACCURACY, LIMITATIONS]),
 ]
 
 
@@ -329,3 +348,27 @@ def test_synced_sections_name_existing_files() -> None:
             markers += 1
             assert (ROOT / source).exists(), f"{page.name}: {source} does not exist"
     assert markers > 0
+
+
+def test_the_sasktran2_page_states_the_published_results() -> None:
+    """docs/validation/sasktran2.md states every time, error and matched rtol of the results
+    file it names, formatted as `benchmarks/compare.py` prints them."""
+    page = (ROOT / "docs/validation/sasktran2.md").read_text(encoding="utf-8")
+    name = re.search(r"benchmarks/results/([\w.-]+\.json)", page).group(1)
+    results = json.loads((ROOT / "benchmarks/results" / name).read_text(encoding="utf-8"))
+    cols = ("c_ext", "c_sca", "ssa", "coalbedo", "alpha1", "beta1")
+    missing = []
+    for w, e in results["workloads"].items():
+        rows = [("sasktran2", e["sasktran2"])]
+        rows += [(f"scatrs rtol {float(r):g}", v) for r, v in e["scatrs"].items()]
+        for label, r in rows:
+            mark = " (matched)" if label.endswith(f"{e['matched_rtol']:g}") else ""
+            row = (
+                f"| {label}{mark} | {r['time_one']:.3g} s | {r['time_all']:.3g} s | "
+                + " | ".join(f"{r['errors'][c]:.1e}" for c in cols)
+                + " |"
+            )
+            if row not in page:
+                missing.append(f"{w}: {row}")
+    assert not missing, "\n".join(missing)
+    assert results["versions"]["sasktran2"] in page and results["date"] in page

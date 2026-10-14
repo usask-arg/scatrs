@@ -49,7 +49,7 @@ impl<T> PhaseBuffers<'_, T> {
 }
 
 /// (|S₁|² + |S₂|²)/2, (|S₂|² − |S₁|²)/2, Re(S₂S₁*), Im(S₂S₁*).
-fn elements<T: Real>(s1: Complex<T>, s2: Complex<T>) -> [T; 4] {
+pub(crate) fn elements<T: Real>(s1: Complex<T>, s2: Complex<T>) -> [T; 4] {
     let half = T::from_f64(0.5);
     let (n1, n2) = (s1.norm_sqr(), s2.norm_sqr());
     let p = s2 * s1.conj();
@@ -57,7 +57,7 @@ fn elements<T: Real>(s1: Complex<T>, s2: Complex<T>) -> [T; 4] {
 }
 
 /// The derivatives of [`elements`] for amplitude derivatives (d1, d2).
-fn element_derivatives<T: Real>(
+pub(crate) fn element_derivatives<T: Real>(
     s1: Complex<T>,
     s2: Complex<T>,
     d1: Complex<T>,
@@ -170,14 +170,14 @@ impl<T: Real> MieSolution<'_, T> {
         let i1 = Complex::new(T::zero(), T::one());
         let v = values;
         let [mut dx, mut dr, mut di] = d;
-        for j in 0..n {
-            let (s1, s2) = (s[0][j], s[1][j]);
+        let [s1s, s2s, dx1, dx2, dm1, dm2] = &s;
+        for (j, (&s1, &s2)) in s1s.iter().zip(s2s).enumerate() {
             let f = elements(s1, s2);
             // ∂S/∂x, ∂S/∂(Re m) = dS/dm, ∂S/∂(Im m) = i·dS/dm.
             let df = [
-                element_derivatives(s1, s2, s[2][j], s[3][j]),
-                element_derivatives(s1, s2, s[4][j], s[5][j]),
-                element_derivatives(s1, s2, i1 * s[4][j], i1 * s[5][j]),
+                element_derivatives(s1, s2, dx1[j], dx2[j]),
+                element_derivatives(s1, s2, dm1[j], dm2[j]),
+                element_derivatives(s1, s2, i1 * dm1[j], i1 * dm2[j]),
             ];
             v.f11[j] = c * f[0];
             v.f12[j] = c * f[1];

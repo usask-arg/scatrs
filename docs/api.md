@@ -19,12 +19,19 @@ build it locally. Both APIs follow the {doc}`conventions`.
 ```
 
 The package also re-exports the exceptions of {mod}`scatrs.errors` and the modules
-{mod}`scatrs.mie` and {mod}`scatrs.special`.
+{mod}`scatrs.mie`, {mod}`scatrs.ensemble` and {mod}`scatrs.special`.
 
 ## `scatrs.mie`
 
 ```{eval-rst}
 .. automodule:: scatrs.mie
+   :members:
+```
+
+## `scatrs.ensemble`
+
+```{eval-rst}
+.. automodule:: scatrs.ensemble
    :members:
 ```
 

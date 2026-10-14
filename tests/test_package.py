@@ -7,7 +7,7 @@ from pathlib import Path
 from packaging.version import Version
 
 import scatrs
-from scatrs import _scatrs, mie, special
+from scatrs import _scatrs, ensemble, mie, special
 
 ROOT = Path(__file__).parents[1]
 
@@ -48,6 +48,7 @@ def test_crate_license_is_the_repository_license():
 
 def test_public_names():
     for name in (
+        "ensemble",
         "mie",
         "special",
         "ScatrsError",
@@ -57,7 +58,7 @@ def test_public_names():
         "__version__",
     ):
         assert hasattr(scatrs, name)
-    for module in (special, mie):
+    for module in (special, mie, ensemble):
         for name in module.__all__:
             assert hasattr(module, name)
 
@@ -78,6 +79,9 @@ def test_test_hooks_live_outside_the_extension_namespace():
         "MAX_MIE_VALUES",
         "MAX_WIGNER_D_VALUES",
         "__version__",
+        "ensemble_compute",
+        "ensemble_compute_batch",
+        "ensemble_parameters",
         "gauss_legendre",
         "mie_amplitudes",
         "mie_coefficients",

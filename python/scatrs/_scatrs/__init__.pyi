@@ -1,5 +1,5 @@
 # Stubs for the extension module scatrs._scatrs (a stub package, for its _testing submodule).
-from typing import Final
+from typing import Any, Final
 
 import numpy as np
 from numpy.typing import NDArray
@@ -13,6 +13,9 @@ __all__ = [
     "MAX_MIE_VALUES",
     "MAX_WIGNER_D_VALUES",
     "__version__",
+    "ensemble_compute",
+    "ensemble_compute_batch",
+    "ensemble_parameters",
     "gauss_legendre",
     "mie_amplitudes",
     "mie_coefficients",
@@ -78,3 +81,33 @@ def mie_greek(
     allow_unvalidated: bool,
     normalized: bool,
 ) -> tuple[NDArray[np.uint64], NDArray[np.float64], NDArray[np.float64] | None]: ...
+def ensemble_parameters(
+    items: list[tuple[Any, NDArray[np.complex128], float]], mixture: bool
+) -> list[str]: ...
+def ensemble_compute(
+    items: list[tuple[Any, NDArray[np.complex128], float]],
+    wavelengths: NDArray[np.float64],
+    mixture: bool,
+    greek: int | None,
+    all_orders: bool,
+    mu: NDArray[np.float64],
+    normalized: bool,
+    derivatives: list[int],
+    rtol: float,
+    max_panels: int,
+    allow_unvalidated: bool,
+    refine_backscatter: bool,
+) -> dict[str, Any]: ...
+def ensemble_compute_batch(
+    specs: list[Any],
+    refractive_index: NDArray[np.complex128],
+    wavelengths: NDArray[np.float64],
+    greek: int | None,
+    all_orders: bool,
+    mu: NDArray[np.float64],
+    normalized: bool,
+    rtol: float,
+    max_panels: int,
+    allow_unvalidated: bool,
+    refine_backscatter: bool,
+) -> dict[str, Any]: ...

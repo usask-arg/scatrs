@@ -5,6 +5,7 @@
 #![warn(missing_docs)]
 
 mod complex;
+pub mod ensemble;
 pub mod error;
 pub mod mie;
 pub mod scalar;

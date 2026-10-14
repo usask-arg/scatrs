@@ -193,3 +193,66 @@ stay within 1.7 everywhere, largest next to $m = 1$.
 ```{code-cell} python
 by_index(greek, gx, gm, gnames)
 ```
+
+(ensemble-accuracy)=
+## Ensembles of spheres
+
+<!-- synced with scatrs/tests/ensemble.rs -->
+
+The averages over size distributions ({doc}`/theory/ensembles`) add the error of the size
+integration and of the cut-offs, which every output's error estimate covers; the Mie
+solutions' own errors, declared above, are far smaller at the tolerances the ensembles accept
+and are not included. The test `error_estimates_bound_the_true_errors` in
+`scatrs/tests/ensemble.rs` calibrates the estimates in CI. It computes eight distributions at
+rtol $10^{-6}$ and again at rtol $10^{-11}$ (the reference), with backscattering refined, the
+Greek coefficients to order 24, the phase matrix at $\mu = 1, 0.7, 0, -1$, and the derivatives
+with respect to every parameter of the distribution and to $\mathrm{Re}\,m$ and
+$\mathrm{Im}\,m$:
+
+| Distribution | $m$ | $\lambda$ |
+|---|---|---|
+| lognormal, $r_g = 0.08$, $\sigma_g = 1.6$ | $1.43 + 10^{-8}i$ | 0.5 |
+| lognormal, $r_g = 5$, $\sigma_g = 1.3$ | $1.5 + 0.01i$ | 0.5 |
+| lognormal, $r_g = 0.001$, $\sigma_g = 2$ | $1.5$ | 0.5 |
+| lognormal, $r_g = 0.5$, $\sigma_g = 1.05$ | $1.33 + 10^{-3}i$ | 0.6 |
+| gamma, $a = 2$, $b = 0.1$ | $1.33 + 10^{-3}i$ | 0.65 |
+| modified gamma, $\alpha = 2$, $b = 15$, $\gamma = 0.5$ | $1.5 + 10^{-3}i$ | 0.5 |
+| power law, $\alpha = 3.5$ on $[0.01, 5]$ | $1.5 + 0.01i$ | 0.5 |
+| tabulated, $(0.05, 0.1, 0.4, 1)$, densities $(0, 3, 1, 0.2)$ | $2 + 0.5i$ | 0.4 |
+
+Both results must converge; the refined cross sections must be within rtol of the reference
+($g$ within $2\cdot10^{-6}$); and every true error, of every value and every derivative, must
+be within its estimate. The worst ratio of true error to estimate is 0.085 for the refined
+outputs ($\langle C_\text{ext}\rangle$, $\langle C_\text{sca}\rangle$, $\langle
+C_\text{back}\rangle$, $g$ and the moments) and 0.37 for the others (the other values, the
+Greek coefficients, the phase matrix and every derivative).
+
+What that supports:
+
+- **Refined quantities** ({ref}`the targets of pass 1 <ensemble-pass-1>`): when `converged` is
+  true, their estimates meet rtol, and on the grid they bounded the true errors with the margin
+  above. The estimates of ratios ($\omega$, $g$, the lidar ratio, $r_\text{eff}$ and the
+  normalized forms) are propagated from those of their numerator and denominator to first
+  order.
+- **The other outputs** are integrated on the panels that the refined quantities chose, and
+  their estimates are only as good as those panels are for them. On the grid they hold with the
+  margin above; they are not guaranteed elsewhere.
+- **Backscattering is indicative unless refined.** Without `refine_backscatter`, the estimates
+  of $\langle C_\text{back}\rangle$ and the lidar ratio (and their derivatives) come from panels
+  that may not resolve the glory ripples: without refinement, the estimate of a derivative fell
+  short of its true error by a factor of 7.6. With it, they are in the calibration above.
+- **The Greek coefficients' estimates are bounds, but loose,** often by orders of magnitude,
+  since the projector bands make each band's table a step function of the radius. See
+  {doc}`/examples/ensemble`.
+
+Two cases are flagged with `converged = false` rather than estimated well:
+
+- **Non-absorbing spheres.** Without absorption, the efficiencies of large spheres have narrow
+  resonance ripples, which can take more than `max_panels` panels. For a lognormal with
+  $r_g = 1$, $\sigma_g = 2$ and $m = 1.33$ at $\lambda = 0.5$, the integration stops at 4096
+  panels with an estimate of about $10^{-5}$ of $\langle C_\text{ext}\rangle$ (with
+  `max_panels` raised it converges at 5211 panels; the true error of the stopped result is
+  $1.5\cdot10^{-6}$).
+- **Derivatives with respect to $\mathrm{Im}\,m$ at $\mathrm{Im}\,m = 0$** have a spike at every
+  resonance and do not converge; the values do (the test `unresolvable_derivatives_are_flagged`
+  checks a gamma distribution with $m = 1.33$).

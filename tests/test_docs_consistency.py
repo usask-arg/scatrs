@@ -77,6 +77,11 @@ MIE_BINDINGS_RS = "scatrs-py/src/mie.rs"
 GREEK_RS = "scatrs/src/mie/greek.rs"
 INSTALLATION = "docs/installation.md"
 CONTRIBUTING = "CONTRIBUTING.md"
+ENSEMBLE_THEORY = "docs/theory/ensembles.md"
+ENSEMBLE_RS = "scatrs/src/ensemble/mod.rs"
+ENSEMBLE_TESTS = "scatrs/tests/ensemble.rs"
+ACCURACY = "docs/validation/accuracy.md"
+FOLLOWUPS_2A = "docs/plans/phase-2a-followups.md"
 
 CONTRACTS = [
     # (what, normalised text, files that must state it)
@@ -164,6 +169,17 @@ CONTRACTS = [
     ("Greek worst C", "Cisatmost1.7", [MIE_THEORY, "docs/validation/accuracy.md"]),
     ("Greek node-rounding error", "210^-9", [LIMITATIONS, "docs/plans/phase-1b-followups.md"]),
     ("Greek node-rounding error", "210^-11", [LIMITATIONS, "docs/plans/phase-1b-followups.md"]),
+    # Ensembles of spheres: the measured cost (lognormal r_g = 1, σ_g = 2, m = 1.33 + 1e-4i).
+    *(
+        ("Ensemble cost", t, [ENSEMBLE_THEORY, LIMITATIONS, FOLLOWUPS_2A])
+        for t in ("0.04s", "0.11s", "0.23s", "1.1s", "5.9s", "22.6s")
+    ),
+    ("Ensemble shared-projector cost", "20sperwavelength", [ENSEMBLE_THEORY, FOLLOWUPS_2A]),
+    ("Ensemble max_panels default", "default4096", [ENSEMBLE_RS, ENSEMBLE_THEORY, LIMITATIONS]),
+    ("Ensemble calibration grid", "eightdistributions", [ACCURACY, LIMITATIONS]),
+    ("Ensemble calibration, refined outputs", "0.085", [ENSEMBLE_TESTS, ACCURACY]),
+    ("Ensemble calibration, other outputs", "0.37", [ENSEMBLE_TESTS, ACCURACY]),
+    ("Ensemble non-absorbing estimate", "estimateofabout10^-5of", [ACCURACY, LIMITATIONS]),
 ]
 
 

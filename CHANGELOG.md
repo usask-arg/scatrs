@@ -28,6 +28,17 @@ All notable changes are documented here. The format follows
   order, with derivatives, and `GreekProjector`, which projects any phase-matrix tables given
   at its Gauss–Legendre nodes; Arb references and an accuracy map for both.
 - Python `scatrs.mie.phase_matrix` and `scatrs.mie.greek`.
+- Ensembles of spheres (`scatrs::ensemble`, Python `scatrs.ensemble`): seven size
+  distributions (lognormal, gamma, modified gamma, power law, monodisperse, tabulated,
+  multimodal) and external mixtures, averaged at many wavelengths by two-pass adaptive
+  Gauss–Kronrod integration in ln r, with an error estimate for every output (calibrated in CI)
+  and derivatives with respect to the distribution parameters, the refractive indices and the
+  mixture weights; cross sections, single-scattering albedo, asymmetry parameter,
+  backscattering, lidar and depolarization ratios, moments, phase matrix and exact Greek
+  coefficients. Parallel over wavelengths and size panels with rayon, with results bitwise
+  identical for any number of threads.
+- `GreekProjector::project_bounds`, which projects bounds on phase-matrix table errors to
+  bounds on the Greek coefficients.
 
 ### Changed
 - Gauss–Legendre rules of `f64` precision above 100 points come from the asymptotic
@@ -36,3 +47,4 @@ All notable changes are documented here. The format follows
   remains up to 100 points and for double-double precision.
 - `GaussLegendre` is `#[non_exhaustive]`: code outside the crate can no longer build one with a
   struct literal.
+- The core crate depends on `rayon`.

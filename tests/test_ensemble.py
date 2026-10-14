@@ -275,9 +275,24 @@ def test_error_estimates_of_derivatives_and_convergence_flags():
 def test_a_single_distribution_has_one_component():
     from scatrs import _scatrs
 
-    spec = (("lognormal", 0.08, 1.6), np.array([1.5 + 0j]), 1.0)
+    spec = (("lognormal", 0.08, 1.6), ("sphere", np.array([1.5 + 0j])), 1.0)
     with pytest.raises(InvalidInputError, match="exactly one component"):
         _scatrs.ensemble_parameters([spec, spec], False)
+
+
+@pytest.mark.parametrize(
+    ("particle", "message"),
+    [
+        (("cube", np.array([1.5 + 0j])), "unknown particle kind"),
+        (("sphere", [1.5 + 0j]), "must be an array"),
+        ([1.5 + 0j], "must be a tuple"),
+    ],
+)
+def test_the_engine_rejects_unknown_particles(particle, message):
+    from scatrs import _scatrs
+
+    with pytest.raises(TypeError, match=message):
+        _scatrs.ensemble_parameters([(("lognormal", 0.08, 1.6), particle, 1.0)], False)
 
 
 def test_a_grid_shares_nodes_and_matches_each_distribution():

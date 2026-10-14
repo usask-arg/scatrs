@@ -6,6 +6,7 @@ import numbers
 from dataclasses import dataclass
 
 import numpy as np
+from numpy.typing import NDArray
 
 from scatrs.refractive import Constant, Function, RefractiveIndex
 
@@ -61,3 +62,9 @@ class Sphere:
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "refractive_index", _model(self.refractive_index))
+
+    def _engine(self, wavelength: NDArray[np.float64]) -> tuple[tuple, NDArray[np.complex128]]:
+        """The engine's tagged tuple for the particle at ``wavelength``, and its refractive
+        index there (the wavelengths' shape), which the result reports."""
+        m = self.refractive_index.evaluate(wavelength)
+        return ("sphere", np.ascontiguousarray(m.reshape(-1))), m

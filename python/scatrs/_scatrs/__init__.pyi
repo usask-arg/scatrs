@@ -81,11 +81,9 @@ def mie_greek(
     allow_unvalidated: bool,
     normalized: bool,
 ) -> tuple[NDArray[np.uint64], NDArray[np.float64], NDArray[np.float64] | None]: ...
-def ensemble_parameters(
-    items: list[tuple[Any, NDArray[np.complex128], float]], mixture: bool
-) -> list[str]: ...
+def ensemble_parameters(items: list[tuple[Any, Any, float]], mixture: bool) -> list[str]: ...
 def ensemble_compute(
-    items: list[tuple[Any, NDArray[np.complex128], float]],
+    items: list[tuple[Any, Any, float]],
     wavelengths: NDArray[np.float64],
     mixture: bool,
     greek: int | None,
@@ -100,7 +98,7 @@ def ensemble_compute(
 ) -> dict[str, Any]: ...
 def ensemble_compute_batch(
     specs: list[Any],
-    refractive_index: NDArray[np.complex128],
+    particle_spec: Any,
     wavelengths: NDArray[np.float64],
     greek: int | None,
     all_orders: bool,

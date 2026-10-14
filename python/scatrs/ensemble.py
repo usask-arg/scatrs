@@ -542,14 +542,13 @@ class Ensemble:
         refine_backscatter: bool = False,
     ) -> EnsembleResult:
         wl = _args.real_array(wavelength, "wavelength")
-        m = self.particle.refractive_index.evaluate(wl)
+        particle, m = self.particle._engine(wl)
         o = _Options.of(
             greek, mu, normalized, rtol, max_panels, allow_unvalidated, refine_backscatter
         )
         shape, grid, specs = self._layout()
-        flat_m = np.ascontiguousarray(m.reshape(-1))
         if shape == ():
-            items = [(specs[0], flat_m, 1.0)]
+            items = [(specs[0], particle, 1.0)]
             raw, params = _single(items, False, wl, derivatives, o)
             return _result(raw, wl.shape, o, wl, m, grid, params)
         if not (isinstance(derivatives, (bool, np.bool_)) and not derivatives):
@@ -559,7 +558,7 @@ class Ensemble:
             )
         raw = _scatrs.ensemble_compute_batch(
             specs,
-            flat_m,
+            particle,
             np.ascontiguousarray(wl.reshape(-1)),
             o.order,
             o.all_orders,
@@ -646,13 +645,14 @@ class Mixture:
         refine_backscatter: bool = False,
     ) -> EnsembleResult:
         wl = _args.real_array(wavelength, "wavelength")
-        ms = [e.particle.refractive_index.evaluate(wl) for _, e in self.components]
+        engine = [e.particle._engine(wl) for _, e in self.components]
+        ms = [m for _, m in engine]
         o = _Options.of(
             greek, mu, normalized, rtol, max_panels, allow_unvalidated, refine_backscatter
         )
         items = [
-            (_scalar_spec(e.size), np.ascontiguousarray(m.reshape(-1)), w)
-            for (w, e), m in zip(self.components, ms, strict=True)
+            (_scalar_spec(e.size), particle, w)
+            for (w, e), (particle, _) in zip(self.components, engine, strict=True)
         ]
         raw, params = _single(items, True, wl, derivatives, o)
         return _result(raw, wl.shape, o, wl, np.stack(ms), {}, params)

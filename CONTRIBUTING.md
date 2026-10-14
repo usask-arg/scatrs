@@ -136,7 +136,7 @@ enforces this.
    (Trusted Publishing, environment `pypi`; versions already there are skipped), then the
    `scatrs` crate (crates.io Trusted Publishing, environment `crates-io`). Each environment
    asks a reviewer to approve.
-4. Publish a GitHub release for the tag. Its notes are the changelog: the documentation's
+4. Once the release workflow has published, publish a GitHub release for the tag. Its notes are the changelog: the documentation's
    changelog page shows the notes of every release (sphinx-github-changelog), as sasktran2's
    does. Start from GitHub's generated notes (the merged pull requests) and add what users need,
    above all every breaking change with its replacement. Then run the "Publish documentation"

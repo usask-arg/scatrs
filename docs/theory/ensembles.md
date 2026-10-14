@@ -316,13 +316,14 @@ A multimodal distribution is a mixture of its modes with one refractive index.
 
 ## Batches
 
-{rust}`compute_batch <scatrs::ensemble::compute_batch>` averages over each of many distributions of one material, as an optics
-database needs: a grid of median radii and widths, say. In Python, an {class}`scatrs.Ensemble`
-whose distribution has array-valued parameters is such a batch: its parameters broadcast
-together into a grid, flattened in C order, and the results have the grid's axes before the
-wavelengths'. So is an ensemble whose `size` is a list of distributions of any kinds (many
-`Tabulated` tables, say), with one leading axis. The distributions share their size nodes: one set of panels per wavelength covers the
-union of their Mie ranges, with the ends of finite supports and `Tabulated` radii as panel
+{rust}`compute_batch <scatrs::ensemble::compute_batch>` averages over each of many
+distributions of one material, as an optics database needs: a grid of median radii and widths,
+say. In Python, an {class}`scatrs.Ensemble` whose distribution has array-valued parameters is
+such a batch: its parameters broadcast together into a grid, flattened in C order, and the
+results have the grid's axes before the wavelengths'. So is an ensemble whose `size` is a list
+of distributions of any kinds (many `Tabulated` tables, say), with one leading axis. The
+distributions share their size nodes: one set of panels per wavelength covers the union of
+their Mie ranges, with the ends of finite supports and `Tabulated` radii as panel
 edges, and is refined until every distribution meets its own targets of pass 1 (a panel splits
 if it exceeds its share of any distribution's target) and extended until every distribution's
 integrands are negligible at both ends. Each distribution's largest initial step (half its

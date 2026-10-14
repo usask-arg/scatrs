@@ -504,7 +504,10 @@ class Ensemble:
                     )
             object.__setattr__(self, "size", sizes)
         else:
-            _check(self.size, "size")
+            try:
+                _check(self.size, "size")
+            except TypeError as e:
+                raise TypeError(f"{e}, or a list of them") from None
             _grid(self.size)
 
     @property

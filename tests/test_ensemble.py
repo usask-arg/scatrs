@@ -441,6 +441,7 @@ def test_a_list_of_distributions_is_a_batch_of_any_kinds():
     assert batch.size == tuple(sizes) and batch.grid_shape == (5,)
     assert batch == Ensemble(Sphere(1.45 + 1e-3j), tuple(sizes))
     assert hash(batch) == hash(Ensemble(Sphere(1.45 + 1e-3j), tuple(sizes)))
+    assert pickle.loads(pickle.dumps(batch)) == batch
     r = batch.compute(wl, greek=8, mu=[0.5, -0.5])
     assert r.c_ext.shape == (5, 3) and r.greek.alpha1.shape == (5, 3, 9)
     assert r.phase.f11.shape == (5, 3, 2) and r.converged.all()
@@ -457,6 +458,8 @@ def test_a_list_of_distributions_is_a_batch_of_any_kinds():
 
 
 def test_list_errors():
+    with pytest.raises(TypeError, match="or a list of them"):
+        Ensemble(Sphere(1.5), np.array([LOGNORMAL], dtype=object))
     with pytest.raises(TypeError, match=r"size\[1\] must be one of"):
         Ensemble(Sphere(1.5), [LOGNORMAL, "lognormal"])
     with pytest.raises(ValueError, match=r"size\[0\] is a grid of shape \(2,\)"):

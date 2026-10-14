@@ -97,6 +97,8 @@ numpydoc_xref_aliases = {
 numpydoc_xref_ignore = {"optional", "of"}
 
 OFFLINE = os.environ.get("SCATRS_DOCS_OFFLINE", "") not in ("", "0")
+# sphinx-github-changelog may ask git's credential helper for a token: never let git prompt.
+os.environ.setdefault("GIT_TERMINAL_PROMPT", "0")
 
 intersphinx_mapping = (
     {}

@@ -1,0 +1,14 @@
+<!-- Added to every rustdoc page of the documentation site (not to docs.rs): a link back to
+     the site's home page, which is one level above the rustdoc root. -->
+<script>
+  (function () {
+    var vars = document.querySelector('meta[name="rustdoc-vars"]');
+    if (!vars) return;
+    var link = document.createElement("a");
+    link.href = vars.dataset.rootPath + "../index.html";
+    link.textContent = "← scatrs documentation";
+    link.style.cssText = "display:block;padding:0.6em 1em;font-weight:500";
+    var sidebar = document.querySelector("nav.sidebar");
+    (sidebar || document.body).prepend(link);
+  })();
+</script>

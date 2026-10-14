@@ -1,60 +1,50 @@
 # Changelog
 
 All notable changes are documented here. The format follows
-[Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
+[Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the versions follow
+[Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
-### Added
-- Workspace, `Real` scalar trait and error type.
-- `DoubleDouble` (~32 digits) and forward-mode `Dual<T, N>` scalar types implementing `Real`.
-- Gauss–Legendre quadrature and Wigner d-functions.
-- Arb reference-value generator and certified reference data.
-- Python package `scatrs` with `special.gauss_legendre` and `special.wigner_d`.
-- Documentation site, CI on Linux/macOS/Windows, wheel release workflow.
-- Mie scattering by homogeneous spheres (`scatrs::mie`, Python `scatrs.mie`): coefficients,
-  efficiencies, asymmetry parameter and amplitudes, with closed-form derivatives with respect
-  to the size parameter and the refractive index; absorption without cancellation; a declared
-  accuracy over a validated domain, enforced in CI against Arb references and a dense
-  double-double accuracy map.
-- Arb reference data for Mie scattering, certified with a proven series-tail bound (the series
-  of derivatives and the largest |m|x cases are high-precision).
-- O(n) Gauss–Legendre rules for `f64` precision above 100 points (Bogaert's asymptotic
-  expansions), and `gauss_legendre_into`, which writes a rule into caller-supplied buffers.
-- The phase matrix of homogeneous spheres (F₁₁, F₁₂, F₃₃, F₃₄; normalized or per
-  unit geometric cross section), with derivatives with respect to the size parameter and
-  the refractive index.
-- Greek expansion coefficients of the sphere phase matrix, exact up to rounding and up to every
-  order, with derivatives, and `GreekProjector`, which projects any phase-matrix tables given
-  at its Gauss–Legendre nodes; Arb references and an accuracy map for both.
-- Python `scatrs.mie.phase_matrix` and `scatrs.mie.greek`.
-- Ensembles of spheres (`scatrs::ensemble`, Python `scatrs.ensemble`): seven size
-  distributions (lognormal, gamma, modified gamma, power law, monodisperse, tabulated,
-  multimodal) and external mixtures, averaged at many wavelengths by two-pass adaptive
-  Gauss–Kronrod integration in ln r, with an error estimate for every output (calibrated in CI)
-  and derivatives with respect to the distribution parameters, the refractive indices and the
-  mixture weights; cross sections, single-scattering albedo, asymmetry parameter,
-  backscattering, lidar and depolarization ratios, moments, phase matrix and exact Greek
-  coefficients. Parallel over wavelengths and size panels with rayon, with results bitwise
-  identical, and the same errors, for any number of threads. `MAX_REFINE_ORDER` bounds the
-  optional refinement on the Greek coefficients.
-- `GreekProjector::project_bounds`, which projects bounds on phase-matrix table errors to
-  bounds on the Greek coefficients.
-- `ensemble::compute_batch` (Python `scatrs.ensemble.compute_batch`): many distributions of one
-  material on shared size nodes, each with its own error estimates, for optics databases.
-- `benchmarks/compare.py`: accuracy and speed against sasktran2's Mie integration, published in
-  the documentation.
+## [0.1.0] - Unreleased
 
-### Changed
-- Ensembles with Greek coefficients are 7–12 times faster (the lognormal of the theory
-  chapter's cost table, λ = 1 to 0.3): the phase-matrix tables of a panel's
-  spheres come from matrix products against tables of πₙ and τₙ shared by every sphere of a
-  projector band, and the sums and projections are matrix products too. The core crate now
-  depends on `faer` (without default features) for them.
-- Gauss–Legendre rules of `f64` precision above 100 points come from the asymptotic
-  expansions, within 32·2⁻⁵² (measured 2.8 and 4.0 units of 2⁻⁵² for nodes and weights),
-  instead of the double-double Newton rule rounded to within half an ulp. The Newton rule
-  remains up to 100 points and for double-double precision.
-- `GaussLegendre` is `#[non_exhaustive]`: code outside the crate can no longer build one with a
-  struct literal.
-- The core crate depends on `rayon`.
+The first release: a standalone library built out of the scattering core of the
+[sasktran2](https://github.com/usask-arg/sasktran2) radiative transfer model, published as the
+Python package `scatrs` (PyPI) and the Rust crate `scatrs` (crates.io).
+
+### Added
+
+- **Mie scattering by homogeneous spheres** (`scatrs::mie`, Python `scatrs.mie`): the Mie
+  coefficients, efficiencies, asymmetry parameter, amplitudes, phase matrix (F₁₁, F₁₂, F₃₃,
+  F₃₄; normalized or per unit geometric cross section) and Greek coefficients, exact up to
+  rounding and up to every order. Closed-form derivatives of every output with respect to the
+  size parameter and the real and imaginary parts of the refractive index. Absorption is
+  computed without the cancellation of Q_ext − Q_sca, so weakly absorbing spheres keep full
+  precision. `GreekProjector` projects any phase-matrix tables given at its Gauss–Legendre
+  nodes onto Greek coefficients, with `project_bounds` for bounds on their errors.
+- **Ensembles of spheres** (`scatrs::ensemble`, Python `scatrs.ensemble`): seven size
+  distributions (lognormal, gamma, modified gamma, power law, monodisperse, tabulated,
+  multimodal) and external mixtures, averaged at many wavelengths by adaptive Gauss–Kronrod
+  integration, with an error estimate for every output and derivatives with respect to the
+  distribution parameters, the refractive indices and the mixture weights. Outputs: cross
+  sections, single-scattering albedo, asymmetry parameter, backscattering, lidar and
+  depolarization ratios, moments, the phase matrix at given angles and the Greek
+  coefficients. `compute_batch` averages over many distributions of one material on shared
+  size nodes, for optics databases. Parallel over wavelengths and size panels, with results
+  bitwise identical for any number of threads.
+- **Declared accuracy.** Every Mie output has a declared tolerance over a validated domain
+  (10⁻⁶ ≤ x ≤ 2·10⁴, 0 < Re m ≤ 10, 0 ≤ Im m ≤ 10, |m| ≥ 0.1), enforced in CI against
+  arbitrary-precision (Arb) reference values and a dense double-double accuracy map; the
+  ensembles' error estimates are calibrated in CI against tight-tolerance integrals. Inputs
+  outside the validated domain raise `OutsideValidatedDomain` unless explicitly allowed.
+- **Special functions** (`scatrs::special`, Python `scatrs.special`): Gauss–Legendre rules
+  (O(n) asymptotic expansions above 100 points in `f64`) and Wigner d-functions.
+- **Scalar types** (Rust): the `Real` trait that the numerical kernels are generic over,
+  `DoubleDouble` (about 32 significant digits) and forward-mode `Dual<T, N>` numbers.
+- **Documentation**: a quick start, examples, the validation of the results (including
+  Wiscombe's MIEV0 test cases and a comparison with sasktran2), the theory behind every method,
+  and the Python and Rust API references.
+- Wheels for Linux, macOS and Windows (abi3, Python 3.11 and later).
+
+[Unreleased]: https://github.com/usask-arg/scatrs/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/usask-arg/scatrs/releases/tag/v0.1.0

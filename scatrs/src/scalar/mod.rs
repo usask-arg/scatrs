@@ -1,4 +1,33 @@
 //! Scalar types that every numerical kernel is generic over.
+//!
+//! The numerical kernels (the Mie solution and the special functions) are generic over
+//! [`Real`], so one implementation gives:
+//!
+//! * values, with `f64`;
+//! * extended-precision values, with [`DoubleDouble`] (about 32 significant digits);
+//! * values with N first derivatives, with [`Dual<f64, N>`](Dual);
+//! * extended-precision derivatives, with `Dual<DoubleDouble, N>`;
+//! * second derivatives, with nested duals `Dual<Dual<T, M>, N>`.
+//!
+//! ```
+//! use scatrs::Real;
+//! use scatrs::scalar::{DoubleDouble, Dual};
+//!
+//! // A generic function, evaluated in double-double and with a derivative.
+//! fn f<T: Real>(x: T) -> T {
+//!     (x * 2.0).sin() * x.exp()
+//! }
+//! let value = f(DoubleDouble::from_f64(0.5));
+//! assert!((value.approx_f64() - (1.0_f64).sin() * (0.5_f64).exp()).abs() < 1e-15);
+//!
+//! let [x] = Dual::<f64, 1>::variables([0.5]);
+//! let y = f(x); // y.eps()[0] = d/dx [sin 2x · eˣ] = (2 cos 2x + sin 2x) eˣ
+//! let exact = (2.0 * (1.0_f64).cos() + (1.0_f64).sin()) * (0.5_f64).exp();
+//! assert!((y.eps()[0] - exact).abs() < 1e-14);
+//! ```
+//!
+//! [`Real`] lists what generic code may rely on, and [`DoubleDouble`] and [`Dual`] state their
+//! accuracy and conventions.
 
 use core::fmt::Debug;
 use core::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Sub, SubAssign};

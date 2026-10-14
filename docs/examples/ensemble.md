@@ -20,6 +20,7 @@ $\sigma_g = 1.6$, refractive index $m = 1.43 + 10^{-8}i$ at every wavelength. Ra
 wavelengths share a unit (µm here), so the cross sections are in µm² per particle.
 
 ```{code-cell} python
+import matplotlib.pyplot as plt
 import numpy as np
 
 from scatrs import ensemble
@@ -47,6 +48,37 @@ mid = np.sqrt(wavelength[1:] * wavelength[:-1])
 for lam, a in zip(mid, angstrom, strict=True):
     print(f"λ ≈ {lam:.2f} µm: Ångström exponent {a:.2f}")
 assert np.all(np.diff(angstrom) > 0) and 1 < angstrom[0] and angstrom[-1] < 4
+```
+
+The same on a fine wavelength grid, next to the distribution itself: in number most
+particles are far smaller than the wavelength, but the cross section weights them by area
+and more, so the larger ones dominate the optics.
+
+```{code-cell} python
+lam = np.geomspace(0.3, 2.0, 60)
+fine_grid = ensemble.compute(sulfate, lam, m)
+
+radius = np.geomspace(0.005, 1.5, 400)
+number = np.exp(-np.log(radius / 0.08) ** 2 / (2 * np.log(1.6) ** 2))  # dN/d ln r, unnormalized
+fig, (ax1, ax2, ax3) = plt.subplots(1, 3, figsize=(12, 3.5), layout="constrained")
+for weight, label in [(1, "number"), (radius**2, "area"), (radius**3, "volume")]:
+    density = number * weight
+    ax1.semilogx(radius, density / density.max(), label=label)
+ax1.axvline(fine_grid.effective_radius[0], color="0.5", ls="--", lw=0.8)
+ax1.text(fine_grid.effective_radius[0] * 1.08, 0.05, "$r_\\mathrm{eff}$", color="0.4")
+ax1.set(xlabel="radius (µm)", ylabel="d/d ln r (scaled to 1)", title="Distribution")
+ax1.legend()
+ax2.loglog(lam, fine_grid.c_ext)
+ax2.loglog(lam, fine_grid.c_ext[-1] * (lam / lam[-1]) ** -4, ":", color="0.5", label="$\\lambda^{-4}$")
+ax2.set(xlabel="wavelength (µm)", ylabel="$\\langle C_\\mathrm{ext}\\rangle$ (µm²)", title="Extinction")
+ax2.legend()
+ax3.semilogx(lam, fine_grid.g)
+ax3.set(xlabel="wavelength (µm)", ylabel="$g$", title="Asymmetry parameter")
+for ax in (ax2, ax3):
+    ax.set_xticks([0.3, 0.5, 1, 2], ["0.3", "0.5", "1", "2"], minor=False)
+    ax.set_xticks([], minor=True)
+plt.show()
+assert fine_grid.converged.all()
 ```
 
 The moments do not depend on the wavelength. The effective radius of a lognormal is
@@ -82,6 +114,27 @@ for name in ("c_ext", "c_sca", "g", "ssa", "c_back", "lidar_ratio"):
         assert np.all(error <= 1e-6 * exact)
 ```
 
+Each point below is one output at one wavelength. The refined outputs lie far below the
+diagonal: their estimates are conservative. The backscattering, not refined, can lie above
+it.
+
+```{code-cell} python
+fig, ax = plt.subplots(figsize=(5.5, 4.5), layout="constrained")
+markers = {"c_ext": "o", "c_sca": "x", "g": "s", "ssa": "^", "c_back": "D", "lidar_ratio": "+"}
+for name, marker in markers.items():
+    value, exact, estimate = getattr(r, name), getattr(tight, name), getattr(r.error, name)
+    ax.loglog(estimate / abs(exact), abs(value - exact) / abs(exact), marker, ms=6,
+              mfc="none" if marker in "osD^" else None, label=name)
+lims = np.array([1e-16, 1e-4])
+ax.loglog(lims, lims, color="0.5", lw=0.8)
+ax.fill_between(lims, lims, 1, color="0.9", zorder=0)
+ax.text(2e-15, 1e-6, "error larger\nthan its estimate", color="0.4")
+ax.set(xlim=lims, ylim=lims, xlabel="estimated relative error",
+       ylabel="true relative error", title="rtol = 1e-6 against rtol = 1e-11")
+ax.legend(fontsize=8, loc="lower left")
+plt.show()
+```
+
 ## Greek coefficients
 
 `greek=` asks for the Greek coefficients of the averaged phase matrix, here to order 32, the
@@ -97,6 +150,26 @@ for l in range(6):
 print("3g =", 3 * g.g)
 assert g.greek.alpha1[0] == 1
 assert abs(g.greek.alpha1[1] - 3 * g.g) < 1e-13 * 3 * g.g
+```
+
+`mu=` asks for the averaged phase matrix at given cosines instead. Here it is at three
+wavelengths: the larger the particles are relative to the wavelength, the more the
+scattering is forward-peaked.
+
+```{code-cell} python
+angles = np.linspace(0, 180, 361)
+mu = np.cos(np.radians(angles))
+pm = ensemble.compute(sulfate, [0.35, 0.55, 1.0], m, mu=mu)
+fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(10, 3.6), layout="constrained")
+for i, lam in enumerate([0.35, 0.55, 1.0]):
+    ax1.semilogy(angles, pm.phase.f11[i], label=f"λ = {lam} µm")
+    ax2.plot(angles, -pm.phase.f12[i] / pm.phase.f11[i])
+ax1.set(xlabel="scattering angle (°)", ylabel="$F_{11}$", xticks=range(0, 181, 30))
+ax2.set(xlabel="scattering angle (°)", ylabel="$-F_{12}/F_{11}$", xticks=range(0, 181, 30))
+ax1.legend()
+plt.show()
+# The phase function is normalized: ½∫F11 dμ = 1 (trapezoidal rule on this grid).
+assert np.allclose(-0.5 * np.trapezoid(pm.phase.f11, mu, axis=-1), 1, rtol=1e-3)
 ```
 
 Their error estimates are bounds, given the estimates of the tables they are projected from.
@@ -177,6 +250,37 @@ assert np.allclose(mix.c_ext, f[0] * fine.c_ext + f[1] * big.c_ext, rtol=1e-13, 
 assert np.allclose(mix.ssa, c_sca / mix.c_ext, rtol=1e-13, atol=0)
 assert np.allclose(mix.greek.alpha1, alpha1, rtol=0, atol=1e-13)
 assert mix.converged.all()
+```
+
+Across the spectrum the coarse mode takes over the extinction as the wavelength grows, and at
+0.55 µm it already sharpens the forward peak of the phase function.
+
+```{code-cell} python
+lam = np.geomspace(0.3, 2.0, 40)
+mix_l = ensemble.compute_mixture(components, lam)
+fine_l = ensemble.compute(sulfate, lam, m)
+coarse_l = ensemble.compute(coarse, lam, 1.50 + 1e-3j)
+at_550 = dict(mu=mu)
+phases = {
+    "sulfate": ensemble.compute(sulfate, 0.55, m, **at_550).phase.f11,
+    "coarse mode": ensemble.compute(coarse, 0.55, 1.50 + 1e-3j, **at_550).phase.f11,
+    "mixture": ensemble.compute_mixture(components, 0.55, **at_550).phase.f11,
+}
+
+fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(10, 3.6), layout="constrained")
+ax1.loglog(lam, f[0] * fine_l.c_ext, label="sulfate")
+ax1.loglog(lam, f[1] * coarse_l.c_ext, label="coarse mode")
+ax1.loglog(lam, mix_l.c_ext, "k--", label="mixture")
+ax1.set(xlabel="wavelength (µm)", ylabel="contribution to $\\langle C_\\mathrm{ext}\\rangle$ (µm²)")
+ax1.set_xticks([0.3, 0.5, 1, 2], ["0.3", "0.5", "1", "2"], minor=False)
+ax1.set_xticks([], minor=True)
+ax1.legend()
+for label, f11 in phases.items():
+    ax2.semilogy(angles, f11, "k--" if label == "mixture" else "-", label=label)
+ax2.set(xlabel="scattering angle (°)", ylabel="$F_{11}$ at 0.55 µm", xticks=range(0, 181, 30))
+ax2.legend()
+plt.show()
+assert np.allclose(mix_l.c_ext, f[0] * fine_l.c_ext + f[1] * coarse_l.c_ext, rtol=1e-13, atol=0)
 ```
 
 The derivative with respect to a weight follows from the number fractions:

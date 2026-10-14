@@ -38,7 +38,10 @@ uvx --from actionlint-py==1.7.12.25 actionlint   # after changing .github/workfl
 ```
 
 The documentation build runs the examples and downloads the Python and numpy inventories; see
-`docs/installation.md` for building it offline.
+`docs/installation.md` for building it offline. It also runs `cargo doc` (warnings are errors)
+and publishes the Rust API reference under `rustdoc/` in the site. In the pages, write
+``{rust}`scatrs::mie::Mie::compute` `` to link to a Rust item: a path that rustdoc did not
+document fails the build.
 
 CI also tests the packaged crate on its own, as `cargo test` on the crates.io sources would:
 extract `target/package/scatrs-*.crate` outside the repository and run `cargo test --locked`
@@ -136,10 +139,10 @@ enforces this.
 
 For the very first crates.io release, see "crates.io" below.
 
-Before the first public release, decide how the x86_64 wheels handle fused multiply-add: built
-for the baseline x86-64 target, as now, they make every `f64::mul_add` a library call, and
-double-double code about ten times slower (see "x86_64 builds without FMA" in
-`docs/plans/phase-0-followups.md`).
+The x86_64 wheels are built for the baseline x86-64 target, which has no fused multiply-add:
+every `f64::mul_add` is a library call there, and double-double code about ten times slower.
+The installation page says so, and how to build with FMA. The options for faster wheels are in
+"x86_64 builds without FMA" in `docs/plans/phase-0-followups.md`.
 
 ## One-time repository setup
 
@@ -164,9 +167,6 @@ Done once, by a maintainer, in the repository settings and on the registries.
   3. On crates.io, in the crate's settings → Trusted Publishing, add GitHub: owner
      `usask-arg`, repository `scatrs`, workflow `release.yml`, environment `crates-io`.
   4. Revoke the token.
-
-  Alternatively, publish `0.0.1` by hand now (steps 2 to 4), to claim the name before the
-  first real release.
 - **Scheduled workflows.** GitHub notifies only the person who last edited the `cron` line of
   `scheduled.yml` when a scheduled run fails, and disables scheduled workflows of a public
   repository after 60 days without activity; re-enable them from the Actions tab.

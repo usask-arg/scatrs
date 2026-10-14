@@ -6,11 +6,12 @@ kernelspec:
   language: python
 ---
 
-# Example: Wigner d-functions
+# Wigner d-functions
 
 {func}`scatrs.special.wigner_d` returns $d^l_{mn}(\theta)$ for every degree
 $l = 0, \ldots, l_\text{max}$ at each $x = \cos\theta$, with the degree as the last axis. The
-convention is that of Mishchenko, Travis & Lacis (2002); see {doc}`../conventions`.
+convention is that of Mishchenko, Travis & Lacis (2002); see {doc}`/theory/conventions`.
+scatrs expands the phase matrix in these functions to obtain the Greek coefficients.
 
 Every check below uses the accuracy contract, an absolute error of at most
 $16(l+1)\cdot2^{-52}$ per value, rather than an ad hoc tolerance. Each check fails the

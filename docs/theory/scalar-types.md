@@ -22,9 +22,9 @@ a second derivative, nest two duals and seed both levels in the same direction. 
 sits at `.re().re()`, the first derivative at both `.re().eps()[0]` and `.eps()[0].re()`, and
 the second derivative at `.eps()[0].eps()[0]`.
 
-This page summarises the contracts that the rustdoc states for each type. Until the crate is
-published on [docs.rs](https://docs.rs/scatrs) (it is not yet), read the full rustdoc with
-`cargo doc -p scatrs --no-deps --open`.
+This page summarises the contracts that the rustdoc states for each type:
+{rust}`Real <scatrs::scalar::Real>`, {rust}`DoubleDouble <scatrs::scalar::DoubleDouble>` and
+{rust}`Dual <scatrs::scalar::Dual>` ({doc}`/rust-api`).
 
 Throughout, $u = 2^{-53}$ (the unit roundoff of `f64`) and $u^2 = 2^{-106}$.
 
@@ -209,9 +209,8 @@ leading word. Where `DoubleDouble` differs from `f64`:
 
 `f64::mul_add` is one instruction where FMA is enabled. On x86_64 builds without the `fma`
 target feature, which is the default, it is a much slower software call; see
-{doc}`../installation`. Indicative timings measured during code review (not committed):
-`exp` takes about 200 ns and `sin` about 170 ns, against 2.3 ns for an `f64` `sin`. Faster
-table-driven versions are planned.
+{doc}`../installation`. Indicative timings (one-off measurements): `exp` takes about 200 ns
+and `sin` about 170 ns, against 2.3 ns for an `f64` `sin`.
 
 (dual)=
 ## `Dual<T, N>`
@@ -371,8 +370,8 @@ check the values for special cases first. These checks are branches, so unlike t
 over `f64`, a loop over many `Dual`s is not vectorised across elements. Division needs two
 divisions: `a/b` for the value and `1/b` for the derivatives.
 
-Indicative throughput of `Dual<f64, N>` relative to plain `f64`, measured during code review
-on an Apple M4 (not committed):
+Indicative throughput of `Dual<f64, N>` relative to plain `f64` (one-off measurements on an
+Apple M4):
 
 | Function | Cost |
 |---|---|
@@ -381,5 +380,3 @@ on an Apple M4 (not committed):
 | `Complex::exp` | 1.2× ($N = 1$), 1.8× ($N = 4$) |
 | `tanh`, $\lvert x\rvert > 0.55$ | about 2× |
 | `sqrt` | about 4.4× (plain `f64` `sqrt` vectorises across elements) |
-
-These figures will be replaced by benchmarks in a later phase.

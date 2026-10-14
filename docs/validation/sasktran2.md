@@ -1,8 +1,10 @@
 # Comparison with sasktran2
 
-scatrs is meant to replace the Mie code of [sasktran2](https://github.com/usask-arg/sasktran2),
-whose `MieDatabase` integrates the optical properties of spheres over size distributions for
-its radiative transfer. This page compares the two for accuracy and speed on the same machine.
+scatrs is built out of the scattering core of the radiative transfer model
+[sasktran2](https://github.com/usask-arg/sasktran2), whose own Mie code, through its
+`MieDatabase`, integrates the optical properties of spheres over size distributions. It is a
+separate implementation of the same averages as {mod}`scatrs.ensemble`, so it serves both as
+an external check of scatrs's results and as a benchmark of its speed. This page compares the two for accuracy and speed on the same machine.
 The script `benchmarks/compare.py` produces every number here, and the results it wrote are in
 `benchmarks/results/2026-10-13-arm64.json`.
 
@@ -71,8 +73,10 @@ faster on one thread and 1.29 times on all; the exception is $\beta_2$, $6.8\cdo
 against $6.7\cdot10^{-3}$, which decides the strict matching rule.
 
 sasktran2's $\alpha$ errors of 5 to 9% (absolute, normalized) are consistent with the aliasing
-of its 128-cosine projection, which is not exact for spheres of hundreds of terms (main spec,
-Appendix A), while its cross sections are accurate to $10^{-3}$. Every scatrs run converged, and
+of its 128-cosine projection, which is not exact for spheres of hundreds of terms, while its
+cross sections are accurate to $10^{-3}$. Since the reference is scatrs at a tight tolerance,
+sasktran2's errors are also the differences between the two codes: the two implementations
+agree to within sasktran2's own accuracy. Every scatrs run converged, and
 its own error estimates are meant to be relied on ({ref}`ensemble-accuracy`); sasktran2's
 results come without estimates.
 

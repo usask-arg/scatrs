@@ -1,8 +1,9 @@
 # Special functions
 
-This page describes the methods behind `scatrs::special` (Python: {mod}`scatrs.special`) and
-the accuracy each one is validated to. The rustdoc of each function is the authoritative
-statement of its contract. The figures below come from it, and from the test output, which
+This page describes the methods behind {rust}`scatrs::special` (Python: {mod}`scatrs.special`)
+and the accuracy each one is validated to. The rustdoc of each function,
+{rust}`gauss_legendre <scatrs::special::gauss_legendre>` and
+{rust}`wigner_d <scatrs::special::wigner_d>`, is the authoritative statement of its contract. The figures below come from it, and from the test output, which
 prints the worst error each accuracy test measures.
 
 (gauss-legendre)=
@@ -80,8 +81,7 @@ a weight computed from an `f64` node can be off by up to that much, even when th
 correctly rounded: about $7\cdot10^4$ units at $n = 1000$. Next to $+1$ is where the Mie
 forward-scattering peak sits. Computed in double-double and rounded once, the `f64` weights of
 the Newton method are within about half an ulp; the asymptotic weights, computed from the
-angle, within a few. The {doc}`quadrature example <../examples/quadrature>` measures this
-against Arb.
+angle, within a few. {doc}`/utilities/quadrature` measures this against Arb.
 
 ### Accuracy
 
@@ -229,7 +229,7 @@ The method is chosen as follows:
 
 So $P_l$ ($m = n = 0$) always takes the difference form. The general difference form starts
 at $\lvert x\rvert = 0.9$ because below that the three-term form is as accurate and faster in
-double-double (in sweeps up to $l = 4000$, measured during code review, not committed).
+double-double (in one-off sweeps up to $l = 4000$).
 
 ### Start values below the floating-point range
 
@@ -273,16 +273,15 @@ for:
 For general $(m, n)$ the tests therefore reach $l = 2000$, $l = 3000$ in two of the underflow
 cases, and $l = 4000$ only in the two cases next to the poles.
 
-Measured during code review (not committed, so not reproducible from the repository): an
-adversarial probe of about 4500 Arb cases, with $\lvert m\rvert, \lvert n\rvert \le 1000$ and
+Beyond the tests, a one-off adversarial search of about 4500 Arb cases, with $\lvert m\rvert, \lvert n\rvert \le 1000$ and
 $l \le 5000$, covered turning points, the switch at $\lvert x\rvert = 0.9$, and near-diagonal
 pairs at small $l\theta$. The worst errors it found were $0.74(l+1)\cdot2^{-52}$ and
-$0.0034(l+1)\cdot2^{-97}$. Other probes of general $(m, n)$ reached $l$ = 5000–20 000.
+$0.0034(l+1)\cdot2^{-97}$. Other one-off checks of general $(m, n)$ reached $l$ = 5000–20 000.
 ```
 
 **Relative accuracy.** While $\lvert d^l\rvert$ grows with $l$, before its first turning
-point, the error is also within the bound relative to $\lvert d^l\rvert$. The largest measured
-during code review (not committed) is $1.05(l+1)\cdot2^{-52}$, at the start value of
+point, the error is also within the bound relative to $\lvert d^l\rvert$. The largest found
+in one-off measurements is $1.05(l+1)\cdot2^{-52}$, at the start value of
 $(1313, 1313)$ at $x = 0.2087$. Beyond that
 point, in the oscillatory region near the zeros of $d^l$, only the absolute bound holds.
 

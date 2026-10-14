@@ -6,10 +6,11 @@ kernelspec:
   language: python
 ---
 
-# Example: Gauss–Legendre quadrature
+# Gauss–Legendre quadrature
 
 {func}`scatrs.special.gauss_legendre` returns the nodes and weights of the $n$-point
-Gauss–Legendre rule on $[-1, 1]$. This page runs whenever the documentation is built. The
+Gauss–Legendre rule on $[-1, 1]$. scatrs uses these rules to compute the Greek coefficients
+exactly; they are exposed for other uses. This page runs whenever the documentation is built. The
 cells check their claims with `assert`, so a failing check fails the build.
 
 ```{code-cell} python
@@ -70,7 +71,7 @@ assert abs(math.fsum(w) - 2) <= 3 * eps
 
 ## Accuracy against Arb
 
-The {doc}`reference suite <../validation/reference-suite>` stores the 1000-point rule computed
+The {doc}`reference suite </theory/reference-suite>` stores the 1000-point rule computed
 with Arb. Each value $v$ is stored as three doubles `hi + lo + lo2`, with a rigorous bound `err`
 on the remainder. For an `f64` value $g$, the cell computes
 $\lvert g - (\text{hi} + \text{lo} + \text{lo2})\rvert + \text{err}$ with rational

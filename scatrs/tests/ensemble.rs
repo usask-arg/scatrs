@@ -459,7 +459,7 @@ fn jacobians_match_finite_differences() {
 /// The calibration of the error estimates on the grid below: the refined values (cross
 /// sections, g, the moments) are within their estimates; every other output, derivatives
 /// included, within twice its estimate (|K15 − G7| is an estimate, not a bound). Measured on
-/// this grid: at most 0.002 of the estimate for the refined outputs and 1.023 for the others
+/// this grid: at most 0.003 of the estimate for the refined outputs and 1.210 for the others
 /// (the test prints the worst ratios).
 const ESTIMATE_FACTOR: f64 = 2.0;
 

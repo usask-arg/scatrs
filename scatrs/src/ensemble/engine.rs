@@ -37,13 +37,14 @@ const R3: usize = 7;
 const SCALARS: usize = 8;
 
 /// Pass 1 integrates the per-sphere quantities 1, C_ext, C_sca, C_sca·g, C_back and C_abs (the
-/// first four at the indices of the flat layout, C_back at `P1_BACK`, C_abs at 5), then the
+/// first four at the indices of the flat layout, C_back at `P1_BACK`, C_abs at `P1_ABS`), then the
 /// optional Greek coefficients (each πr²·α, 6 arrays of `refine_order` + 1) and the
 /// refractive-index derivatives (`M_GROUP` per part of m: C_ext, C_sca, C_sca·g, C_back,
 /// C_abs), and refines on all of them but C_back and its derivatives unless
 /// `refine_backscatter`. The moments r² and r³ come from their own integration (`moments`).
 const N_BASE: usize = 6;
 const P1_BACK: usize = 4;
+const P1_ABS: usize = 5;
 const M_GROUP: usize = 5;
 
 /// Panels of pass 2 per parallel task; fixed, so the order of the sums never depends on the
@@ -509,6 +510,14 @@ fn pass1(
         let err = |j: usize| sums.iter().map(|s| s.err[j]).sum::<f64>();
         // The targets of each refined quantity.
         let mut target = vec![0.0; (1 + nt) * n_refined];
+        // C_abs and its derivatives are refined to rtol of C_ext's (the accuracy of
+        // C_ext − C_sca): relative to C_abs itself, the resonances of weakly absorbing large
+        // spheres would take most of the panels.
+        let scale_of = |j: usize| match j {
+            P1_ABS => EXT,
+            j if j >= n_greek && (j - n_greek) % M_GROUP == M_GROUP - 1 => j + 1 - M_GROUP,
+            j => j,
+        };
         let c_sca = total(SCA).abs();
         for j in 0..n_refined {
             let scale = match j {
@@ -518,13 +527,14 @@ fn pass1(
                 // spheres is a sum of narrow glory ripples orders of magnitude below C_sca.
                 P1_BACK => total(P1_BACK).abs().max(c_sca),
                 // The refractive-index derivatives can cancel: their absolute integrands.
-                j if j >= n_greek => sums.iter().map(|s| s.absv[j]).sum::<f64>(),
+                j if j >= n_greek => sums.iter().map(|s| s.absv[scale_of(j)]).sum::<f64>(),
                 j if j >= N_BASE => c_sca,
-                j => total(j).abs(),
+                j => total(scale_of(j)).abs(),
             };
             target[j] = rtol * scale;
             for b in 0..nt {
-                let abs: f64 = sums.iter().map(|s| s.abs[b * n_refined + j]).sum();
+                let k = b * n_refined + scale_of(j);
+                let abs: f64 = sums.iter().map(|s| s.abs[k]).sum();
                 target[(1 + b) * n_refined + j] = rtol * abs;
             }
         }
@@ -561,7 +571,8 @@ fn pass1(
                         target[o]
                     } else {
                         let (b, j) = (o / n_refined - 1, o % n_refined);
-                        let abs: f64 = sums.iter().map(|s| s.abs[b * n_refined + j]).sum();
+                        let k = b * n_refined + scale_of(j);
+                        let abs: f64 = sums.iter().map(|s| s.abs[k]).sum();
                         rtol * total(o).abs().max(1e-3 * abs)
                     }
                 })

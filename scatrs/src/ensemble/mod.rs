@@ -28,6 +28,7 @@ mod engine;
 mod fast;
 mod kronrod;
 mod lin;
+mod matrix;
 mod moments;
 mod range;
 

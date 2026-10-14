@@ -135,7 +135,8 @@
 //! A [`Mie`](mie::Mie) workspace serves one thread; make one per thread. The ensembles run on
 //! rayon's global thread pool, or on a pool the caller [`install`](rayon::ThreadPool::install)s,
 //! and give bitwise identical results for any number of threads.
-#![forbid(unsafe_code)]
+// The only unsafe code is the call of `matrixmultiply::dgemm` in `ensemble::matrix`.
+#![deny(unsafe_code)]
 #![warn(missing_docs)]
 
 mod complex;

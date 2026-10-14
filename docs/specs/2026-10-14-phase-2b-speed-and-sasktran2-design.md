@@ -162,6 +162,14 @@ Recorded 2026-10-14, after measuring:
   than `matrixmultiply`, whose `dgemm` is an unsafe raw-pointer API that the core's
   `#![forbid(unsafe_code)]` rules out. On the kernel's shape (316 × 600 × 60) faer reached
   55 GFLOP/s, `matrixmultiply` 52, a safe hand-blocked loop 20 (Apple M4 Pro).
+  **Reversed 2026-10-14** (sasktran2 integration feedback): faer's 54 crates were most of the
+  build of a downstream that uses only the Mie layer. The products now use `matrixmultiply`
+  (2 crates) through one bounds-checked `unsafe` call in `ensemble::matrix`, with the core's
+  lint relaxed to `#![deny(unsafe_code)]`. End to end on one thread it is within 2–4% of faer
+  (w1 1.09 s vs 1.05 s, the `ensemble` bench's batch 2.44 s vs 2.38 s, with derivatives
+  18.6 s vs 18.7 s); a safe autovectorized kernel was 36–52% slower, as LLVM does not
+  vectorize `f64::mul_add` and stable Rust has no safe SIMD FMA. `matrixmultiply` has no
+  AVX-512 kernel, so faer may be faster on AVX-512 machines (not measured).
 - **Kernel A** as in section 3, restricted to each panel's own number of terms. The band tables
   are built per wavelength (a fraction of a millisecond), not cached across wavelengths.
 - **Kernel B is not adopted, and there is no `greek_method` option.** A numpy prototype

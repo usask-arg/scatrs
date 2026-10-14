@@ -4,7 +4,7 @@
 
 use core::f64::consts::PI;
 
-use faer::{Accum, Mat, Par};
+use super::matrix::{Mat, matmul};
 use num_complex::Complex;
 use rayon::prelude::*;
 
@@ -1168,13 +1168,13 @@ fn pass2(
         dmv: Vec<f64>,
         products: Option<PanelProducts>,
         /// The nodes' values (nodes × stride), and their Re m and Im m derivatives.
-        v: Mat<f64>,
-        dv: [Mat<f64>; 2],
+        v: Mat,
+        dv: [Mat; 2],
         /// The weights (2·rows × nodes) and the products (2·rows × stride).
-        w: Mat<f64>,
-        wm: Mat<f64>,
-        pv: Mat<f64>,
-        pm: [Mat<f64>; 2],
+        w: Mat,
+        wm: Mat,
+        pv: Mat,
+        pm: [Mat; 2],
     }
     /// A chunk's sums and errors on one range [lo, hi) of the layout, every block.
     type Segment = ((usize, usize), Vec<f64>, Vec<f64>);
@@ -1186,19 +1186,7 @@ fn pass2(
             blocks: b,
         })
         .collect();
-    let gemm = |dst: &mut Mat<f64>, w: &Mat<f64>, v: &Mat<f64>| {
-        if dst.nrows() != w.nrows() || dst.ncols() != v.ncols() {
-            *dst = Mat::zeros(w.nrows(), v.ncols());
-        }
-        faer::linalg::matmul::matmul(
-            dst.as_mut(),
-            Accum::Replace,
-            w.as_ref(),
-            v.as_ref(),
-            1.0,
-            Par::Seq,
-        );
-    };
+    let gemm = |dst: &mut Mat, w: &Mat, v: &Mat| matmul(dst, w, v, w.ncols());
     // A chunk's sums: every part's blocks on the common part and at most a band per panel,
     // with their errors.
     let widest = layout
@@ -1313,7 +1301,7 @@ fn pass2(
                             for (p, part) in group.iter().enumerate() {
                                 let u = densities[p].eval(r, &mut sc.grads[p]);
                                 let row = rows.first[p];
-                                let set = |w: &mut Mat<f64>, i: usize, n: usize, x: f64| {
+                                let set = |w: &mut Mat, i: usize, n: usize, x: f64| {
                                     w[(i, k)] = wk * x;
                                     w[(n + i, k)] = wg * x;
                                 };
@@ -1363,7 +1351,7 @@ fn pass2(
                             let nb = blocks[p];
                             let nt = part.theta.len();
                             // (matrix of products, its Kronrod row, its number of rows).
-                            let block_rows = |blk: usize| -> (&Mat<f64>, usize, usize) {
+                            let block_rows = |blk: usize| -> (&Mat, usize, usize) {
                                 if blk <= nt {
                                     (&sc.pv, rows.first[p] + blk, rows.values)
                                 } else {
@@ -1812,7 +1800,7 @@ fn project(layout: &Layout<'_>, order: usize, mixed: &[Mixed]) -> Result<Vec<[Ve
         let n_q = band.projector.nodes().len();
         let start = band.start;
         // A row per unit and kind (the values, then each derivative), a matrix per element.
-        let tables = |pick: &dyn Fn(&Mixed, usize) -> &[f64]| -> [Mat<f64>; 4] {
+        let tables = |pick: &dyn Fn(&Mixed, usize) -> &[f64]| -> [Mat; 4] {
             core::array::from_fn(|k| {
                 Mat::from_fn(rows, n_q, |row, j| {
                     pick(&mixed[row / per], row % per)[start + k * n_q + j]

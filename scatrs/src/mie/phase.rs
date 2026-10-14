@@ -2,7 +2,7 @@
 
 use num_complex::Complex;
 
-use super::{AmplitudeBuffers, MieSolution};
+use super::{AmplitudeBuffers, AngularTable, MieSolution};
 use crate::scalar::Real;
 use crate::{Error, Result};
 
@@ -105,15 +105,53 @@ impl<T: Real> MieSolution<'_, T> {
                 s2: &mut s2,
             },
         )?;
+        self.phase_from_amplitudes(&s1, &s2, normalization, out);
+        Ok(())
+    }
+
+    /// The phase matrix at the cosines of `table`, as [`phase_matrix`](Self::phase_matrix)
+    /// gives it (bitwise).
+    ///
+    /// # Errors
+    ///
+    /// As [`amplitudes_from_table`](Self::amplitudes_from_table).
+    pub fn phase_matrix_from_table(
+        &self,
+        table: &AngularTable<T>,
+        normalization: Normalization,
+        out: PhaseBuffers<'_, T>,
+    ) -> Result<()> {
+        let len = table.mu().len();
+        out.check(len, "phase-matrix")?;
+        let zero = Complex::new(T::zero(), T::zero());
+        let (mut s1, mut s2) = (vec![zero; len], vec![zero; len]);
+        self.amplitudes_from_table(
+            table,
+            AmplitudeBuffers {
+                s1: &mut s1,
+                s2: &mut s2,
+            },
+        )?;
+        self.phase_from_amplitudes(&s1, &s2, normalization, out);
+        Ok(())
+    }
+
+    /// The phase matrix from S₁ and S₂.
+    fn phase_from_amplitudes(
+        &self,
+        s1: &[Complex<T>],
+        s2: &[Complex<T>],
+        normalization: Normalization,
+        out: PhaseBuffers<'_, T>,
+    ) {
         let c = self.phase_scale(normalization);
-        for j in 0..mu.len() {
+        for j in 0..s1.len() {
             let f = elements(s1[j], s2[j]);
             out.f11[j] = c * f[0];
             out.f12[j] = c * f[1];
             out.f33[j] = c * f[2];
             out.f34[j] = c * f[3];
         }
-        Ok(())
     }
 
     /// The phase matrix and its derivatives with respect to x, Re m and Im m, in `d[0]`, `d[1]`
@@ -130,28 +168,84 @@ impl<T: Real> MieSolution<'_, T> {
         values: PhaseBuffers<'_, T>,
         d: [PhaseBuffers<'_, T>; 3],
     ) -> Result<()> {
-        let Some(jac) = self.efficiencies_jacobian() else {
-            return Err(Error::InvalidInput(
-                "phase-matrix derivatives need a solution from Mie::compute_with_derivatives"
-                    .into(),
-            ));
-        };
-        values.check(mu.len(), "phase-matrix")?;
-        for buffers in &d {
-            buffers.check(mu.len(), "derivative")?;
-        }
-        let n = mu.len();
-        let zero = Complex::new(T::zero(), T::zero());
-        let mut s: [Vec<Complex<T>>; 6] = core::array::from_fn(|_| vec![zero; n]);
-        {
-            let [s1, s2, dx1, dx2, dm1, dm2] = &mut s;
+        let s = self.phase_derivative_amplitudes(mu.len(), &values, &d, |s| {
+            let [s1, s2, dx1, dx2, dm1, dm2] = s;
             self.amplitudes_with_derivatives(
                 mu,
                 AmplitudeBuffers { s1, s2 },
                 AmplitudeBuffers { s1: dx1, s2: dx2 },
                 AmplitudeBuffers { s1: dm1, s2: dm2 },
-            )?;
+            )
+        })?;
+        self.phase_derivatives_from_amplitudes(&s, normalization, values, d);
+        Ok(())
+    }
+
+    /// The phase matrix and its derivatives at the cosines of `table`, as
+    /// [`phase_matrix_with_derivatives`](Self::phase_matrix_with_derivatives) gives them
+    /// (bitwise).
+    ///
+    /// # Errors
+    ///
+    /// As [`phase_matrix_from_table`](Self::phase_matrix_from_table), and
+    /// [`Error::InvalidInput`] if the solution was computed without derivatives.
+    pub fn phase_matrix_with_derivatives_from_table(
+        &self,
+        table: &AngularTable<T>,
+        normalization: Normalization,
+        values: PhaseBuffers<'_, T>,
+        d: [PhaseBuffers<'_, T>; 3],
+    ) -> Result<()> {
+        let s = self.phase_derivative_amplitudes(table.mu().len(), &values, &d, |s| {
+            let [s1, s2, dx1, dx2, dm1, dm2] = s;
+            self.amplitudes_with_derivatives_from_table(
+                table,
+                AmplitudeBuffers { s1, s2 },
+                AmplitudeBuffers { s1: dx1, s2: dx2 },
+                AmplitudeBuffers { s1: dm1, s2: dm2 },
+            )
+        })?;
+        self.phase_derivatives_from_amplitudes(&s, normalization, values, d);
+        Ok(())
+    }
+
+    /// After checking that the solution has derivatives and the buffers' lengths are `len`,
+    /// S₁, S₂, ∂S₁/∂x, ∂S₂/∂x, dS₁/dm, dS₂/dm from `amplitudes`.
+    fn phase_derivative_amplitudes(
+        &self,
+        len: usize,
+        values: &PhaseBuffers<'_, T>,
+        d: &[PhaseBuffers<'_, T>; 3],
+        amplitudes: impl FnOnce([&mut [Complex<T>]; 6]) -> Result<()>,
+    ) -> Result<[Vec<Complex<T>>; 6]> {
+        if self.derivatives().is_none() {
+            return Err(Error::InvalidInput(
+                "phase-matrix derivatives need a solution from Mie::compute_with_derivatives"
+                    .into(),
+            ));
         }
+        values.check(len, "phase-matrix")?;
+        for buffers in d {
+            buffers.check(len, "derivative")?;
+        }
+        let zero = Complex::new(T::zero(), T::zero());
+        let mut s: [Vec<Complex<T>>; 6] = core::array::from_fn(|_| vec![zero; len]);
+        amplitudes(s.each_mut().map(|v| v.as_mut_slice()))?;
+        Ok(s)
+    }
+
+    /// The phase matrix and its derivatives from the amplitudes and their derivatives (as
+    /// [`phase_derivative_amplitudes`](Self::phase_derivative_amplitudes) orders them).
+    fn phase_derivatives_from_amplitudes(
+        &self,
+        s: &[Vec<Complex<T>>; 6],
+        normalization: Normalization,
+        values: PhaseBuffers<'_, T>,
+        d: [PhaseBuffers<'_, T>; 3],
+    ) {
+        let jac = self
+            .efficiencies_jacobian()
+            .expect("a solution with derivatives");
         // The scale c and its derivatives: c = 4/(x²Q) or 4/x².
         let x = self.x();
         let c = self.phase_scale(normalization);
@@ -170,7 +264,7 @@ impl<T: Real> MieSolution<'_, T> {
         let i1 = Complex::new(T::zero(), T::one());
         let v = values;
         let [mut dx, mut dr, mut di] = d;
-        let [s1s, s2s, dx1, dx2, dm1, dm2] = &s;
+        let [s1s, s2s, dx1, dx2, dm1, dm2] = s;
         for (j, (&s1, &s2)) in s1s.iter().zip(s2s).enumerate() {
             let f = elements(s1, s2);
             // ∂S/∂x, ∂S/∂(Re m) = dS/dm, ∂S/∂(Im m) = i·dS/dm.
@@ -191,6 +285,5 @@ impl<T: Real> MieSolution<'_, T> {
                 out.f34[j] = g(3);
             }
         }
-        Ok(())
     }
 }

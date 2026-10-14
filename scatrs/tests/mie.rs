@@ -9,10 +9,10 @@ use num_complex::Complex;
 use proptest::prelude::*;
 use scatrs::Error;
 use scatrs::mie::{
-    AmplitudeBuffers, MAX_MIE_ORDER, Mie, MieOptions, VALIDATED_DOMAIN, ValidatedDomain,
-    default_n_max, n_terms,
+    AmplitudeBuffers, AngularTable, MAX_MIE_ORDER, Mie, MieOptions, Normalization, PhaseBuffers,
+    VALIDATED_DOMAIN, ValidatedDomain, default_n_max, n_terms,
 };
-use scatrs::scalar::Dual;
+use scatrs::scalar::{DoubleDouble, Dual, Real};
 
 const EPS: f64 = f64::EPSILON;
 
@@ -289,6 +289,179 @@ fn forward_and_backward_amplitudes() {
         // Q_back = 4|S₁(π)|²/x².
         assert!((4.0 * s1[1].norm_sqr() / (x * x) / q.q_back - 1.0).abs() <= 64.0 * kappa * EPS);
     }
+}
+
+/// Six amplitude buffers of `len` values, filled by `f` (values, ∂/∂x, d/dm).
+fn amplitude_sets<T: Real>(
+    len: usize,
+    f: impl FnOnce(
+        AmplitudeBuffers<'_, T>,
+        AmplitudeBuffers<'_, T>,
+        AmplitudeBuffers<'_, T>,
+    ) -> scatrs::Result<()>,
+) -> [Vec<Complex<T>>; 6] {
+    let zero = Complex::new(T::zero(), T::zero());
+    let mut v: [Vec<Complex<T>>; 6] = std::array::from_fn(|_| vec![zero; len]);
+    let [a, b, dx1, dx2, dm1, dm2] = &mut v;
+    f(
+        AmplitudeBuffers { s1: a, s2: b },
+        AmplitudeBuffers { s1: dx1, s2: dx2 },
+        AmplitudeBuffers { s1: dm1, s2: dm2 },
+    )
+    .unwrap();
+    v
+}
+
+/// Sixteen phase-matrix buffers of `len` values, filled by `f` (values, ∂/∂x, ∂/∂Re m,
+/// ∂/∂Im m).
+fn phase_sets<T: Real>(
+    len: usize,
+    f: impl FnOnce(PhaseBuffers<'_, T>, [PhaseBuffers<'_, T>; 3]) -> scatrs::Result<()>,
+) -> Vec<T> {
+    let mut flat = vec![T::zero(); 16 * len];
+    let mut parts = flat.chunks_exact_mut(len);
+    let mut buffers = || PhaseBuffers {
+        f11: parts.next().unwrap(),
+        f12: parts.next().unwrap(),
+        f33: parts.next().unwrap(),
+        f34: parts.next().unwrap(),
+    };
+    let values = buffers();
+    let d = [buffers(), buffers(), buffers()];
+    f(values, d).unwrap();
+    flat
+}
+
+/// An angular table gives the amplitudes and the phase matrix, with their derivatives,
+/// bitwise as the cosines do, for spheres of fewer terms than the table has orders.
+fn angular_table_matches_the_cosines<T: Real>() {
+    let mu: Vec<T> = [1.0, 0.99, 0.6, 0.0, -0.3, -0.999, -1.0]
+        .map(T::from_f64)
+        .to_vec();
+    let len = mu.len();
+    let opts = MieOptions::new();
+    let spheres = [
+        (0.3, c(1.33, 0.0)),
+        (25.0, c(1.5, 0.1)),
+        (300.0, c(1.45, 1e-4)),
+    ];
+    let mut mie = Mie::<T>::new();
+    let to_t = |x: f64, m: Complex<f64>| {
+        (
+            T::from_f64(x),
+            Complex::new(T::from_f64(m.re), T::from_f64(m.im)),
+        )
+    };
+    let n_max = spheres
+        .iter()
+        .map(|&(x, m)| {
+            let (x, m) = to_t(x, m);
+            mie.compute(x, m, &opts).unwrap().n_terms()
+        })
+        .max()
+        .unwrap();
+    let table = AngularTable::new(&mu, n_max + 3).unwrap();
+    assert_eq!((table.mu(), table.n_max()), (&mu[..], n_max + 3));
+    for &(x, m) in &spheres {
+        let (xt, mt) = to_t(x, m);
+        let s = mie.compute_with_derivatives(xt, mt, &opts).unwrap();
+        let want = amplitude_sets(len, |v, _, _| s.amplitudes(&mu, v));
+        let got = amplitude_sets(len, |v, _, _| s.amplitudes_from_table(&table, v));
+        assert_eq!(got, want, "amplitudes, x = {x}");
+        let want = amplitude_sets(len, |v, dx, dm| {
+            s.amplitudes_with_derivatives(&mu, v, dx, dm)
+        });
+        let got = amplitude_sets(len, |v, dx, dm| {
+            s.amplitudes_with_derivatives_from_table(&table, v, dx, dm)
+        });
+        assert_eq!(got, want, "amplitude derivatives, x = {x}");
+        for norm in [Normalization::Normalized, Normalization::Unnormalized] {
+            let want = phase_sets(len, |v, _| s.phase_matrix(&mu, norm, v));
+            let got = phase_sets(len, |v, _| s.phase_matrix_from_table(&table, norm, v));
+            assert_eq!(got, want, "phase matrix, x = {x}, {norm:?}");
+            let want = phase_sets(len, |v, d| s.phase_matrix_with_derivatives(&mu, norm, v, d));
+            let got = phase_sets(len, |v, d| {
+                s.phase_matrix_with_derivatives_from_table(&table, norm, v, d)
+            });
+            assert_eq!(got, want, "phase-matrix derivatives, x = {x}, {norm:?}");
+        }
+    }
+}
+
+#[test]
+fn angular_tables_match_the_cosines_bitwise() {
+    angular_table_matches_the_cosines::<f64>();
+    angular_table_matches_the_cosines::<DoubleDouble>();
+}
+
+#[test]
+fn angular_tables_reject_bad_inputs_without_writing() {
+    fn invalid<T>(r: Result<T, Error>) -> bool {
+        matches!(r, Err(Error::InvalidInput(_)))
+    }
+    for mu in [vec![0.5, 1.5], vec![f64::NAN], vec![-1.0 - 1e-15]] {
+        assert!(invalid(AngularTable::new(&mu, 10)), "{mu:?}");
+    }
+    for n in [0, MAX_MIE_ORDER + 1] {
+        assert!(invalid(AngularTable::new(&[0.5], n)), "n_max = {n}");
+    }
+    let mut mie = Mie::<f64>::new();
+    let s = mie.compute(25.0, c(1.5, 0.1), &MieOptions::new()).unwrap();
+    let marker = c(7.0, 7.0);
+    let untouched = |v: &[Complex<f64>]| v.iter().all(|&z| z == marker);
+    // A table with too few orders, then buffers of the wrong length.
+    let mu = [0.5, -0.5];
+    let short = AngularTable::new(&mu, s.n_terms() - 1).unwrap();
+    let table = AngularTable::new(&mu, s.n_terms()).unwrap();
+    for (t, n) in [(&short, 2), (&table, 3)] {
+        let (mut s1, mut s2) = (vec![marker; n], vec![marker; 2]);
+        let r = s.amplitudes_from_table(
+            t,
+            AmplitudeBuffers {
+                s1: &mut s1,
+                s2: &mut s2,
+            },
+        );
+        assert!(invalid(r) && untouched(&s1) && untouched(&s2));
+    }
+    let mut f = [7.0; 8];
+    let (f11, rest) = f.split_at_mut(2);
+    let (f12, rest) = rest.split_at_mut(2);
+    let (f33, f34) = rest.split_at_mut(2);
+    let r = s.phase_matrix_from_table(
+        &short,
+        Normalization::Normalized,
+        PhaseBuffers { f11, f12, f33, f34 },
+    );
+    assert!(invalid(r) && f.iter().all(|&v| v == 7.0));
+    // Exactly as many orders as terms is enough; derivatives need a solution with them.
+    let (mut s1, mut s2) = (vec![marker; 2], vec![marker; 2]);
+    s.amplitudes_from_table(
+        &table,
+        AmplitudeBuffers {
+            s1: &mut s1,
+            s2: &mut s2,
+        },
+    )
+    .unwrap();
+    let mut v = [c(0.0, 0.0); 12];
+    let mut parts = v.chunks_exact_mut(2);
+    let mut buffers = || AmplitudeBuffers {
+        s1: parts.next().unwrap(),
+        s2: parts.next().unwrap(),
+    };
+    let r = s.amplitudes_with_derivatives_from_table(&table, buffers(), buffers(), buffers());
+    assert!(invalid(r));
+    // No cosines: nothing to compute.
+    let empty = AngularTable::<f64>::new(&[], s.n_terms()).unwrap();
+    let r = s.amplitudes_from_table(
+        &empty,
+        AmplitudeBuffers {
+            s1: &mut [],
+            s2: &mut [],
+        },
+    );
+    assert!(r.is_ok());
 }
 
 #[test]

@@ -7,7 +7,7 @@
 //! S₁(±μ) = G_E·u ± G_O·v and S₂(±μ) = G_E·v ± G_O·u at the non-negative nodes μ. The Gauss
 //! nodes are exactly symmetric, so the products at h = ⌈n_q/2⌉ nodes give all n_q.
 
-use faer::{Accum, Mat, Par};
+use super::matrix::{Mat, matmul, product};
 use num_complex::Complex;
 
 use crate::Result;
@@ -17,8 +17,8 @@ use crate::special::wigner_d;
 /// G_E and G_O of one band (h × N, one column per order).
 pub(crate) struct BandTables {
     q: usize,
-    ge: Mat<f64>,
-    go: Mat<f64>,
+    ge: Mat,
+    go: Mat,
 }
 
 impl BandTables {
@@ -28,8 +28,8 @@ impl BandTables {
         let q = nodes.len();
         let lo = q / 2;
         let h = q - lo;
-        let mut ge = Mat::<f64>::zeros(h, n);
-        let mut go = Mat::<f64>::zeros(h, n);
+        let mut ge = Mat::zeros(h, n);
+        let mut go = Mat::zeros(h, n);
         for (i, &mu) in nodes[lo..].iter().enumerate() {
             for_each_order(mu, n, |k, pi, tau| {
                 let (e, o) = if k % 2 == 1 { (pi, tau) } else { (tau, pi) };
@@ -49,9 +49,9 @@ impl BandTables {
 /// parts; 4 more with derivatives: du/dm, dv/dm) and the products.
 pub(crate) struct PanelProducts {
     per: usize,
-    x: Mat<f64>,
-    ce: Mat<f64>,
-    co: Mat<f64>,
+    x: Mat,
+    ce: Mat,
+    co: Mat,
 }
 
 impl PanelProducts {
@@ -115,16 +115,8 @@ impl PanelProducts {
     /// orders (the band's tables may have more).
     pub(crate) fn multiply(&mut self, tables: &BandTables, terms: usize) {
         let terms = terms.min(tables.orders());
-        for (dst, g) in [(&mut self.ce, &tables.ge), (&mut self.co, &tables.go)] {
-            faer::linalg::matmul::matmul(
-                dst.as_mut(),
-                Accum::Replace,
-                g.as_ref().subcols(0, terms),
-                self.x.as_ref().subrows(0, terms),
-                1.0,
-                Par::Seq,
-            );
-        }
+        matmul(&mut self.ce, &tables.ge, &self.x, terms);
+        matmul(&mut self.co, &tables.go, &self.x, terms);
     }
 
     /// Sphere `k`'s phase matrix times `scale` at every node of the band (F₁₁, F₁₂, F₃₃, F₃₄,
@@ -141,7 +133,7 @@ impl PanelProducts {
         let q = tables.q;
         let lo = q / 2;
         let base = k * self.per;
-        let c = |m: &Mat<f64>, i: usize, col: usize| Complex::new(m[(i, col)], m[(i, col + 1)]);
+        let c = |m: &Mat, i: usize, col: usize| Complex::new(m[(i, col)], m[(i, col + 1)]);
         let i1 = Complex::new(0.0, 1.0);
         for i in 0..self.ce.nrows() {
             let j = lo + i;
@@ -184,18 +176,18 @@ impl PanelProducts {
 /// (2l + 1)/2·wₖ·dₗ(μₖ) (n_q × (L + 1)) of d₀₀, d₂₂, d₂,₋₂ and d₀₂, as `GreekProjector::project`
 /// sums them, and their absolute values for the bounds of `GreekProjector::project_bounds`.
 pub(crate) struct BandProjection {
-    d: [Mat<f64>; 4],
-    abs: [Mat<f64>; 4],
+    d: [Mat; 4],
+    abs: [Mat; 4],
 }
 
 /// The six coefficient arrays of many tables, a row per table: α₁, α₂, α₃, α₄, β₁, β₂.
-pub(crate) type Coefficients = [Mat<f64>; 6];
+pub(crate) type Coefficients = [Mat; 6];
 
 impl BandProjection {
     pub(crate) fn new(projector: &GreekProjector<f64>) -> Result<Self> {
         let (nodes, weights) = (projector.nodes(), projector.weights());
         let len = projector.order() + 1;
-        let mut d: [Mat<f64>; 4] = core::array::from_fn(|_| Mat::zeros(nodes.len(), len));
+        let mut d: [Mat; 4] = core::array::from_fn(|_| Mat::zeros(nodes.len(), len));
         let mut buf = vec![0.0; len];
         for (k, (&mu, &w)) in nodes.iter().zip(weights).enumerate() {
             for (i, (m, n)) in [(0, 0), (2, 2), (2, -2), (0, 2)].into_iter().enumerate() {
@@ -205,44 +197,43 @@ impl BandProjection {
                 }
             }
         }
-        let abs =
-            core::array::from_fn(|i| Mat::from_fn(nodes.len(), len, |k, l| d[i][(k, l)].abs()));
+        let abs = core::array::from_fn(|i| d[i].map(f64::abs));
         Ok(Self { d, abs })
     }
 
     /// The coefficients of the tables, whose elements are the rows of `f` (F₁₁, F₁₂, F₃₃, F₃₄,
     /// each tables × n_q).
-    pub(crate) fn project(&self, f: &[Mat<f64>; 4]) -> Coefficients {
+    pub(crate) fn project(&self, f: &[Mat; 4]) -> Coefficients {
         let [f11, f12, f33, f34] = f;
-        let sum = f11 + f33;
-        let diff = f11 - f33;
+        let sum = f11.zip_map(f33, |a, b| a + b);
+        let diff = f11.zip_map(f33, |a, b| a - b);
         let [d00, d22, d2m2, d02] = &self.d;
-        let plus = &sum * d22;
-        let minus = &diff * d2m2;
+        let plus = product(&sum, d22);
+        let minus = product(&diff, d2m2);
         [
-            f11 * d00,
-            (&plus + &minus) * 0.5,
-            (&plus - &minus) * 0.5,
-            f33 * d00,
-            f12 * d02,
-            f34 * d02,
+            product(f11, d00),
+            plus.zip_map(&minus, |p, m| (p + m) * 0.5),
+            plus.zip_map(&minus, |p, m| (p - m) * 0.5),
+            product(f33, d00),
+            product(f12, d02),
+            product(f34, d02),
         ]
     }
 
     /// Bounds on the coefficients' changes for tables of bounds on the elements' changes (as
     /// `project`): α₂ and α₃ share the half sum of the bounds of α₂ ± α₃.
-    pub(crate) fn bounds(&self, e: &[Mat<f64>; 4]) -> Coefficients {
+    pub(crate) fn bounds(&self, e: &[Mat; 4]) -> Coefficients {
         let [e11, e12, e33, e34] = e;
-        let sum = e11 + e33;
+        let sum = e11.zip_map(e33, |a, b| a + b);
         let [d00, d22, d2m2, d02] = &self.abs;
-        let both = (&sum * d22 + &sum * d2m2) * 0.5;
+        let both = product(&sum, d22).zip_map(&product(&sum, d2m2), |p, m| (p + m) * 0.5);
         [
-            e11 * d00,
+            product(e11, d00),
             both.clone(),
             both,
-            e33 * d00,
-            e12 * d02,
-            e34 * d02,
+            product(e33, d00),
+            product(e12, d02),
+            product(e34, d02),
         ]
     }
 }

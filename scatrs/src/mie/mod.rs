@@ -81,8 +81,8 @@ use num_complex::Complex;
 use crate::scalar::Real;
 use crate::{Error, Result};
 
-pub use amplitudes::AmplitudeBuffers;
 pub(crate) use amplitudes::for_each_order;
+pub use amplitudes::{AmplitudeBuffers, AngularTable};
 pub use domain::{MieOutput, VALIDATED_DOMAIN, ValidatedDomain};
 pub use efficiencies::{Efficiencies, EfficiencyJacobian};
 pub use greek::{GreekCoefficients, GreekProjector, MAX_GREEK_ORDER, PhaseTables};

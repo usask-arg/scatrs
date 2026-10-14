@@ -454,7 +454,9 @@ runs:
   $m = 1.5$. The values cost less still at smaller real $m$, so for non-absorbing spheres with
   $m \lesssim 1.4$ the Jacobian costs more than the target of twice the values: up to 2.2
   times at $m = 0.75$, $x \ge 1000$;
-- amplitudes at 100 angles add about 4 ns per angle and term.
+- amplitudes at 100 angles add about 4 ns per angle and term, most of it in the recurrences
+  of $\pi_n$ and $\tau_n$; from an {rust}`AngularTable <scatrs::mie::AngularTable>`, which
+  evaluates those once for every sphere at the same angles, about 0.75 ns.
 
 The Greek coefficients for all orders cost the amplitudes at $n_q \approx 2N$ nodes,
 $O(N^2)$, and the four Wigner recurrences up to $L = 2N$ at each node, also $O(N^2)$. In

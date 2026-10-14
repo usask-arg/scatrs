@@ -425,6 +425,52 @@ pub fn compute_mixture(
     engine::run(components, wavelengths, options)
 }
 
+/// Averages over each of many `distributions` of one material, sharing the size nodes: one
+/// set of panels per wavelength over the union of their ranges, refined until every
+/// distribution meets its own targets, so each Mie solution and phase-matrix table serves
+/// every distribution. For grids of distributions (an optics database) this costs about as
+/// much as the broadest distribution alone. Results by distribution, then wavelength; each
+/// has its own error estimates and `converged` flag (`panels` counts the shared panels). A
+/// distribution in a batch is at least as refined as on its own, so its values differ from
+/// [`compute`]'s within the error estimates.
+///
+/// # Errors
+///
+/// As [`compute`], and [`Error::InvalidInput`] for no distributions or any requested
+/// derivative (Jacobians come from [`compute`]).
+pub fn compute_batch(
+    distributions: &[SizeDistribution],
+    wavelengths: &[f64],
+    refractive_index: &[Complex<f64>],
+    options: &EnsembleOptions,
+) -> Result<Vec<Vec<EnsembleResult>>> {
+    if distributions.is_empty() {
+        return Err(invalid("a batch needs a distribution".into()));
+    }
+    if !options.derivatives.is_empty() {
+        return Err(invalid(
+            "a batch computes values only: request derivatives from compute".into(),
+        ));
+    }
+    if refractive_index.len() != wavelengths.len() {
+        return Err(invalid(format!(
+            "{} refractive indices for {} wavelengths",
+            refractive_index.len(),
+            wavelengths.len()
+        )));
+    }
+    for (i, d) in distributions.iter().enumerate() {
+        d.validate()
+            .map_err(|e| invalid(format!("distribution {i}: {e}")))?;
+    }
+    let components: Vec<Component> = distributions
+        .iter()
+        .map(|d| Component::new(d.clone(), refractive_index.to_vec(), 1.0))
+        .collect();
+    validate(&components, wavelengths, options, &[])?;
+    engine::run_batch(&components, wavelengths, options)
+}
+
 /// Checks the inputs common to [`compute`] and [`compute_mixture`].
 fn validate(
     components: &[Component],

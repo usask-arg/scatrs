@@ -4,11 +4,12 @@
 
 use core::f64::consts::PI;
 
+use faer::{Accum, Mat, Par};
 use num_complex::Complex;
 use rayon::prelude::*;
 
 use super::distribution::{SizeDistribution, Support};
-use super::fast::{BandTables, PanelProducts};
+use super::fast::{BandProjection, BandTables, PanelProducts};
 use super::lin::Lin;
 use super::moments::{Moments, moments};
 use super::range::{self, MIE_POWERS, MOMENT_POWERS, STEP};
@@ -18,7 +19,7 @@ use super::{
 };
 use crate::mie::{
     GreekCoefficients, GreekProjector, MAX_SIZE_PARAMETER, Mie, MieOptions, MieSolution,
-    Normalization, PhaseBuffers, PhaseTables, n_terms,
+    Normalization, PhaseBuffers, n_terms,
 };
 use crate::{Error, Result};
 
@@ -186,7 +187,14 @@ fn parts<'a>(
     Ok(out)
 }
 
-/// Runs every wavelength (validated inputs).
+/// Parts mixed into one result, and the sum of their components' weights.
+struct Unit {
+    parts: Vec<usize>,
+    w_total: f64,
+}
+
+/// Runs every wavelength (validated inputs): each part on its own panels, every part mixed
+/// into one result.
 pub(super) fn run(
     components: &[Component],
     wavelengths: &[f64],
@@ -194,11 +202,62 @@ pub(super) fn run(
 ) -> Result<Vec<EnsembleResult>> {
     let parts = parts(components, options, options.rtol)?;
     let w_total: f64 = components.iter().map(|c| c.weight).sum();
+    let groups: Vec<Vec<usize>> = (0..parts.len()).map(|p| vec![p]).collect();
+    let units = [Unit {
+        parts: (0..parts.len()).collect(),
+        w_total,
+    }];
     let results: Vec<Result<EnsembleResult>> = (0..wavelengths.len())
         .into_par_iter()
-        .map(|i| wavelength(&parts, w_total, wavelengths[i], i, options))
+        .map(|i| {
+            wavelength(&parts, &groups, &units, wavelengths[i], i, options).map(|mut r| r.remove(0))
+        })
         .collect();
     results.into_iter().collect()
+}
+
+/// Runs every wavelength of a batch (validated inputs, one component per distribution): the
+/// parts of every distribution with a range on shared panels, a result per distribution.
+/// Results by distribution, then wavelength.
+pub(super) fn run_batch(
+    components: &[Component],
+    wavelengths: &[f64],
+    options: &EnsembleOptions,
+) -> Result<Vec<Vec<EnsembleResult>>> {
+    let parts = parts(components, options, options.rtol)?;
+    let (points, shared): (Vec<usize>, Vec<usize>) =
+        (0..parts.len()).partition(|&p| matches!(parts[p].support, Support::Point(_)));
+    let mut groups: Vec<Vec<usize>> = points.into_iter().map(|p| vec![p]).collect();
+    if !shared.is_empty() {
+        groups.push(shared);
+    }
+    let units: Vec<Unit> = components
+        .iter()
+        .enumerate()
+        .map(|(c, comp)| Unit {
+            parts: (0..parts.len())
+                .filter(|&p| parts[p].component == c)
+                .collect(),
+            w_total: comp.weight,
+        })
+        .collect();
+    let results: Vec<Result<Vec<EnsembleResult>>> = (0..wavelengths.len())
+        .into_par_iter()
+        .map(|i| wavelength(&parts, &groups, &units, wavelengths[i], i, options))
+        .collect();
+    let mut by_wavelength = Vec::with_capacity(wavelengths.len());
+    for r in results {
+        by_wavelength.push(r?);
+    }
+    let mut out: Vec<Vec<EnsembleResult>> = (0..components.len())
+        .map(|_| Vec::with_capacity(wavelengths.len()))
+        .collect();
+    for per_unit in by_wavelength {
+        for (u, r) in per_unit.into_iter().enumerate() {
+            out[u].push(r);
+        }
+    }
+    Ok(out)
 }
 
 /// The size parameter of radius `r` at `lambda`.
@@ -340,89 +399,103 @@ fn n_refined(refine_order: Option<usize>, part: &Part<'_>) -> usize {
     N_BASE + refine_order.map_or(0, |l| 6 * (l + 1)) + M_GROUP * md
 }
 
-/// Evaluates one panel in pass 1.
+/// Evaluates one panel in pass 1 for every part of a group: each node's Mie solution once,
+/// its quantities weighted by each part's density.
 #[allow(clippy::too_many_arguments)]
 fn panel1(
     mie: &mut Mie<f64>,
-    part: &Part<'_>,
+    group: &[&Part<'_>],
     (a, b): (f64, f64),
     lambda: f64,
     m: Complex<f64>,
     opts: &MieOptions,
     refine_order: Option<usize>,
     n_refined: usize,
-) -> Result<Sums1> {
-    let d = part.dist.prepare();
-    let n_grad = part.dist.parameter_names().len();
-    let nt = part.theta.len();
-    let mut grad = vec![0.0; n_grad];
-    let mut k = vec![0.0; (1 + nt) * n_refined];
-    let mut g = vec![0.0; (1 + nt) * n_refined];
-    let mut abs = vec![0.0; nt * n_refined];
-    let mut absv = vec![0.0; n_refined];
-    let m_derivatives = [part.m_cols[0].is_some(), part.m_cols[1].is_some()];
-    let mut n_max = 0;
-    let mut edge = [
-        vec![0.0; (1 + nt) * n_refined],
-        vec![0.0; (1 + nt) * n_refined],
-    ];
+) -> Result<Vec<Sums1>> {
     let nodes = kronrod::panel(a, b);
-    for (i, &(t, wk, wg)) in nodes.iter().enumerate() {
-        let r = t.exp();
-        let u = d.eval(r, &mut grad);
-        let (q, n) = quantities1(mie, r, lambda, m, opts, refine_order, m_derivatives)?;
+    let first = group.first().expect("a part");
+    let m_derivatives = [first.m_cols[0].is_some(), first.m_cols[1].is_some()];
+    let mut n_max = 0;
+    let mut qs = Vec::with_capacity(nodes.len());
+    for &(t, _, _) in &nodes {
+        let (q, n) = quantities1(mie, t.exp(), lambda, m, opts, refine_order, m_derivatives)?;
         n_max = n_max.max(n);
-        let base = u * r;
-        let end = if i == 0 {
-            Some(0)
-        } else if i == nodes.len() - 1 {
-            Some(1)
-        } else {
-            None
-        };
-        for (j, &qj) in q.iter().enumerate() {
-            k[j] += wk * base * qj;
-            g[j] += wg * base * qj;
-            absv[j] += wk * (base * qj).abs();
-            if let Some(e) = end {
-                edge[e][j] = base * qj;
-            }
-            for (b_idx, &(_, gi)) in part.theta.iter().enumerate() {
-                let dw = grad[gi] * r;
-                let o = (1 + b_idx) * n_refined + j;
-                k[o] += wk * dw * qj;
-                g[o] += wg * dw * qj;
-                abs[b_idx * n_refined + j] += wk * (dw * qj).abs();
+        qs.push(q);
+    }
+    let mut out = Vec::with_capacity(group.len());
+    for part in group {
+        let d = part.dist.prepare();
+        let n_grad = part.dist.parameter_names().len();
+        let nt = part.theta.len();
+        let mut grad = vec![0.0; n_grad];
+        let mut k = vec![0.0; (1 + nt) * n_refined];
+        let mut g = vec![0.0; (1 + nt) * n_refined];
+        let mut abs = vec![0.0; nt * n_refined];
+        let mut absv = vec![0.0; n_refined];
+        let mut edge = [
+            vec![0.0; (1 + nt) * n_refined],
+            vec![0.0; (1 + nt) * n_refined],
+        ];
+        for (i, (&(t, wk, wg), q)) in nodes.iter().zip(&qs).enumerate() {
+            let r = t.exp();
+            let u = d.eval(r, &mut grad);
+            let base = u * r;
+            let end = if i == 0 {
+                Some(0)
+            } else if i == nodes.len() - 1 {
+                Some(1)
+            } else {
+                None
+            };
+            for (j, &qj) in q.iter().enumerate() {
+                k[j] += wk * base * qj;
+                g[j] += wg * base * qj;
+                absv[j] += wk * (base * qj).abs();
                 if let Some(e) = end {
-                    edge[e][o] = dw * qj;
+                    edge[e][j] = base * qj;
+                }
+                for (b_idx, &(_, gi)) in part.theta.iter().enumerate() {
+                    let dw = grad[gi] * r;
+                    let o = (1 + b_idx) * n_refined + j;
+                    k[o] += wk * dw * qj;
+                    g[o] += wg * dw * qj;
+                    abs[b_idx * n_refined + j] += wk * (dw * qj).abs();
+                    if let Some(e) = end {
+                        edge[e][o] = dw * qj;
+                    }
                 }
             }
         }
+        let err = k.iter().zip(&g).map(|(x, y)| (x - y).abs()).collect();
+        out.push(Sums1 {
+            k,
+            err,
+            abs,
+            absv,
+            n_terms: n_max,
+            edge,
+        });
     }
-    let err = k.iter().zip(&g).map(|(x, y)| (x - y).abs()).collect();
-    Ok(Sums1 {
-        k,
-        err,
-        abs,
-        absv,
-        n_terms: n_max,
-        edge,
-    })
+    Ok(out)
 }
 
-/// The outcome of pass 1 for one part.
+/// The outcome of pass 1 for a group of parts: their shared panels, and whether each part
+/// converged.
 struct Pass1 {
     panels: Vec<(f64, f64)>,
-    converged: bool,
+    converged: Vec<bool>,
     n_terms: usize,
     range: (f64, f64),
 }
 
+/// The panels of pass 1, with each part's sums once evaluated.
+type Panels1 = Vec<((f64, f64), Option<Vec<Sums1>>)>;
+
 /// Evaluates the panels without sums, in parallel and in order.
 #[allow(clippy::too_many_arguments)]
 fn evaluate(
-    panels: &mut [((f64, f64), Option<Sums1>)],
-    part: &Part<'_>,
+    panels: &mut Panels1,
+    group: &[&Part<'_>],
     lambda: f64,
     m: Complex<f64>,
     opts: &MieOptions,
@@ -436,7 +509,7 @@ fn evaluate(
         .map_init(Mie::<f64>::new, |mie, (ab, s)| {
             *s = Some(panel1(
                 mie,
-                part,
+                group,
                 *ab,
                 lambda,
                 m,
@@ -450,26 +523,150 @@ fn evaluate(
     results.into_iter().collect()
 }
 
-/// Pass 1: the adaptive panels of one part at one wavelength.
-fn pass1(
+/// Where one part of a group stands after a round of pass 1.
+struct Status {
+    /// The targets of every refined quantity (and θ block), and the errors.
+    target: Vec<f64>,
+    errors: Vec<f64>,
+    met: bool,
+    /// Whether every integrand is negligible at the first and at the last node.
+    small: [bool; 2],
+}
+
+/// The targets, errors and ends of one part from its panel sums.
+fn status(
     part: &Part<'_>,
+    sums: &[&Sums1],
+    options: &EnsembleOptions,
+    n_refined: usize,
+    n_greek: usize,
+    ext: f64,
+) -> Status {
+    let rtol = options.rtol;
+    let nt = part.theta.len();
+    let total = |j: usize| sums.iter().map(|s| s.k[j]).sum::<f64>();
+    let err = |j: usize| sums.iter().map(|s| s.err[j]).sum::<f64>();
+    // The targets of each refined quantity.
+    let mut target = vec![0.0; (1 + nt) * n_refined];
+    // C_abs and its derivatives are refined to rtol of C_ext's (the accuracy of
+    // C_ext − C_sca): relative to C_abs itself, the resonances of weakly absorbing large
+    // spheres would take most of the panels.
+    let scale_of = |j: usize| match j {
+        P1_ABS => EXT,
+        j if j >= n_greek && (j - n_greek) % M_GROUP == M_GROUP - 1 => j + 1 - M_GROUP,
+        j => j,
+    };
+    let c_sca = total(SCA).abs();
+    for j in 0..n_refined {
+        let scale = match j {
+            SCAG => c_sca,
+            // As for single spheres (`MieOutput::Backscattering`): relative to the larger
+            // of ⟨C_back⟩ and ⟨C_sca⟩, since backscattering by large weakly absorbing
+            // spheres is a sum of narrow glory ripples orders of magnitude below C_sca.
+            P1_BACK => total(P1_BACK).abs().max(c_sca),
+            // The refractive-index derivatives can cancel: their absolute integrands.
+            j if j >= n_greek => sums.iter().map(|s| s.absv[scale_of(j)]).sum::<f64>(),
+            j if j >= N_BASE => c_sca,
+            j => total(scale_of(j)).abs(),
+        };
+        target[j] = rtol * scale;
+        for b in 0..nt {
+            let k = b * n_refined + scale_of(j);
+            let abs: f64 = sums.iter().map(|s| s.abs[k]).sum();
+            target[(1 + b) * n_refined + j] = rtol * abs;
+        }
+    }
+    // The averages take Z = ∫u and its derivatives from the moment integration: no
+    // targets for ∫u over the Mie range, which would extend it down the number tail.
+    for b in 0..=nt {
+        target[b * n_refined + ONE] = f64::INFINITY;
+    }
+    // ∫∂u/∂θ·∂C/∂m is no output: no targets for the refractive-index derivatives in the θ
+    // blocks.
+    for b in 1..=nt {
+        for j in n_greek..n_refined {
+            target[b * n_refined + j] = f64::INFINITY;
+        }
+    }
+    if !options.refine_backscatter {
+        // C_back and its derivatives (the fourth of each refractive-index group) are only
+        // integrated.
+        for b in 0..=nt {
+            target[b * n_refined + P1_BACK] = f64::INFINITY;
+            for j in (n_greek + 3..n_refined).step_by(M_GROUP) {
+                target[b * n_refined + j] = f64::INFINITY;
+            }
+        }
+    }
+    let errors: Vec<f64> = (0..target.len()).map(err).collect();
+    let met = errors.iter().zip(&target).all(|(e, t)| e <= t);
+    // An integrand is not negligible at an end above a tenth of its target per unit ln r, or
+    // per `ext / STEP` units for narrow peaks (the cross sections of small absorbing spheres
+    // and the derivatives can have heavier tails than the area the cut-offs bound). The
+    // derivative integrals cancel (∂u/∂θ changes sign) while their tails carry the extra
+    // weight of ∂ ln u/∂θ: their ends are compared with the derivative's own size, floored at
+    // 10⁻³ of the absolute integral.
+    let end_target: Vec<f64> = (0..target.len())
+        .map(|o| {
+            if o < n_refined || target[o].is_infinite() {
+                target[o]
+            } else {
+                let (b, j) = (o / n_refined - 1, o % n_refined);
+                let k = b * n_refined + scale_of(j);
+                let abs: f64 = sums.iter().map(|s| s.abs[k]).sum();
+                rtol * total(o).abs().max(1e-3 * abs)
+            }
+        })
+        .collect();
+    let small = |density: &Vec<f64>| {
+        density
+            .iter()
+            .zip(&end_target)
+            .all(|(d, t)| d.abs() * (ext / STEP) <= 0.1 * t)
+    };
+    let small = [
+        small(&sums.first().expect("a panel").edge[0]),
+        small(&sums.last().expect("a panel").edge[1]),
+    ];
+    Status {
+        target,
+        errors,
+        met,
+        small,
+    }
+}
+
+/// Pass 1: the adaptive panels of a group of parts (sharing m) at one wavelength, refined
+/// until every part meets its targets.
+fn pass1(
+    group: &[&Part<'_>],
     lambda: f64,
     m: Complex<f64>,
     options: &EnsembleOptions,
     mie_opts: &MieOptions,
 ) -> Result<Pass1> {
-    let rtol = options.rtol;
     let refine_order = options.refine_order;
-    let n_refined = n_refined(refine_order, part);
+    let first = group.first().expect("a part");
+    let n_refined = n_refined(refine_order, first);
     let n_greek = N_BASE + refine_order.map_or(0, |l| 6 * (l + 1));
-    let nt = part.theta.len();
-    let breaks: &[f64] = match part.dist {
-        SizeDistribution::Tabulated { radius, .. } => radius,
-        _ => &[],
-    };
-    let (mut t_lo, mut t_hi) = (part.cutoffs.0.ln(), part.cutoffs.1.ln());
+    let mut breaks: Vec<f64> = group
+        .iter()
+        .flat_map(|p| match p.dist {
+            SizeDistribution::Tabulated { radius, .. } => radius.as_slice(),
+            _ => &[],
+        })
+        .copied()
+        .collect();
+    breaks.sort_by(f64::total_cmp);
+    breaks.dedup();
+    let lo = group
+        .iter()
+        .map(|p| p.cutoffs.0)
+        .fold(f64::INFINITY, f64::min);
+    let hi = group.iter().map(|p| p.cutoffs.1).fold(0.0, f64::max);
+    let (mut t_lo, mut t_hi) = (lo.ln(), hi.ln());
     // Before any panel: a range whose largest size parameter no Mie solution accepts.
-    let x_hi = size(part.cutoffs.1, lambda);
+    let x_hi = size(hi, lambda);
     if x_hi > MAX_SIZE_PARAMETER {
         return Err(context(
             Error::InvalidInput(format!(
@@ -477,17 +674,28 @@ fn pass1(
                  {MAX_SIZE_PARAMETER:e}"
             )),
             lambda,
-            part.cutoffs.1,
+            hi,
         ));
     }
-    let extendable = matches!(part.support, Support::Unbounded(_));
-    let density = part.dist.prepare();
-    let max_step = density.max_step(STEP);
-    // Extensions of the range: `STEP`, or the peak's width for narrower peaks, whose tails fall
-    // off over that width.
-    let ext = STEP.min(density.log_width);
-    let mut panels: Vec<((f64, f64), Option<Sums1>)> =
-        initial_panels(t_lo, t_hi, lambda, breaks, max_step, options.max_panels)
+    let extendable: Vec<bool> = group
+        .iter()
+        .map(|p| matches!(p.support, Support::Unbounded(_)))
+        .collect();
+    let densities: Vec<_> = group.iter().map(|p| p.dist.prepare()).collect();
+    let max_step = densities
+        .iter()
+        .map(|d| d.max_step(STEP))
+        .fold(STEP, f64::min);
+    // Extensions of the range: `STEP`, or the narrowest peak's width, whose tails fall off
+    // over that width.
+    let ext = densities
+        .iter()
+        .zip(&extendable)
+        .filter(|&(_, &e)| e)
+        .map(|(d, _)| STEP.min(d.log_width))
+        .fold(STEP, f64::min);
+    let mut panels: Panels1 =
+        initial_panels(t_lo, t_hi, lambda, &breaks, max_step, options.max_panels)
             .into_iter()
             .map(|p| (p, None))
             .collect();
@@ -495,7 +703,7 @@ fn pass1(
     loop {
         evaluate(
             &mut panels,
-            part,
+            group,
             lambda,
             m,
             mie_opts,
@@ -503,108 +711,45 @@ fn pass1(
             n_refined,
         )?;
         let n = panels.len();
-        let sums: Vec<&Sums1> = panels
+        let statuses: Vec<Status> = group
             .iter()
-            .map(|(_, s)| s.as_ref().expect("evaluated"))
-            .collect();
-        let total = |j: usize| sums.iter().map(|s| s.k[j]).sum::<f64>();
-        let err = |j: usize| sums.iter().map(|s| s.err[j]).sum::<f64>();
-        // The targets of each refined quantity.
-        let mut target = vec![0.0; (1 + nt) * n_refined];
-        // C_abs and its derivatives are refined to rtol of C_ext's (the accuracy of
-        // C_ext − C_sca): relative to C_abs itself, the resonances of weakly absorbing large
-        // spheres would take most of the panels.
-        let scale_of = |j: usize| match j {
-            P1_ABS => EXT,
-            j if j >= n_greek && (j - n_greek) % M_GROUP == M_GROUP - 1 => j + 1 - M_GROUP,
-            j => j,
-        };
-        let c_sca = total(SCA).abs();
-        for j in 0..n_refined {
-            let scale = match j {
-                SCAG => c_sca,
-                // As for single spheres (`MieOutput::Backscattering`): relative to the larger
-                // of ⟨C_back⟩ and ⟨C_sca⟩, since backscattering by large weakly absorbing
-                // spheres is a sum of narrow glory ripples orders of magnitude below C_sca.
-                P1_BACK => total(P1_BACK).abs().max(c_sca),
-                // The refractive-index derivatives can cancel: their absolute integrands.
-                j if j >= n_greek => sums.iter().map(|s| s.absv[scale_of(j)]).sum::<f64>(),
-                j if j >= N_BASE => c_sca,
-                j => total(scale_of(j)).abs(),
-            };
-            target[j] = rtol * scale;
-            for b in 0..nt {
-                let k = b * n_refined + scale_of(j);
-                let abs: f64 = sums.iter().map(|s| s.abs[k]).sum();
-                target[(1 + b) * n_refined + j] = rtol * abs;
-            }
-        }
-        // The averages take Z = ∫u and its derivatives from the moment integration: no
-        // targets for ∫u over the Mie range, which would extend it down the number tail.
-        for b in 0..=nt {
-            target[b * n_refined + ONE] = f64::INFINITY;
-        }
-        // ∫∂u/∂θ·∂C/∂m is no output: no targets for the refractive-index derivatives in the θ
-        // blocks.
-        for b in 1..=nt {
-            for j in n_greek..n_refined {
-                target[b * n_refined + j] = f64::INFINITY;
-            }
-        }
-        if !options.refine_backscatter {
-            // C_back and its derivatives (the fourth of each refractive-index group) are only
-            // integrated.
-            for b in 0..=nt {
-                target[b * n_refined + P1_BACK] = f64::INFINITY;
-                for j in (n_greek + 3..n_refined).step_by(M_GROUP) {
-                    target[b * n_refined + j] = f64::INFINITY;
-                }
-            }
-        }
-        let errors: Vec<f64> = (0..target.len()).map(err).collect();
-        let met = errors.iter().zip(&target).all(|(e, t)| e <= t);
-        if met {
-            // Extend the range where an integrand is not negligible at an end: above a tenth
-            // of its target per unit ln r, or per `ext / STEP` units for narrow peaks (the cross
-            // sections of small absorbing spheres and the derivatives can have heavier tails
-            // than the area the cut-offs bound).
-            // The derivative integrals cancel (∂u/∂θ changes sign) while their tails carry
-            // the extra weight of ∂ ln u/∂θ: their ends are compared with the derivative's own
-            // size, floored at 10⁻³ of the absolute integral.
-            let end_target: Vec<f64> = (0..target.len())
-                .map(|o| {
-                    if o < n_refined || target[o].is_infinite() {
-                        target[o]
-                    } else {
-                        let (b, j) = (o / n_refined - 1, o % n_refined);
-                        let k = b * n_refined + scale_of(j);
-                        let abs: f64 = sums.iter().map(|s| s.abs[k]).sum();
-                        rtol * total(o).abs().max(1e-3 * abs)
-                    }
-                })
-                .collect();
-            let small = |density: &Vec<f64>| {
-                density
+            .enumerate()
+            .map(|(p, part)| {
+                let sums: Vec<&Sums1> = panels
                     .iter()
-                    .zip(&end_target)
-                    .all(|(d, t)| d.abs() * (ext / STEP) <= 0.1 * t)
+                    .map(|(_, s)| &s.as_ref().expect("evaluated")[p])
+                    .collect();
+                status(part, &sums, options, n_refined, n_greek, ext)
+            })
+            .collect();
+        // Converged: the targets met, and the ends negligible unless the support ends there.
+        let converged = || -> Vec<bool> {
+            statuses
+                .iter()
+                .zip(&extendable)
+                .map(|(s, &e)| s.met && (!e || (s.small[0] && s.small[1])))
+                .collect()
+        };
+        if statuses.iter().all(|s| s.met) {
+            // Extend the range at an end where an integrand of any part is not negligible.
+            let wants = |end: usize| {
+                extensions[end] < MAX_EXTENSIONS
+                    && statuses
+                        .iter()
+                        .zip(&extendable)
+                        .any(|(s, &e)| e && !s.small[end])
             };
-            let small_first = small(&sums.first().expect("a panel").edge[0]);
-            let small_last = small(&sums.last().expect("a panel").edge[1]);
+            let wants = [wants(0), wants(1)];
             let mut extended = false;
-            let wants = [
-                extendable && !small_first && extensions[0] < MAX_EXTENSIONS,
-                extendable && !small_last && extensions[1] < MAX_EXTENSIONS,
-            ];
             if wants[0] {
                 let fresh =
                     initial_panels(t_lo - ext, t_lo, lambda, &[], max_step, options.max_panels);
                 if panels.len() + fresh.len() > options.max_panels {
-                    return Ok(finish(panels, false, (t_lo, t_hi)));
+                    return Ok(finish(panels, converged(), (t_lo, t_hi)));
                 }
                 t_lo -= ext;
                 extensions[0] += 1;
-                let mut new: Vec<_> = fresh.into_iter().map(|p| (p, None)).collect();
+                let mut new: Panels1 = fresh.into_iter().map(|p| (p, None)).collect();
                 new.append(&mut panels);
                 panels = new;
                 extended = true;
@@ -613,7 +758,7 @@ fn pass1(
                 let fresh =
                     initial_panels(t_hi, t_hi + ext, lambda, &[], max_step, options.max_panels);
                 if panels.len() + fresh.len() > options.max_panels {
-                    return Ok(finish(panels, false, (t_lo, t_hi)));
+                    return Ok(finish(panels, converged(), (t_lo, t_hi)));
                 }
                 t_hi += ext;
                 extensions[1] += 1;
@@ -622,32 +767,37 @@ fn pass1(
             }
             if !extended {
                 // Converged unless an end still wants extending after `MAX_EXTENSIONS`.
-                let ends_small = !extendable || (small_first && small_last);
-                return Ok(finish(panels, ends_small, (t_lo, t_hi)));
+                return Ok(finish(panels, converged(), (t_lo, t_hi)));
             }
             continue;
         }
-        // Split every panel above its share of a target, worst first, within the budget.
-        let mut candidates: Vec<(f64, usize)> = sums
+        // Split every panel above its share of a target of any part, worst first, within the
+        // budget.
+        let mut candidates: Vec<(f64, usize)> = panels
             .iter()
             .enumerate()
             .filter(|&(i, _)| panels[i].0.1 - panels[i].0.0 > MIN_WIDTH)
-            .filter_map(|(i, s)| {
-                let badness = s
-                    .err
+            .filter_map(|(i, (_, sums))| {
+                let sums = sums.as_ref().expect("evaluated");
+                let badness = sums
                     .iter()
-                    .zip(&target)
-                    .zip(&errors)
-                    // Only the quantities still above their targets.
-                    .filter(|&((_, t), &total_err)| total_err > *t)
-                    .map(|((e, t), _)| e * n as f64 / t.max(f64::MIN_POSITIVE))
+                    .zip(&statuses)
+                    .flat_map(|(s, st)| {
+                        s.err
+                            .iter()
+                            .zip(&st.target)
+                            .zip(&st.errors)
+                            // Only the quantities still above their targets.
+                            .filter(|&((_, t), &total_err)| total_err > *t)
+                            .map(|((e, t), _)| e * n as f64 / t.max(f64::MIN_POSITIVE))
+                    })
                     .fold(0.0, f64::max);
                 (badness > 1.0).then_some((badness, i))
             })
             .collect();
         let budget = options.max_panels.saturating_sub(n);
         if candidates.is_empty() || budget == 0 {
-            return Ok(finish(panels, false, (t_lo, t_hi)));
+            return Ok(finish(panels, converged(), (t_lo, t_hi)));
         }
         candidates.sort_by(|a, b| b.0.total_cmp(&a.0).then(a.1.cmp(&b.1)));
         candidates.truncate(budget);
@@ -670,10 +820,10 @@ fn pass1(
     }
 }
 
-fn finish(panels: Vec<((f64, f64), Option<Sums1>)>, converged: bool, t: (f64, f64)) -> Pass1 {
+fn finish(panels: Panels1, converged: Vec<bool>, t: (f64, f64)) -> Pass1 {
     let n_terms = panels
         .iter()
-        .map(|(_, s)| s.as_ref().map_or(0, |s| s.n_terms))
+        .filter_map(|(_, s)| s.as_ref().and_then(|s| s.first()).map(|s| s.n_terms))
         .max()
         .unwrap_or(0);
     Pass1 {
@@ -710,12 +860,13 @@ fn panel_terms(a: f64, b: f64, lambda: f64, m: Complex<f64>, opts: &MieOptions) 
 }
 
 /// One band: its largest number of terms, the start of its tables in the flat layout, its
-/// projector, and the πₙ, τₙ tables at the projector's nodes.
+/// projector, the πₙ, τₙ tables at the projector's nodes, and the projection's matrices.
 struct Band {
     upper: usize,
     start: usize,
     projector: GreekProjector<f64>,
     tables: BandTables,
+    projection: BandProjection,
 }
 
 /// What pass 2 computes at every node: the per-sphere scalars, the phase matrix at the
@@ -901,16 +1052,6 @@ fn quantities2(
     Ok(segment)
 }
 
-/// A table of four elements as phase-matrix tables.
-fn view(t: &[Vec<f64>; 4]) -> PhaseTables<'_, f64> {
-    PhaseTables {
-        f11: &t[0],
-        f12: &t[1],
-        f33: &t[2],
-        f34: &t[3],
-    }
-}
-
 /// Splits a table of 4·n values into its four elements.
 fn quarter(t: &mut [f64]) -> [&mut [f64]; 4] {
     let n = t.len() / 4;
@@ -938,231 +1079,313 @@ struct Sums2 {
     blocks: usize,
 }
 
-/// Adds one node's values `g` on [lo, hi) of the layout, weighted by its Kronrod and Gauss
-/// weights, to the panel's sums `pk` and `pg`: the values block (weight u·r), each θ block
-/// (∂u/∂θ·r, from `grad`) and the Re m, Im m blocks (`dmv`).
-#[allow(clippy::too_many_arguments)]
-fn accumulate(
-    pk: &mut [f64],
-    pg: &mut [f64],
-    g: &[f64],
-    dmv: &[f64],
-    grad: &[f64],
-    part: &Part<'_>,
-    len: usize,
-    nm: usize,
-    (lo, hi): (usize, usize),
-    (wk, wg): (f64, f64),
-    u: f64,
-    r: f64,
-) {
-    let nt = part.theta.len();
-    let base = u * r;
-    for i in lo..hi {
-        let gi = g[i];
-        pk[i] += wk * base * gi;
-        pg[i] += wg * base * gi;
-        for (bi, &(_, k)) in part.theta.iter().enumerate() {
-            let o = (1 + bi) * len + i;
-            let dw = grad[k] * r * gi;
-            pk[o] += wk * dw;
-            pg[o] += wg * dw;
+/// The number of `CHUNK`s of panels whose sums are held at once before they are added up in
+/// order: bounds the memory of large groups, independently of the thread count.
+const WINDOW: usize = 32;
+
+/// The weights of a group's blocks at a panel's nodes: a row per (part, block) for the
+/// values (the values block, weight u·r, and each θ block, ∂u/∂θ·r) and a row per part with
+/// refractive-index derivatives (weight u·r, applied to the Re m and Im m derivatives),
+/// Kronrod rows first, then Gauss rows. A panel's sums for every part and block are then
+/// matrix products of these weights with the nodes' values.
+struct Rows {
+    /// The first values row of each part.
+    first: Vec<usize>,
+    /// The derivative row of each part with refractive-index derivatives.
+    m_row: Vec<Option<usize>>,
+    values: usize,
+    m: usize,
+}
+
+impl Rows {
+    fn new(group: &[&Part<'_>]) -> Self {
+        let (mut first, mut m_row) = (Vec::new(), Vec::new());
+        let (mut values, mut m) = (0, 0);
+        for part in group {
+            first.push(values);
+            values += 1 + part.theta.len();
+            m_row.push(part.m_derivatives().then(|| {
+                m += 1;
+                m - 1
+            }));
         }
-        for c in 0..nm {
-            let o = (1 + nt + c) * len + i;
-            let dv = base * dmv[c * len + i];
-            pk[o] += wk * dv;
-            pg[o] += wg * dv;
+        Self {
+            first,
+            m_row,
+            values,
+            m,
         }
     }
 }
 
-/// Pass 2 of one part over its final panels.
+/// Pass 2 of a group of parts (sharing m) over their shared final panels: each node's Mie
+/// solution and tables once; each part's panel sums as matrix products of its weights with
+/// the nodes' values.
 fn pass2(
-    part: &Part<'_>,
+    group: &[&Part<'_>],
     panels: &[(f64, f64)],
     lambda: f64,
     m: Complex<f64>,
     opts: &MieOptions,
     layout: &Layout<'_>,
-) -> Result<Sums2> {
+) -> Result<Vec<Sums2>> {
     let len = layout.len;
     let common = layout.common();
-    let nt = part.theta.len();
-    let nm = if part.m_derivatives() { 2 } else { 0 };
-    let blocks = 1 + nt + nm;
-    let n_grad = part.dist.parameter_names().len();
-    // Per-thread scratch: the dense per-panel sums are only touched on the ranges the panel's
-    // nodes fill; each chunk returns its sums of those ranges alone.
+    let blocks: Vec<usize> = group
+        .iter()
+        .map(|p| 1 + p.theta.len() + if p.m_derivatives() { 2 } else { 0 })
+        .collect();
+    let derivatives = group.iter().any(|p| p.m_derivatives());
+    let rows = Rows::new(group);
+    let n_nodes = kronrod::panel(0.0, 1.0).len();
+    // Per-thread scratch. A panel touches the common part of the layout and its band's
+    // tables: `stride` values, the common part first.
     struct Scratch {
         mie: Mie<f64>,
-        grad: Vec<f64>,
+        grads: Vec<Vec<f64>>,
         g: Vec<f64>,
         dmv: Vec<f64>,
-        pk: Vec<f64>,
-        pg: Vec<f64>,
         products: Option<PanelProducts>,
+        /// The nodes' values (nodes × stride), and their Re m and Im m derivatives.
+        v: Mat<f64>,
+        dv: [Mat<f64>; 2],
+        /// The weights (2·rows × nodes) and the products (2·rows × stride).
+        w: Mat<f64>,
+        wm: Mat<f64>,
+        pv: Mat<f64>,
+        pm: [Mat<f64>; 2],
     }
     /// A chunk's sums and errors on one range [lo, hi) of the layout, every block.
     type Segment = ((usize, usize), Vec<f64>, Vec<f64>);
-    let chunks: Vec<Result<Vec<Segment>>> = panels
-        .par_chunks(CHUNK)
-        .map_init(
-            || Scratch {
-                mie: Mie::new(),
-                grad: vec![0.0; n_grad],
-                g: vec![0.0; len],
-                dmv: vec![0.0; 2 * len],
-                pk: vec![0.0; blocks * len],
-                pg: vec![0.0; blocks * len],
-                products: None,
-            },
-            |sc, chunk| {
-                let d = part.dist.prepare();
-                let mut segments: Vec<Segment> = Vec::new();
-                for &(a, b) in chunk {
-                    let band_terms = if layout.bands.is_empty() {
-                        0
-                    } else {
-                        panel_terms(a, b, lambda, m, opts)?
-                    };
-                    let band = if layout.bands.is_empty() {
-                        None
-                    } else {
-                        Some(layout.band(band_terms).ok_or_else(|| {
-                            Error::InvalidInput(format!("no projector band for {band_terms} terms"))
-                        })?)
-                    };
-                    let nodes = kronrod::panel(a, b);
-                    if let Some(band) = band {
-                        let fits = sc
-                            .products
-                            .as_ref()
-                            .is_some_and(|p| p.fits(&band.tables, nodes.len(), nm > 0));
-                        if !fits {
-                            sc.products =
-                                Some(PanelProducts::new(&band.tables, nodes.len(), nm > 0));
-                        }
-                    }
-                    let mut ranges = vec![(0, common)];
-                    for (k, &(t, wk, wg)) in nodes.iter().enumerate() {
-                        let r = t.exp();
-                        let u = d.eval(r, &mut sc.grad);
-                        let dm = if nm > 0 {
-                            let (re, im) = sc.dmv.split_at_mut(len);
-                            Some([re, im])
+    let mut out: Vec<Sums2> = blocks
+        .iter()
+        .map(|&b| Sums2 {
+            s: vec![0.0; b * len],
+            err: vec![0.0; b * len],
+            blocks: b,
+        })
+        .collect();
+    let gemm = |dst: &mut Mat<f64>, w: &Mat<f64>, v: &Mat<f64>| {
+        if dst.nrows() != w.nrows() || dst.ncols() != v.ncols() {
+            *dst = Mat::zeros(w.nrows(), v.ncols());
+        }
+        faer::linalg::matmul::matmul(
+            dst.as_mut(),
+            Accum::Replace,
+            w.as_ref(),
+            v.as_ref(),
+            1.0,
+            Par::Seq,
+        );
+    };
+    for window in panels.chunks(CHUNK * WINDOW) {
+        let chunks: Vec<Result<Vec<Vec<Segment>>>> = window
+            .par_chunks(CHUNK)
+            .map_init(
+                || Scratch {
+                    mie: Mie::new(),
+                    grads: group
+                        .iter()
+                        .map(|p| vec![0.0; p.dist.parameter_names().len()])
+                        .collect(),
+                    g: vec![0.0; len],
+                    dmv: vec![0.0; 2 * len],
+                    products: None,
+                    v: Mat::zeros(0, 0),
+                    dv: [Mat::zeros(0, 0), Mat::zeros(0, 0)],
+                    w: Mat::zeros(2 * rows.values, n_nodes),
+                    wm: Mat::zeros(2 * rows.m, n_nodes),
+                    pv: Mat::zeros(0, 0),
+                    pm: [Mat::zeros(0, 0), Mat::zeros(0, 0)],
+                },
+                |sc, chunk| {
+                    let densities: Vec<_> = group.iter().map(|p| p.dist.prepare()).collect();
+                    let mut segments: Vec<Vec<Segment>> = vec![Vec::new(); group.len()];
+                    for &(a, b) in chunk {
+                        let band_terms = if layout.bands.is_empty() {
+                            0
                         } else {
+                            panel_terms(a, b, lambda, m, opts)?
+                        };
+                        let band = if layout.bands.is_empty() {
                             None
+                        } else {
+                            Some(layout.band(band_terms).ok_or_else(|| {
+                                Error::InvalidInput(format!(
+                                    "no projector band for {band_terms} terms"
+                                ))
+                            })?)
                         };
-                        let products = match (band, sc.products.as_mut()) {
-                            (Some(_), Some(p)) => Some((p, k)),
-                            _ => None,
-                        };
-                        quantities2(
-                            &mut sc.mie,
-                            r,
-                            lambda,
-                            m,
-                            opts,
-                            layout,
-                            &mut sc.g,
-                            dm,
-                            None,
-                            band_terms,
-                            products,
-                        )?;
-                        accumulate(
-                            &mut sc.pk,
-                            &mut sc.pg,
-                            &sc.g,
-                            &sc.dmv,
-                            &sc.grad,
-                            part,
-                            len,
-                            nm,
-                            (0, common),
-                            (wk, wg),
-                            u,
-                            r,
-                        );
-                    }
-                    // The band's tables of every node at once.
-                    if let (Some(band), Some(p)) = (band, sc.products.as_mut()) {
-                        p.multiply(&band.tables);
-                        let n_q = band.projector.nodes().len();
-                        let (lo, hi) = (band.start, band.start + 4 * n_q);
+                        let nodes = kronrod::panel(a, b);
+                        if let Some(band) = band {
+                            let fits = sc
+                                .products
+                                .as_ref()
+                                .is_some_and(|p| p.fits(&band.tables, nodes.len(), derivatives));
+                            if !fits {
+                                sc.products = Some(PanelProducts::new(
+                                    &band.tables,
+                                    nodes.len(),
+                                    derivatives,
+                                ));
+                            }
+                        }
+                        let (lo, hi) = band.map_or((0, 0), |b| {
+                            (b.start, b.start + 4 * b.projector.nodes().len())
+                        });
+                        let stride = common + (hi - lo);
+                        if sc.v.nrows() != nodes.len() || sc.v.ncols() != stride {
+                            sc.v = Mat::zeros(nodes.len(), stride);
+                            if derivatives {
+                                sc.dv = [
+                                    Mat::zeros(nodes.len(), stride),
+                                    Mat::zeros(nodes.len(), stride),
+                                ];
+                            }
+                        }
                         for (k, &(t, wk, wg)) in nodes.iter().enumerate() {
                             let r = t.exp();
-                            let u = d.eval(r, &mut sc.grad);
-                            let x = size(r, lambda);
-                            let scale = 4.0 / (x * x) * (PI * r * r);
-                            let dm = if nm > 0 {
+                            let dm = if derivatives {
                                 let (re, im) = sc.dmv.split_at_mut(len);
-                                Some([&mut re[lo..hi], &mut im[lo..hi]])
+                                Some([re, im])
                             } else {
                                 None
                             };
-                            p.phase(&band.tables, k, scale, &mut sc.g[lo..hi], dm);
-                            accumulate(
-                                &mut sc.pk,
-                                &mut sc.pg,
-                                &sc.g,
-                                &sc.dmv,
-                                &sc.grad,
-                                part,
-                                len,
-                                nm,
-                                (lo, hi),
-                                (wk, wg),
-                                u,
+                            let products = match (band, sc.products.as_mut()) {
+                                (Some(_), Some(p)) => Some((p, k)),
+                                _ => None,
+                            };
+                            quantities2(
+                                &mut sc.mie,
                                 r,
-                            );
-                        }
-                        ranges.push((lo, hi));
-                    }
-                    for &(lo, hi) in &ranges {
-                        let w = hi - lo;
-                        let k = match segments.iter().position(|(rg, _, _)| *rg == (lo, hi)) {
-                            Some(k) => k,
-                            None => {
-                                segments.push((
-                                    (lo, hi),
-                                    vec![0.0; blocks * w],
-                                    vec![0.0; blocks * w],
-                                ));
-                                segments.len() - 1
+                                lambda,
+                                m,
+                                opts,
+                                layout,
+                                &mut sc.g,
+                                dm,
+                                None,
+                                band_terms,
+                                products,
+                            )?;
+                            for j in 0..common {
+                                sc.v[(k, j)] = sc.g[j];
                             }
-                        };
-                        let (_, ssum, serr) = &mut segments[k];
-                        for blk in 0..blocks {
-                            for i in 0..w {
-                                let o = blk * len + lo + i;
-                                ssum[blk * w + i] += sc.pk[o];
-                                serr[blk * w + i] += (sc.pk[o] - sc.pg[o]).abs();
-                                sc.pk[o] = 0.0;
-                                sc.pg[o] = 0.0;
+                            if derivatives {
+                                for (c, dv) in sc.dv.iter_mut().enumerate() {
+                                    for j in 0..common {
+                                        dv[(k, j)] = sc.dmv[c * len + j];
+                                    }
+                                }
+                            }
+                            // The weights of every part and block at this node.
+                            for (p, part) in group.iter().enumerate() {
+                                let u = densities[p].eval(r, &mut sc.grads[p]);
+                                let row = rows.first[p];
+                                let set = |w: &mut Mat<f64>, i: usize, n: usize, x: f64| {
+                                    w[(i, k)] = wk * x;
+                                    w[(n + i, k)] = wg * x;
+                                };
+                                set(&mut sc.w, row, rows.values, u * r);
+                                for (bi, &(_, gi)) in part.theta.iter().enumerate() {
+                                    set(&mut sc.w, row + 1 + bi, rows.values, sc.grads[p][gi] * r);
+                                }
+                                if let Some(i) = rows.m_row[p] {
+                                    set(&mut sc.wm, i, rows.m, u * r);
+                                }
+                            }
+                        }
+                        // The band's tables of every node at once.
+                        if let (Some(band), Some(prod)) = (band, sc.products.as_mut()) {
+                            prod.multiply(&band.tables, band_terms);
+                            for (k, &(t, _, _)) in nodes.iter().enumerate() {
+                                let r = t.exp();
+                                let x = size(r, lambda);
+                                let scale = 4.0 / (x * x) * (PI * r * r);
+                                let dm = if derivatives {
+                                    let (re, im) = sc.dmv.split_at_mut(len);
+                                    Some([&mut re[lo..hi], &mut im[lo..hi]])
+                                } else {
+                                    None
+                                };
+                                prod.phase(&band.tables, k, scale, &mut sc.g[lo..hi], dm);
+                                for (j, &gv) in sc.g[lo..hi].iter().enumerate() {
+                                    sc.v[(k, common + j)] = gv;
+                                }
+                                if derivatives {
+                                    for (c, dv) in sc.dv.iter_mut().enumerate() {
+                                        for j in 0..hi - lo {
+                                            dv[(k, common + j)] = sc.dmv[c * len + lo + j];
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        gemm(&mut sc.pv, &sc.w, &sc.v);
+                        if rows.m > 0 {
+                            let [re, im] = &mut sc.pm;
+                            gemm(re, &sc.wm, &sc.dv[0]);
+                            gemm(im, &sc.wm, &sc.dv[1]);
+                        }
+                        // Each part's panel sums into the chunk's segments.
+                        for (p, part) in group.iter().enumerate() {
+                            let nb = blocks[p];
+                            let nt = part.theta.len();
+                            // (matrix of products, its Kronrod row, its number of rows).
+                            let block_rows = |blk: usize| -> (&Mat<f64>, usize, usize) {
+                                if blk <= nt {
+                                    (&sc.pv, rows.first[p] + blk, rows.values)
+                                } else {
+                                    let i = rows.m_row[p].expect("m derivatives");
+                                    (&sc.pm[blk - nt - 1], i, rows.m)
+                                }
+                            };
+                            for (range, off) in [((0, common), 0), ((lo, hi), common)] {
+                                let w = range.1 - range.0;
+                                if w == 0 {
+                                    continue;
+                                }
+                                let segs = &mut segments[p];
+                                let k = match segs.iter().position(|(rg, _, _)| *rg == range) {
+                                    Some(k) => k,
+                                    None => {
+                                        segs.push((range, vec![0.0; nb * w], vec![0.0; nb * w]));
+                                        segs.len() - 1
+                                    }
+                                };
+                                let (_, ssum, serr) = &mut segs[k];
+                                for blk in 0..nb {
+                                    let (mat, row, n) = block_rows(blk);
+                                    for i in 0..w {
+                                        let (kv, gv) =
+                                            (mat[(row, off + i)], mat[(n + row, off + i)]);
+                                        ssum[blk * w + i] += kv;
+                                        serr[blk * w + i] += (kv - gv).abs();
+                                    }
+                                }
                             }
                         }
                     }
-                }
-                Ok(segments)
-            },
-        )
-        .collect();
-    let mut s = vec![0.0; blocks * len];
-    let mut err = vec![0.0; blocks * len];
-    for c in chunks {
-        for ((lo, hi), cs, ce) in c? {
-            let w = hi - lo;
-            for blk in 0..blocks {
-                for i in 0..w {
-                    s[blk * len + lo + i] += cs[blk * w + i];
-                    err[blk * len + lo + i] += ce[blk * w + i];
+                    Ok(segments)
+                },
+            )
+            .collect();
+        for c in chunks {
+            for (p, segs) in c?.into_iter().enumerate() {
+                let sums = &mut out[p];
+                for ((lo, hi), cs, ce) in segs {
+                    let w = hi - lo;
+                    for blk in 0..sums.blocks {
+                        for i in 0..w {
+                            sums.s[blk * len + lo + i] += cs[blk * w + i];
+                            sums.err[blk * len + lo + i] += ce[blk * w + i];
+                        }
+                    }
                 }
             }
         }
     }
-    Ok(Sums2 { s, err, blocks })
+    Ok(out)
 }
 
 /// A part's number averages with derivatives (by result column) and error estimates.
@@ -1280,36 +1503,47 @@ fn monodisperse(
     Ok(PartAverages { v: g, e: zeros, d })
 }
 
-/// One wavelength.
+/// One wavelength: pass 1 and pass 2 per group of parts sharing panels, then a result per
+/// unit.
 fn wavelength(
     parts: &[Part<'_>],
-    w_total: f64,
+    groups: &[Vec<usize>],
+    units: &[Unit],
     lambda: f64,
     index: usize,
     options: &EnsembleOptions,
-) -> Result<EnsembleResult> {
+) -> Result<Vec<EnsembleResult>> {
     let mie_opts = MieOptions::new().with_allow_unvalidated(options.allow_unvalidated);
     let n_cols = options.derivatives.len();
-    // Pass 1 for every part, and the largest number of terms.
-    let mut firsts = Vec::with_capacity(parts.len());
+    let members = |g: &Vec<usize>| -> Vec<&Part<'_>> { g.iter().map(|&p| &parts[p]).collect() };
+    // Pass 1 for every group, and the largest number of terms.
+    let mut firsts = Vec::with_capacity(groups.len());
     let mut n_max = 0;
-    for part in parts {
-        let m = part.m[index];
-        let p1 = match part.support {
+    for group in groups {
+        let g = members(group);
+        let m = g[0].m[index];
+        let p1 = match g[0].support {
             Support::Point(r) => {
                 let n =
                     n_terms(size(r, lambda), m, &mie_opts).map_err(|e| context(e, lambda, r))?;
                 Pass1 {
                     panels: Vec::new(),
-                    converged: true,
+                    converged: vec![true],
                     n_terms: n,
                     range: (r, r),
                 }
             }
-            _ => pass1(part, lambda, m, options, &mie_opts)?,
+            _ => pass1(&g, lambda, m, options, &mie_opts)?,
         };
         n_max = n_max.max(p1.n_terms);
         firsts.push(p1);
+    }
+    // Each part's group and its place in it.
+    let mut place = vec![(0, 0); parts.len()];
+    for (gi, group) in groups.iter().enumerate() {
+        for (k, &p) in group.iter().enumerate() {
+            place[p] = (gi, k);
+        }
     }
     // The projector bands, from the numbers of terms at the final nodes.
     let order = match options.greek {
@@ -1319,9 +1553,10 @@ fn wavelength(
     };
     let mut uppers = std::collections::BTreeSet::new();
     if options.greek.is_some() {
-        for (part, p1) in parts.iter().zip(&firsts) {
-            let m = part.m[index];
-            if let Support::Point(_) = part.support {
+        for (group, p1) in groups.iter().zip(&firsts) {
+            let first = &parts[group[0]];
+            let m = first.m[index];
+            if let Support::Point(_) = first.support {
                 uppers.insert(bucket(p1.n_terms));
                 continue;
             }
@@ -1337,11 +1572,13 @@ fn wavelength(
         let projector = GreekProjector::<f64>::new(projected, upper + (projected + 1).div_ceil(2))?;
         let n_q = projector.nodes().len();
         let tables = BandTables::new(projector.nodes(), upper);
+        let projection = BandProjection::new(&projector)?;
         bands.push(Band {
             upper,
             start: len,
             projector,
             tables,
+            projection,
         });
         len += 4 * n_q;
     }
@@ -1350,92 +1587,128 @@ fn wavelength(
         bands,
         len,
     };
-    // Pass 2 and the mixture.
-    let mut v = vec![0.0; len];
-    let mut e = vec![0.0; len];
-    let mut d = vec![vec![0.0; len]; n_cols];
-    let mut de = vec![vec![0.0; len]; n_cols];
-    let mut averages_of = Vec::with_capacity(parts.len());
-    for (part, p1) in parts.iter().zip(&firsts) {
-        let m = part.m[index];
-        let avg = match part.support {
-            Support::Point(r) => monodisperse(part, r, lambda, m, &mie_opts, &layout)?,
-            _ => {
-                let sums = pass2(part, &p1.panels, lambda, m, &mie_opts, &layout)?;
-                debug_assert_eq!(
-                    sums.blocks,
-                    1 + part.theta.len() + if part.m_derivatives() { 2 } else { 0 }
-                );
-                let truncation = if matches!(part.support, Support::Unbounded(_)) {
-                    0.2 * options.rtol
-                } else {
-                    0.0
-                };
-                averages(part, &sums, len, truncation)
-            }
-        };
-        let f = part.w / w_total * part.v / part.v_total;
-        for i in 0..len {
-            v[i] += f * avg.v[i];
-            e[i] += f * avg.e[i];
-        }
-        for (col, dv, dev) in &avg.d {
-            for i in 0..len {
-                d[*col][i] += f * dv[i];
-                de[*col][i] += f * dev[i];
-            }
-        }
-        averages_of.push(avg);
-    }
-    // The weight derivatives: ∂f_p/∂w and ∂f_p/∂v of the number fractions.
-    for (col, p) in options.derivatives.iter().enumerate() {
-        if p.kind != ParamKind::Weight {
+    // Pass 2: every part's averages.
+    let mut averages_of: Vec<Option<PartAverages>> = (0..parts.len()).map(|_| None).collect();
+    for (group, p1) in groups.iter().zip(&firsts) {
+        let g = members(group);
+        let m = g[0].m[index];
+        if let Support::Point(r) = g[0].support {
+            averages_of[group[0]] = Some(monodisperse(g[0], r, lambda, m, &mie_opts, &layout)?);
             continue;
         }
-        for (part, avg) in parts.iter().zip(&averages_of) {
-            let f = part.w / w_total * part.v / part.v_total;
-            let df = match p.mode {
-                None => {
-                    let own = if part.component == p.component {
-                        part.v / part.v_total
-                    } else {
-                        0.0
-                    };
-                    (own - f) / w_total
-                }
-                Some(j) => {
-                    if part.component != p.component {
-                        0.0
-                    } else {
-                        let own = if part.mode == Some(j) { 1.0 } else { 0.0 };
-                        part.w / w_total * (own - part.v / part.v_total) / part.v_total
-                    }
-                }
+        let sums = pass2(&g, &p1.panels, lambda, m, &mie_opts, &layout)?;
+        for ((&p, part), sums) in group.iter().zip(&g).zip(&sums) {
+            debug_assert_eq!(
+                sums.blocks,
+                1 + part.theta.len() + if part.m_derivatives() { 2 } else { 0 }
+            );
+            let truncation = if matches!(part.support, Support::Unbounded(_)) {
+                0.2 * options.rtol
+            } else {
+                0.0
             };
-            for i in 0..len {
-                d[col][i] += df * avg.v[i];
-                de[col][i] += df.abs() * avg.e[i];
-            }
+            averages_of[p] = Some(averages(part, sums, len, truncation));
         }
     }
-    let lin = |i: usize| Lin {
-        v: v[i],
-        e: e[i],
-        d: d.iter().map(|c| c[i]).collect(),
-        de: de.iter().map(|c| c[i]).collect(),
+    let averages_of: Vec<PartAverages> = averages_of
+        .into_iter()
+        .map(|a| a.expect("every part averaged"))
+        .collect();
+    // Each unit's mixture of its parts: values, errors, derivatives and their errors.
+    let mut mixed = Vec::with_capacity(units.len());
+    for unit in units {
+        let w_total = unit.w_total;
+        let mut v = vec![0.0; len];
+        let mut e = vec![0.0; len];
+        let mut d = vec![vec![0.0; len]; n_cols];
+        let mut de = vec![vec![0.0; len]; n_cols];
+        for &p in &unit.parts {
+            let (part, avg) = (&parts[p], &averages_of[p]);
+            let f = part.w / w_total * part.v / part.v_total;
+            for i in 0..len {
+                v[i] += f * avg.v[i];
+                e[i] += f * avg.e[i];
+            }
+            for (col, dv, dev) in &avg.d {
+                for i in 0..len {
+                    d[*col][i] += f * dv[i];
+                    de[*col][i] += f * dev[i];
+                }
+            }
+        }
+        // The weight derivatives: ∂f_p/∂w and ∂f_p/∂v of the number fractions.
+        for (col, p) in options.derivatives.iter().enumerate() {
+            if p.kind != ParamKind::Weight {
+                continue;
+            }
+            for &q in &unit.parts {
+                let (part, avg) = (&parts[q], &averages_of[q]);
+                let f = part.w / w_total * part.v / part.v_total;
+                let df = match p.mode {
+                    None => {
+                        let own = if part.component == p.component {
+                            part.v / part.v_total
+                        } else {
+                            0.0
+                        };
+                        (own - f) / w_total
+                    }
+                    Some(j) => {
+                        if part.component != p.component {
+                            0.0
+                        } else {
+                            let own = if part.mode == Some(j) { 1.0 } else { 0.0 };
+                            part.w / w_total * (own - part.v / part.v_total) / part.v_total
+                        }
+                    }
+                };
+                for i in 0..len {
+                    d[col][i] += df * avg.v[i];
+                    de[col][i] += df.abs() * avg.e[i];
+                }
+            }
+        }
+        mixed.push((v, e, d, de));
+    }
+    // The Greek coefficients of every unit, band by band: one projection of all the units'
+    // tables shares the generalized spherical functions.
+    let greek = if options.greek.is_some() {
+        Some(project(&layout, order, &mixed)?)
+    } else {
+        None
     };
-    let greek = options.greek.is_some();
-    let outputs = assemble(&lin, greek, order, &layout, &d, &de, &v, &e, options)?;
-    Ok(EnsembleResult {
-        values: outputs.pick(|l| l.v),
-        errors: outputs.pick(|l| l.e),
-        derivatives: (0..n_cols).map(|k| outputs.pick(|l| l.d[k])).collect(),
-        derivative_errors: (0..n_cols).map(|k| outputs.pick(|l| l.de[k])).collect(),
-        params: options.derivatives.clone(),
-        converged: firsts.iter().all(|p| p.converged),
-        panels: firsts.iter().map(|p| p.panels.len()).sum(),
-        ranges: firsts.iter().map(|p| p.range).collect(),
-    })
+    let mut out = Vec::with_capacity(units.len());
+    for (u, (unit, (v, e, d, de))) in units.iter().zip(&mixed).enumerate() {
+        let lin = |i: usize| Lin {
+            v: v[i],
+            e: e[i],
+            d: d.iter().map(|c| c[i]).collect(),
+            de: de.iter().map(|c| c[i]).collect(),
+        };
+        let unit_greek = greek.as_ref().map(|g| g[u].clone());
+        let outputs = assemble(&lin, unit_greek, order, &layout, n_cols, options)?;
+        let mut unit_groups: Vec<usize> = unit.parts.iter().map(|&p| place[p].0).collect();
+        unit_groups.sort_unstable();
+        unit_groups.dedup();
+        out.push(EnsembleResult {
+            values: outputs.pick(|l| l.v),
+            errors: outputs.pick(|l| l.e),
+            derivatives: (0..n_cols).map(|k| outputs.pick(|l| l.d[k])).collect(),
+            derivative_errors: (0..n_cols).map(|k| outputs.pick(|l| l.de[k])).collect(),
+            params: options.derivatives.clone(),
+            converged: unit.parts.iter().all(|&p| {
+                let (gi, k) = place[p];
+                firsts[gi].converged[k]
+            }),
+            panels: unit_groups.iter().map(|&gi| firsts[gi].panels.len()).sum(),
+            ranges: unit
+                .parts
+                .iter()
+                .map(|&p| firsts[place[p].0].range)
+                .collect(),
+        });
+    }
+    Ok(out)
 }
 
 /// Every output as a [`Lin`].
@@ -1486,20 +1759,69 @@ impl LinOutputs {
     }
 }
 
-/// The outputs from the mixed averages.
-#[allow(clippy::too_many_arguments)]
+/// The Greek coefficients of each unit's mixed tables (values, errors, derivatives and their
+/// errors, as `wavelength` mixes them), summed over the bands, up to the largest band's order
+/// (`LinOutputs::pick` pads them to `order`): values and derivatives projected, errors as
+/// bounds. Each band projects every unit's tables at once.
+fn project(layout: &Layout<'_>, order: usize, mixed: &[Mixed]) -> Result<Vec<[Vec<Lin>; 6]>> {
+    let n_cols = mixed.first().map_or(0, |m| m.2.len());
+    let top = layout
+        .bands
+        .iter()
+        .map(|b| order.min(2 * b.upper))
+        .max()
+        .unwrap_or(0);
+    let mut out: Vec<[Vec<Lin>; 6]> = mixed
+        .iter()
+        .map(|_| core::array::from_fn(|_| vec![Lin::constant(0.0, n_cols); top + 1]))
+        .collect();
+    let per = 1 + n_cols;
+    let rows = mixed.len() * per;
+    for band in &layout.bands {
+        let n_q = band.projector.nodes().len();
+        let start = band.start;
+        // A row per unit and kind (the values, then each derivative), a matrix per element.
+        let tables = |pick: &dyn Fn(&Mixed, usize) -> &[f64]| -> [Mat<f64>; 4] {
+            core::array::from_fn(|k| {
+                Mat::from_fn(rows, n_q, |row, j| {
+                    pick(&mixed[row / per], row % per)[start + k * n_q + j]
+                })
+            })
+        };
+        let c = band.projection.project(&tables(&|m, i| {
+            if i == 0 { &m.0 } else { &m.2[i - 1] }
+        }));
+        let ce = band.projection.bounds(&tables(&|m, i| {
+            if i == 0 { &m.1 } else { &m.3[i - 1] }
+        }));
+        for (u, lins) in out.iter_mut().enumerate() {
+            for (k, arr) in lins.iter_mut().enumerate() {
+                for (l, lin) in arr.iter_mut().enumerate().take(c[k].ncols()) {
+                    lin.v += c[k][(u * per, l)];
+                    lin.e += ce[k][(u * per, l)];
+                    for col in 0..n_cols {
+                        lin.d[col] += c[k][(u * per + 1 + col, l)];
+                        lin.de[col] += ce[k][(u * per + 1 + col, l)];
+                    }
+                }
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// A unit's mixed values, errors, derivatives and their errors over the flat layout.
+type Mixed = (Vec<f64>, Vec<f64>, Vec<Vec<f64>>, Vec<Vec<f64>>);
+
+/// The outputs from the mixed averages and the unit's Greek coefficients (from `project`).
 fn assemble(
     lin: &dyn Fn(usize) -> Lin,
-    greek: bool,
+    greek: Option<[Vec<Lin>; 6]>,
     order: usize,
     layout: &Layout<'_>,
-    d: &[Vec<f64>],
-    de: &[Vec<f64>],
-    v: &[f64],
-    e: &[f64],
+    n_cols: usize,
     options: &EnsembleOptions,
 ) -> Result<LinOutputs> {
-    let n_cols = d.len();
     let (ext, sca, scag, abs, back, r2, r3) = (
         lin(EXT),
         lin(SCA),
@@ -1514,7 +1836,7 @@ fn assemble(
     for (what, l) in [("<C_ext>", &ext), ("<C_sca>", &sca), ("<C_back>", &back)] {
         if !(l.v.is_finite() && l.v != 0.0) {
             return Err(Error::InvalidInput(format!(
-                "the ensemble's {what} is {}, so its ratios (albedo, asymmetry parameter, lidar \
+                "the ensemble's {what} is {}, so its ratios (albedo, asymmetry parameter, lidar \\
                  ratio) are undefined (does m = 1?)",
                 l.v
             )));
@@ -1534,58 +1856,7 @@ fn assemble(
         r3.scale(4.0 * PI / 3.0),
     ];
     let normalized = options.normalization == Normalization::Normalized;
-    let greek = if !greek {
-        None
-    } else {
-        let arrays = |g: &GreekCoefficients<f64>| -> [Vec<f64>; 6] {
-            [
-                g.alpha1.clone(),
-                g.alpha2.clone(),
-                g.alpha3.clone(),
-                g.alpha4.clone(),
-                g.beta1.clone(),
-                g.beta2.clone(),
-            ]
-        };
-        // Sum the bands' coefficients: values and derivatives, and the error bounds.
-        // Up to the largest band's order; `pick` pads to `order` with plain zeros.
-        let top = layout
-            .bands
-            .iter()
-            .map(|b| order.min(2 * b.upper))
-            .max()
-            .unwrap_or(0);
-        let mut out: [Vec<Lin>; 6] =
-            core::array::from_fn(|_| vec![Lin::constant(0.0, n_cols); top + 1]);
-        for band in &layout.bands {
-            let n_q = band.projector.nodes().len();
-            let start = band.start;
-            let table = |x: &[f64]| -> [Vec<f64>; 4] {
-                core::array::from_fn(|k| x[start + k * n_q..start + (k + 1) * n_q].to_vec())
-            };
-            let mut values = vec![table(v)];
-            values.extend(d.iter().map(|c| table(c)));
-            let mut errs = vec![table(e)];
-            errs.extend(de.iter().map(|c| table(c)));
-            let c = band
-                .projector
-                .project(&values.iter().map(view).collect::<Vec<_>>())?;
-            let ce = band
-                .projector
-                .project_bounds(&errs.iter().map(view).collect::<Vec<_>>())?;
-            let ca: Vec<[Vec<f64>; 6]> = c.iter().map(arrays).collect();
-            let cea: Vec<[Vec<f64>; 6]> = ce.iter().map(arrays).collect();
-            for (k, arr) in out.iter_mut().enumerate() {
-                for (l, lin) in arr.iter_mut().enumerate().take(ca[0][k].len()) {
-                    lin.v += ca[0][k][l];
-                    lin.e += cea[0][k][l];
-                    for col in 0..n_cols {
-                        lin.d[col] += ca[1 + col][k][l];
-                        lin.de[col] += cea[1 + col][k][l];
-                    }
-                }
-            }
-        }
+    let greek = greek.map(|mut out| {
         if normalized {
             let a0 = out[0][0].clone();
             for arr in &mut out {
@@ -1595,8 +1866,8 @@ fn assemble(
             }
             out[0][0] = Lin::constant(1.0, n_cols);
         }
-        Some((out, order))
-    };
+        (out, order)
+    });
     let n_mu = layout.mu.len();
     let phase = if n_mu == 0 {
         None

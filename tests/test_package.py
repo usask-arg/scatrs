@@ -80,6 +80,7 @@ def test_test_hooks_live_outside_the_extension_namespace():
         "MAX_WIGNER_D_VALUES",
         "__version__",
         "ensemble_compute",
+        "ensemble_compute_batch",
         "ensemble_parameters",
         "gauss_legendre",
         "mie_amplitudes",

@@ -9,7 +9,7 @@ use num_complex::Complex;
 use scatrs::Error;
 use scatrs::ensemble::{
     Component, EnsembleOptions, EnsembleParam, EnsembleResult, GreekOrder, Outputs, ParamKind,
-    SizeDistribution, compute, compute_mixture, mixture_parameters, parameters,
+    SizeDistribution, compute, compute_batch, compute_mixture, mixture_parameters, parameters,
 };
 use scatrs::mie::{GreekCoefficients, Mie, MieOptions, Normalization, PhaseBuffers};
 use scatrs::special::gauss_legendre;
@@ -919,4 +919,116 @@ fn number_tails_need_no_mie_solutions() {
     assert!(r.converged && r.ranges[0].0 > 1e-4, "{:?}", r.ranges);
     let all = EnsembleOptions::new().with_derivatives(parameters(&gamma));
     assert!(one(&gamma, 0.55, m, &all).converged);
+}
+
+/// A batch shares the size nodes; each distribution's result agrees with its own computation
+/// at a tight tolerance within its error estimates, and with `compute`'s within both.
+#[test]
+fn a_batch_matches_each_distribution() {
+    let distributions = vec![
+        lognormal(0.05, 1.5),
+        lognormal(0.2, 1.8),
+        lognormal(1.0, 1.2),
+        SizeDistribution::Gamma {
+            effective_radius: 0.4,
+            effective_variance: 0.1,
+        },
+        SizeDistribution::PowerLaw {
+            exponent: 3.5,
+            min_radius: 0.01,
+            max_radius: 2.0,
+        },
+        SizeDistribution::Monodisperse { radius: 0.3 },
+        SizeDistribution::MultiModal {
+            modes: vec![(1000.0, lognormal(0.05, 1.5)), (1.0, lognormal(1.0, 1.4))],
+        },
+    ];
+    let wavelengths = [0.35, 0.75];
+    let m = vec![c(1.45, 1e-3), c(1.44, 1e-4)];
+    let opts = EnsembleOptions::new()
+        .with_greek(GreekOrder::Order(16))
+        .with_mu(vec![0.9, -0.5]);
+    let batch = compute_batch(&distributions, &wavelengths, &m, &opts).unwrap();
+    assert_eq!(batch.len(), distributions.len());
+    let tight = opts.clone().with_rtol(1e-10).with_max_panels(50_000);
+    for (d, results) in distributions.iter().zip(&batch) {
+        assert_eq!(results.len(), wavelengths.len());
+        let alone = compute(d, &wavelengths, &m, &opts).unwrap();
+        let reference = compute(d, &wavelengths, &m, &tight).unwrap();
+        for ((b, a), r) in results.iter().zip(&alone).zip(&reference) {
+            assert!(b.converged, "{d:?}");
+            let (bs, be, as_, ae, rs) = (
+                scalars(&b.values),
+                scalars(&b.errors),
+                scalars(&a.values),
+                scalars(&a.errors),
+                scalars(&r.values),
+            );
+            for k in 0..11 {
+                assert!(
+                    (bs[k] - rs[k]).abs() <= 2.0 * be[k] + 1e-13 * rs[k].abs(),
+                    "{d:?}, scalar {k}: {} vs {} (estimate {})",
+                    bs[k],
+                    rs[k],
+                    be[k]
+                );
+                assert!(
+                    (bs[k] - as_[k]).abs() <= 2.0 * (be[k] + ae[k]) + 1e-13 * rs[k].abs(),
+                    "{d:?}, scalar {k} against compute"
+                );
+            }
+            let (bg, eg, rg) = (
+                b.values.greek.as_ref().unwrap(),
+                b.errors.greek.as_ref().unwrap(),
+                r.values.greek.as_ref().unwrap(),
+            );
+            for l in 0..=16 {
+                assert!(
+                    (bg.alpha1[l] - rg.alpha1[l]).abs() <= 2.0 * eg.alpha1[l] + 1e-13,
+                    "{d:?}, alpha1[{l}]"
+                );
+                assert!(
+                    (bg.beta1[l] - rg.beta1[l]).abs() <= 2.0 * eg.beta1[l] + 1e-13,
+                    "{d:?}, beta1[{l}]"
+                );
+            }
+        }
+    }
+    // The same panels for every distribution with a range.
+    assert!(
+        batch
+            .iter()
+            .filter(|r| r[0].ranges[0].0 != r[0].ranges[0].1)
+            .all(|r| r[0].panels == batch[0][0].panels)
+    );
+    // Independent of the thread count.
+    let run = |threads: usize| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(threads)
+            .build()
+            .unwrap()
+            .install(|| compute_batch(&distributions, &wavelengths, &m, &opts).unwrap())
+    };
+    assert_eq!(run(1), run(5));
+    // Bad inputs.
+    let invalid =
+        |r: Result<Vec<Vec<EnsembleResult>>, Error>| matches!(r, Err(Error::InvalidInput(_)));
+    assert!(invalid(compute_batch(&[], &wavelengths, &m, &opts)));
+    let with_d = opts
+        .clone()
+        .with_derivatives(vec![parameters(&distributions[0])[0]]);
+    assert!(invalid(compute_batch(
+        &distributions,
+        &wavelengths,
+        &m,
+        &with_d
+    )));
+    assert!(invalid(compute_batch(
+        &distributions,
+        &wavelengths,
+        &m[..1],
+        &opts
+    )));
+    let bad = [lognormal(-1.0, 1.5)];
+    assert!(invalid(compute_batch(&bad, &wavelengths, &m, &opts)));
 }

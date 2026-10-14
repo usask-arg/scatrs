@@ -14,7 +14,7 @@ use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyTuple};
 use scatrs::ensemble::{
     Component, EnsembleOptions, EnsembleParam, EnsembleResult, GreekOrder, Outputs,
-    SizeDistribution, compute_mixture, mixture_parameters, parameters,
+    SizeDistribution, compute_batch, compute_mixture, mixture_parameters, parameters,
 };
 use scatrs::mie::{MAX_GREEK_ORDER, Normalization};
 
@@ -273,59 +273,102 @@ pub fn ensemble_compute<'py>(
         }
         params.push(p);
     }
-    let order = match (greek, all_orders) {
-        (_, true) => Some(GreekOrder::All),
-        (None, false) => None,
-        (Some(l), false) if l <= MAX_GREEK_ORDER as u64 => Some(GreekOrder::Order(l as usize)),
-        (Some(l), false) => {
-            return Err(err(invalid(format!(
-                "the Greek order must be at most {MAX_GREEK_ORDER}, got {l}"
-            ))));
-        }
-    };
-    // Bound the outputs before computing where their size is known.
     let (n, p, n_mu) = (wl.len(), params.len(), mu.len());
-    let per = 11
-        + 4 * n_mu
-        + match order {
-            Some(GreekOrder::Order(l)) => 6 * (l + 1),
-            _ => 0,
-        };
-    if n.saturating_mul(per).saturating_mul(2 * (1 + p)) > 2 * MAX_MIE_VALUES {
-        return Err(err(invalid(format!(
-            "the ensemble outputs would exceed 2 * MAX_MIE_VALUES = {} real values",
-            2 * MAX_MIE_VALUES
-        ))));
-    }
-    let mut opts = EnsembleOptions::new()
-        .with_rtol(rtol)
-        .with_max_panels(max_panels)
-        .with_mu(mu)
-        .with_normalization(if normalized {
-            Normalization::Normalized
-        } else {
-            Normalization::Unnormalized
-        })
-        .with_derivatives(params)
-        .with_allow_unvalidated(allow_unvalidated)
-        .with_refine_backscatter(refine_backscatter);
-    if let Some(o) = order {
-        opts = opts.with_greek(o);
-    }
+    let settings = Settings {
+        greek,
+        all_orders,
+        normalized,
+        rtol,
+        max_panels,
+        allow_unvalidated,
+        refine_backscatter,
+    };
+    let (opts, order) = settings.options(mu, params, n, p).map_err(err)?;
     let arrays = py
         .detach(|| -> scatrs::Result<Arrays> {
             let results = compute_mixture(&cs, &wl, &opts)?;
-            let width = order.map(|o| match o {
-                GreekOrder::Order(l) => l + 1,
-                _ => results
-                    .iter()
-                    .map(|r| r.values.greek.as_ref().map_or(1, |g| g.alpha1.len()))
-                    .max()
-                    .unwrap_or(1),
-            });
-            arrays(&results, p, width, n_mu)
+            arrays(&results, p, width(order, &results), n_mu)
         })
         .map_err(err)?;
+    into_dict(py, arrays)
+}
+
+/// The options shared by `ensemble_compute` and `ensemble_compute_batch`.
+struct Settings {
+    greek: Option<u64>,
+    all_orders: bool,
+    normalized: bool,
+    rtol: f64,
+    max_panels: usize,
+    allow_unvalidated: bool,
+    refine_backscatter: bool,
+}
+
+impl Settings {
+    /// The options and the Greek order, after bounding the outputs of `n` results with `p`
+    /// derivatives where their size is known before computing.
+    fn options(
+        &self,
+        mu: Vec<f64>,
+        params: Vec<EnsembleParam>,
+        n: usize,
+        p: usize,
+    ) -> scatrs::Result<(EnsembleOptions, Option<GreekOrder>)> {
+        let order = match (self.greek, self.all_orders) {
+            (_, true) => Some(GreekOrder::All),
+            (None, false) => None,
+            (Some(l), false) if l <= MAX_GREEK_ORDER as u64 => Some(GreekOrder::Order(l as usize)),
+            (Some(l), false) => {
+                return Err(invalid(format!(
+                    "the Greek order must be at most {MAX_GREEK_ORDER}, got {l}"
+                )));
+            }
+        };
+        let per = 11
+            + 4 * mu.len()
+            + match order {
+                Some(GreekOrder::Order(l)) => 6 * (l + 1),
+                _ => 0,
+            };
+        if n.saturating_mul(per).saturating_mul(2 * (1 + p)) > 2 * MAX_MIE_VALUES {
+            return Err(invalid(format!(
+                "the ensemble outputs would exceed 2 * MAX_MIE_VALUES = {} real values",
+                2 * MAX_MIE_VALUES
+            )));
+        }
+        let mut opts = EnsembleOptions::new()
+            .with_rtol(self.rtol)
+            .with_max_panels(self.max_panels)
+            .with_mu(mu)
+            .with_normalization(if self.normalized {
+                Normalization::Normalized
+            } else {
+                Normalization::Unnormalized
+            })
+            .with_derivatives(params)
+            .with_allow_unvalidated(self.allow_unvalidated)
+            .with_refine_backscatter(self.refine_backscatter);
+        if let Some(o) = order {
+            opts = opts.with_greek(o);
+        }
+        Ok((opts, order))
+    }
+}
+
+/// The number of Greek orders of the output arrays: the requested ones, or the longest.
+fn width(order: Option<GreekOrder>, results: &[EnsembleResult]) -> Option<usize> {
+    order.map(|o| match o {
+        GreekOrder::Order(l) => l + 1,
+        _ => results
+            .iter()
+            .map(|r| r.values.greek.as_ref().map_or(1, |g| g.alpha1.len()))
+            .max()
+            .unwrap_or(1),
+    })
+}
+
+/// The arrays as the dict `scatrs.ensemble` unpacks.
+fn into_dict(py: Python<'_>, arrays: Arrays) -> PyResult<Bound<'_, PyDict>> {
     let out = PyDict::new(py);
     let (v, e, d, de) = arrays.scalars;
     out.set_item("values", v.into_pyarray(py))?;
@@ -343,4 +386,61 @@ pub fn ensemble_compute<'py>(
     out.set_item("converged", arrays.converged.into_pyarray(py))?;
     out.set_item("panels", arrays.panels.into_pyarray(py))?;
     Ok(out)
+}
+
+/// The ensemble outputs of each distribution (tagged tuples `specs`) at each wavelength, sharing
+/// the size nodes: as `ensemble_compute` without derivatives, one row per (distribution,
+/// wavelength), distribution-major.
+#[pyfunction]
+#[allow(clippy::too_many_arguments)]
+pub fn ensemble_compute_batch<'py>(
+    py: Python<'py>,
+    specs: Vec<Bound<'py, PyAny>>,
+    refractive_index: Bound<'py, PyArrayDyn<Complex64>>,
+    wavelengths: Bound<'py, PyArrayDyn<f64>>,
+    greek: Option<u64>,
+    all_orders: bool,
+    mu: Bound<'py, PyArrayDyn<f64>>,
+    normalized: bool,
+    rtol: f64,
+    max_panels: usize,
+    allow_unvalidated: bool,
+    refine_backscatter: bool,
+) -> PyResult<Bound<'py, PyDict>> {
+    let err = |e| to_pyerr(py, e);
+    let distributions: Vec<SizeDistribution> =
+        specs.iter().map(distribution).collect::<PyResult<_>>()?;
+    let m: Vec<Complex64> = borrow(&refractive_index, "refractive_index")?
+        .as_array()
+        .iter()
+        .copied()
+        .collect();
+    let wl: Vec<f64> = borrow(&wavelengths, "wavelength")?
+        .as_array()
+        .iter()
+        .copied()
+        .collect();
+    let mu: Vec<f64> = borrow(&mu, "mu")?.as_array().iter().copied().collect();
+    let n_mu = mu.len();
+    let settings = Settings {
+        greek,
+        all_orders,
+        normalized,
+        rtol,
+        max_panels,
+        allow_unvalidated,
+        refine_backscatter,
+    };
+    let n = distributions.len().saturating_mul(wl.len());
+    let (opts, order) = settings.options(mu, Vec::new(), n, 0).map_err(err)?;
+    let arrays = py
+        .detach(|| -> scatrs::Result<Arrays> {
+            let results: Vec<EnsembleResult> = compute_batch(&distributions, &wl, &m, &opts)?
+                .into_iter()
+                .flatten()
+                .collect();
+            arrays(&results, 0, width(order, &results), n_mu)
+        })
+        .map_err(err)?;
+    into_dict(py, arrays)
 }

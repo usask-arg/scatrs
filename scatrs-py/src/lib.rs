@@ -33,6 +33,7 @@ fn _scatrs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(mie::mie_greek, m)?)?;
     m.add_function(wrap_pyfunction!(ensemble::ensemble_parameters, m)?)?;
     m.add_function(wrap_pyfunction!(ensemble::ensemble_compute, m)?)?;
+    m.add_function(wrap_pyfunction!(ensemble::ensemble_compute_batch, m)?)?;
     testing::register(m)?;
     Ok(())
 }

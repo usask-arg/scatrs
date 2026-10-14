@@ -145,6 +145,11 @@ impl<T: Real> GreekProjector<T> {
         &self.rule.nodes
     }
 
+    /// The quadrature weights of the nodes.
+    pub(crate) fn weights(&self) -> &[T] {
+        &self.rule.weights
+    }
+
     /// The Greek coefficients of each table: c = (2l + 1)/2 · Σ wₖ F(μₖ) dₗ(μₖ). The tables share
     /// the generalized spherical functions, which dominate the cost: O(nodes·L) for any number of
     /// tables.

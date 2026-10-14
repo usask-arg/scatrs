@@ -43,6 +43,7 @@ __all__ = [
     "PowerLaw",
     "Tabulated",
     "compute",
+    "compute_batch",
     "compute_mixture",
 ]
 
@@ -325,21 +326,26 @@ def _outputs(
     return EnsembleOutputs(*scalars, greek=greek, phase=phase)
 
 
+def _refractive_index(refractive_index: ArrayLike, shape: tuple[int, ...]) -> np.ndarray:
+    """The refractive index broadcast to the wavelengths' ``shape``, flattened."""
+    m = _args.complex_array(refractive_index, "refractive_index")
+    try:
+        m = np.broadcast_to(m, shape)
+    except ValueError:
+        raise ValueError(
+            f"refractive_index of shape {m.shape} does not broadcast to the wavelengths' "
+            f"shape {shape}"
+        ) from None
+    return np.ascontiguousarray(m.reshape(-1))
+
+
 def _specs(components: Sequence[Component], shape: tuple[int, ...]) -> list:
     out = []
     for i, c in enumerate(components):
         if not isinstance(c, Component):
             raise TypeError(f"component {i} must be a Component, not {type(c).__name__}")
         spec = _check(c.distribution, f"the distribution of component {i}")._spec()
-        m = _args.complex_array(c.refractive_index, "refractive_index")
-        try:
-            m = np.broadcast_to(m, shape)
-        except ValueError:
-            raise ValueError(
-                f"refractive_index of shape {m.shape} does not broadcast to the wavelengths' "
-                f"shape {shape}"
-            ) from None
-        out.append((spec, np.ascontiguousarray(m.reshape(-1)), float(c.weight)))
+        out.append((spec, _refractive_index(c.refractive_index, shape), float(c.weight)))
     return out
 
 
@@ -554,3 +560,92 @@ compute_mixture.__doc__ = """Averages over an external mixture: cross sections a
     second="",
     weights=' (each prefixed by ``"c{i}."``), and the weights ``"c{i}.weight"``',
 )
+
+
+def compute_batch(
+    distributions: Sequence[Distribution],
+    wavelength: ArrayLike,
+    refractive_index: ArrayLike,
+    *,
+    greek: SupportsIndex | Literal["all"] | None = None,
+    mu: ArrayLike | None = None,
+    normalized: bool = True,
+    rtol: float = 1e-6,
+    max_panels: SupportsIndex = 4096,
+    allow_unvalidated: bool = False,
+    refine_backscatter: bool = False,
+) -> EnsembleResult:
+    """Averages over spheres of each of many size distributions of one material, sharing the
+    size nodes.
+
+    One set of size panels per wavelength covers every distribution, refined until each meets
+    its own targets, so every Mie solution and phase-matrix table serves all of them: for a
+    grid of distributions (an optics database) this costs about as much as the broadest
+    distribution alone. Each distribution's result has its own error estimates and
+    ``converged`` flag; being at least as refined as on its own, its values differ from
+    :func:`compute`'s within the error estimates. No derivatives: use :func:`compute`.
+
+    Parameters
+    ----------
+    distributions : sequence of LogNormal, Gamma, ModifiedGamma, PowerLaw, Monodisperse, \
+Tabulated or MultiModal
+        The number size distributions.
+    wavelength : array_like
+        Wavelengths, in the unit of the radii.
+    refractive_index : array_like
+        The refractive index, broadcast to the wavelengths' shape.
+    greek, mu, normalized, rtol, max_panels, allow_unvalidated, refine_backscatter
+        As for :func:`compute`.
+
+    Returns
+    -------
+    EnsembleResult
+        Every array with a leading axis of the distributions, then the wavelengths' shape;
+        ``panels`` counts the shared panels.
+
+    Raises
+    ------
+    InvalidInputError
+        For no distributions, invalid parameters, wavelengths, refractive indices or options,
+        or outputs that would exceed ``2 * MAX_MIE_VALUES`` real values.
+    OutsideValidatedDomainError
+        If a size node is outside the validated domain, unless ``allow_unvalidated``.
+    TypeError, ValueError
+        For arguments of the wrong type, or refractive indices that do not broadcast to the
+        wavelengths.
+    """
+    wl = _args.real_array(wavelength, "wavelength")
+    if isinstance(distributions, (str, bytes)) or not isinstance(distributions, Iterable):
+        raise TypeError(
+            f"distributions must be a sequence of distributions, not {type(distributions).__name__}"
+        )
+    dists = list(distributions)
+    specs = [_check(d, f"distribution {i}")._spec() for i, d in enumerate(dists)]
+    m = _refractive_index(refractive_index, wl.shape)
+    mus = None if mu is None else _args.real_array(mu, "mu")
+    order, all_orders = _greek_order(greek)
+    raw = _scatrs.ensemble_compute_batch(
+        specs,
+        m,
+        np.ascontiguousarray(wl.reshape(-1)),
+        order,
+        all_orders,
+        np.ascontiguousarray(np.zeros(0) if mus is None else mus.reshape(-1)),
+        _args.flag(normalized, "normalized"),
+        float(rtol),
+        _args.size(max_panels, "max_panels"),
+        _args.flag(allow_unvalidated, "allow_unvalidated"),
+        _args.flag(refine_backscatter, "refine_backscatter"),
+    )
+    raw["panels"] = raw["panels"].astype(np.int64)
+    for a in raw.values():
+        a.flags.writeable = False
+    shape = (len(dists), *wl.shape)
+    mu_shape = () if mus is None else mus.shape
+    values = _outputs(raw, "", None, shape, mu_shape)
+    return EnsembleResult(
+        **{f: getattr(values, f) for f in (*SCALARS, "greek", "phase")},
+        error=_outputs(raw, "_errors", None, shape, mu_shape),
+        converged=raw["converged"].reshape(shape),
+        panels=raw["panels"].reshape(shape),
+    )

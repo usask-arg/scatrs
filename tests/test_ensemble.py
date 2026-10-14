@@ -239,3 +239,34 @@ def test_a_single_distribution_has_one_component():
     spec = (LOGNORMAL._spec(), np.array([1.5 + 0j]), 1.0)
     with pytest.raises(InvalidInputError, match="exactly one component"):
         _scatrs.ensemble_parameters([spec, spec], False)
+
+
+def test_batch_shares_nodes_and_matches_each_distribution():
+    dists = [ensemble.LogNormal(0.1, 1.5), ensemble.Gamma(0.4, 0.1), ensemble.Monodisperse(0.3)]
+    wl = np.array([[0.4, 0.6, 0.8]])
+    r = ensemble.compute_batch(dists, wl, 1.45 + 1e-3j, greek=8, mu=[0.5, -0.5])
+    assert r.c_ext.shape == (3, 1, 3) and r.greek.alpha1.shape == (3, 1, 3, 9)
+    assert r.phase.f11.shape == (3, 1, 3, 2) and r.converged.all()
+    assert r.params == () and not r.c_ext.flags.writeable
+    # Shared panels for the distributions with a range; none for the single radius.
+    assert np.all(r.panels[0] == r.panels[1]) and np.all(r.panels[2] == 0)
+    for i, d in enumerate(dists):
+        a = ensemble.compute(d, wl, 1.45 + 1e-3j, greek=8)
+        np.testing.assert_array_less(
+            np.abs(r.c_ext[i] - a.c_ext), 2 * (r.error.c_ext[i] + a.error.c_ext) + 1e-15
+        )
+        np.testing.assert_array_less(
+            np.abs(r.greek.alpha1[i] - a.greek.alpha1),
+            2 * (r.error.greek.alpha1[i] + a.error.greek.alpha1) + 1e-13,
+        )
+    # The refractive index broadcasts to the wavelengths.
+    m = ensemble.compute_batch(dists[:1], [0.4, 0.6], [1.45, 1.5])
+    assert m.c_ext.shape == (1, 2)
+    with pytest.raises(InvalidInputError):
+        ensemble.compute_batch([], 0.5, 1.45)
+    with pytest.raises(TypeError):
+        ensemble.compute_batch(ensemble.LogNormal(0.1, 1.5), 0.5, 1.45)
+    with pytest.raises(TypeError):
+        ensemble.compute_batch([1.0], 0.5, 1.45)
+    with pytest.raises(ValueError):
+        ensemble.compute_batch(dists, [0.4, 0.6], [1.45, 1.5, 1.6])

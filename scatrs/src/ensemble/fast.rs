@@ -10,7 +10,9 @@
 use faer::{Accum, Mat, Par};
 use num_complex::Complex;
 
-use crate::mie::{MieSolution, element_derivatives, elements, for_each_order};
+use crate::Result;
+use crate::mie::{GreekProjector, MieSolution, element_derivatives, elements, for_each_order};
+use crate::special::wigner_d;
 
 /// G_E and G_O of one band (h × N, one column per order).
 pub(crate) struct BandTables {
@@ -109,24 +111,20 @@ impl PanelProducts {
         }
     }
 
-    /// The products for every sphere set so far.
-    pub(crate) fn multiply(&mut self, tables: &BandTables) {
-        faer::linalg::matmul::matmul(
-            self.ce.as_mut(),
-            Accum::Replace,
-            tables.ge.as_ref(),
-            self.x.as_ref(),
-            1.0,
-            Par::Seq,
-        );
-        faer::linalg::matmul::matmul(
-            self.co.as_mut(),
-            Accum::Replace,
-            tables.go.as_ref(),
-            self.x.as_ref(),
-            1.0,
-            Par::Seq,
-        );
+    /// The products for every sphere set so far, whose coefficients vanish beyond `terms`
+    /// orders (the band's tables may have more).
+    pub(crate) fn multiply(&mut self, tables: &BandTables, terms: usize) {
+        let terms = terms.min(tables.orders());
+        for (dst, g) in [(&mut self.ce, &tables.ge), (&mut self.co, &tables.go)] {
+            faer::linalg::matmul::matmul(
+                dst.as_mut(),
+                Accum::Replace,
+                g.as_ref().subcols(0, terms),
+                self.x.as_ref().subrows(0, terms),
+                1.0,
+                Par::Seq,
+            );
+        }
     }
 
     /// Sphere `k`'s phase matrix times `scale` at every node of the band (F₁₁, F₁₂, F₃₃, F₃₄,
@@ -182,6 +180,73 @@ impl PanelProducts {
     }
 }
 
+/// A band's projection onto the Greek coefficients as matrix products: the matrices
+/// (2l + 1)/2·wₖ·dₗ(μₖ) (n_q × (L + 1)) of d₀₀, d₂₂, d₂,₋₂ and d₀₂, as `GreekProjector::project`
+/// sums them, and their absolute values for the bounds of `GreekProjector::project_bounds`.
+pub(crate) struct BandProjection {
+    d: [Mat<f64>; 4],
+    abs: [Mat<f64>; 4],
+}
+
+/// The six coefficient arrays of many tables, a row per table: α₁, α₂, α₃, α₄, β₁, β₂.
+pub(crate) type Coefficients = [Mat<f64>; 6];
+
+impl BandProjection {
+    pub(crate) fn new(projector: &GreekProjector<f64>) -> Result<Self> {
+        let (nodes, weights) = (projector.nodes(), projector.weights());
+        let len = projector.order() + 1;
+        let mut d: [Mat<f64>; 4] = core::array::from_fn(|_| Mat::zeros(nodes.len(), len));
+        let mut buf = vec![0.0; len];
+        for (k, (&mu, &w)) in nodes.iter().zip(weights).enumerate() {
+            for (i, (m, n)) in [(0, 0), (2, 2), (2, -2), (0, 2)].into_iter().enumerate() {
+                wigner_d(m, n, mu, &mut buf)?;
+                for (l, &v) in buf.iter().enumerate() {
+                    d[i][(k, l)] = (2 * l + 1) as f64 * 0.5 * w * v;
+                }
+            }
+        }
+        let abs =
+            core::array::from_fn(|i| Mat::from_fn(nodes.len(), len, |k, l| d[i][(k, l)].abs()));
+        Ok(Self { d, abs })
+    }
+
+    /// The coefficients of the tables, whose elements are the rows of `f` (F₁₁, F₁₂, F₃₃, F₃₄,
+    /// each tables × n_q).
+    pub(crate) fn project(&self, f: &[Mat<f64>; 4]) -> Coefficients {
+        let [f11, f12, f33, f34] = f;
+        let sum = f11 + f33;
+        let diff = f11 - f33;
+        let [d00, d22, d2m2, d02] = &self.d;
+        let plus = &sum * d22;
+        let minus = &diff * d2m2;
+        [
+            f11 * d00,
+            (&plus + &minus) * 0.5,
+            (&plus - &minus) * 0.5,
+            f33 * d00,
+            f12 * d02,
+            f34 * d02,
+        ]
+    }
+
+    /// Bounds on the coefficients' changes for tables of bounds on the elements' changes (as
+    /// `project`): α₂ and α₃ share the half sum of the bounds of α₂ ± α₃.
+    pub(crate) fn bounds(&self, e: &[Mat<f64>; 4]) -> Coefficients {
+        let [e11, e12, e33, e34] = e;
+        let sum = e11 + e33;
+        let [d00, d22, d2m2, d02] = &self.abs;
+        let both = (&sum * d22 + &sum * d2m2) * 0.5;
+        [
+            e11 * d00,
+            both.clone(),
+            both,
+            e33 * d00,
+            e12 * d02,
+            e34 * d02,
+        ]
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -225,7 +290,7 @@ mod tests {
                     };
                     p.set(k, &s);
                 }
-                p.multiply(&tables);
+                p.multiply(&tables, n_max);
                 for (k, &(x, m)) in cases.iter().enumerate() {
                     let s = mie.compute_with_derivatives(x, m, &opts).unwrap();
                     let mut want = vec![vec![0.0; 4 * q]; 4];

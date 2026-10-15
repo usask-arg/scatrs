@@ -5,7 +5,7 @@
 //! Notation (layers l = 0, …, L − 1 from the core; z₁ = m_l x_{l−1} and z₂ = m_l x_l for
 //! l ≥ 1): ζ is a second solution of the Riccati–Bessel equation besides ψ, with Wronskian
 //! W = ψζ′ − ψ′ζ; u_n = ψ_n/ψ_{n−1}, D_n = (n + 1)/z − u_{n+1}, w_n = ζ_n/ζ_{n−1},
-//! D^ζ_n = (n + 1)/z − w_{n+1}, Π_n = ψ_n ζ_n, P_n = [ψ_n/ζ_n](z₁)·ζ_n(z₂)², and for layer l
+//! D^ζ_n = (n + 1)/z − w_{n+1}, Π_n = ψ_n ζ_n, P_n = \[ψ_n/ζ_n\](z₁)·ζ_n(z₂)², and for layer l
 //! G₁ = m_l H − m_{l−1} D_n(z₁), G₂ = m_l H − m_{l−1} D^ζ_n(z₁) for Hₐ (m_l and m_{l−1}
 //! exchanged for H_b), with
 //!

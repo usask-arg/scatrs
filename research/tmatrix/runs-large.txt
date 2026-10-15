@@ -1,0 +1,4 @@
+x=20.0 eps=2.0 s=1.5+0.01i m=1 N=36 nθ=120: cond 2.7e+8 skeel 4.0e+4 | B 4.2e-9 C 1.4e-13 D 1.4e-13 | Q53 norm 2.9e-10 worst-rel 2.4e+47 P53 2.5e-15 (49s)
+x=20.0 eps=0.5 s=1.5+0.01i m=1 N=40 nθ=140: cond 7.3e+8 skeel 1.8e+5 | B 3.6e-10 C 2.5e-13 D 2.6e-13 | Q53 norm 3.6e-12 worst-rel 2.0e+47 P53 6.0e-15 (69s)
+x=15.0 eps=4.0 s=1.5+0.01i m=1 N=40 nθ=200: cond 1.1e+13 skeel 8.4e+7 | B 1.0e+2 C 2.7e-11 D 2.7e-11 | Q53 norm 31.0 worst-rel 2.6e+47 P53 1.3e-15 (90s)
+x=30.0 eps=2.0 s=1.5+0.01i m=1 N=50 nθ=160: cond 1.3e+11 skeel 5.7e+6 | B 2.2e-6 C 9.3e-12 D 9.3e-12 | Q53 norm 2.7e-9 worst-rel 6.5e+47 P53 1.5e-15 (126s)

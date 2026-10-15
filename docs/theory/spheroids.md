@@ -71,11 +71,13 @@ their code SMARTIES (2016).
 scatrs removes the cancellation in its own way. Expand the radial factors of each integrand, the
 products of $y_n$ (or its derivative) with $j_k(m k r)$, in powers of $kr$. For a spheroid
 $1/r^2 = \alpha + \beta\cos^2\theta$, so every term of non-positive power is a polynomial in
-$\cos\theta$ times an angular function. The terms of power at most 0 are the electrostatic
-limit of the integral, and for $n \ne k$ they integrate to exactly zero as a group: the
-outgoing and regular multipoles of different orders are orthogonal on any surface in the
-static limit. (Those of negative power alone vanish when $|n - k| \ge 3$.) They are exactly
-the terms that cancel. scatrs therefore accumulates each element in three exact forms (the
+$\cos\theta$ times an angular function, the products of the associated Legendre functions
+of orders $n$ and $k$. Those polynomials have low degree, and the Legendre functions are
+orthogonal over the whole range of $\cos\theta$, so the terms of negative power integrate to
+exactly zero when $|n - k| \ge 3$, and the terms of power at most 0 (the electrostatic limit of
+the integral) integrate to exactly zero as a group whenever $n \ne k$. This was verified to 35
+digits on more than 2000 elements. It rests on $1/r^2$ being a polynomial in $\cos\theta$,
+which holds for spheroids, not for other shapes. These are exactly the terms that cancel. scatrs therefore accumulates each element in three exact forms (the
 plain integrand, without the terms of negative power, and without those of power at most 0)
 together with the sum of the magnitudes of what each adds, and keeps the form with the
 smallest sum. At each node the kept part is evaluated either from its own series or as the

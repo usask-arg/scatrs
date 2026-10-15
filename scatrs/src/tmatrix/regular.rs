@@ -7,8 +7,10 @@
 //!
 //! For a spheroid the terms of power ≤ 0 of every R_t's Laurent series in x integrate, together, to
 //! exactly zero in every element with n ≠ k, and those of power < 0 alone when |n − k| ≥ 3
-//! (research/tmatrix, findings 11–12): they are the electrostatic limit, whose outgoing and regular
-//! multipoles pair to zero off the diagonal on any surface. They carry the catastrophic
+//! (research/tmatrix, findings 11–12). Since 1/r² = α + β cos²θ, those terms are polynomials in
+//! cos θ of low degree times products of Legendre functions of orders n and k, which their
+//! orthogonality over the whole range removes; the property is the spheroid's (other shapes'
+//! 1/r² are not polynomials in cos θ). They carry the catastrophic
 //! cancellation of the plain integrals, up to 10¹⁶ at x = 15, ε = 4. Each element is therefore
 //! accumulated in three exact forms, plain, minus the powers < 0, minus the powers ≤ 0, each with
 //! the sum of the magnitudes of what it adds, and the form with the smallest sum is kept.

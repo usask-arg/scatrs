@@ -292,6 +292,69 @@ core radius half the outer) 4.3 to 8.4 times faster:
 | 100 | 10.9 | 83.7 | 58.3 |
 | 1000 | 104 | | 451 |
 
+## Spheroids
+
+### Limits
+
+- **A sphere.** An aspect ratio of 1 gives every output of {mod}`scatrs.mie`, to $10^{-9}$ or
+  better (`tests/test_tmatrix.py` and `scatrs/src/tmatrix/mod.rs`).
+- **The Rayleigh limit.** At $x = 0.01$ the orientation-averaged absorption and scattering of
+  oblate and prolate spheroids ($\varepsilon$ from 1/4 to 4, $m = 1.5 + 0.1i$) follow the
+  electrostatic polarizabilities $\alpha_j = V(m^2 - 1)/(1 + L_j(m^2 - 1))$ of their
+  depolarization factors $L_j$ (Bohren & Huffman 1983, §5.3) to $10^{-3}$, the size of the
+  first correction.
+
+### Comparison with Mishchenko's T-matrix code
+
+Mishchenko's extended-precision code for randomly oriented particles (`tmq.lp.f`, Mishchenko &
+Travis 1994; the "tmatd" of the literature) is the standard reference for spheroids. The script
+`benchmarks/compare_tmatd.py` fetches it from its page at NASA GISS (it is not redistributed
+here), builds it with gfortran after patches that change no computation (the input read from
+standard input, 16 printed digits, gfortran's names for its quad-precision intrinsics), and
+compares it with scatrs at `rtol = 1e-10` for 72 spheroids: aspect ratios 1/5, 1/3, 1/2, 2, 3
+and 5, $x$ = 1, 3, 6 and 10, and indices 1.33, $1.53 + 0.008i$ and $1.5 + 0.5i$. One particle is
+computed as the code's notes describe, as a size distribution $10^{-7}$ wide. The results are in
+`benchmarks/results/2026-10-15-arm64-tmatd.json`. Apple M4 Pro, macOS; scatrs 0.3.0,
+GNU Fortran 14.2, 2026-10-15.
+
+| output | at tmatd's tolerance $10^{-6}$: median, largest difference | at $10^{-9}$: median, largest |
+|---|---|---|
+| $Q_\text{ext}$ | $1.6\cdot10^{-9}$, $6.4\cdot10^{-8}$ | $7.0\cdot10^{-13}$, $7.5\cdot10^{-11}$ |
+| $Q_\text{sca}$ | $2.1\cdot10^{-9}$, $8.6\cdot10^{-8}$ | $9.3\cdot10^{-13}$, $6.8\cdot10^{-11}$ |
+| $g$ | $1.2\cdot10^{-8}$, $4.1\cdot10^{-8}$ | $1.1\cdot10^{-8}$, $3.7\cdot10^{-8}$ |
+| Greek coefficients | $3.6\cdot10^{-7}$, $4.1\cdot10^{-6}$ | $4.0\cdot10^{-8}$, $2.9\cdot10^{-7}$ |
+
+The differences are relative ($g$ absolute, the Greek coefficients relative to the largest
+$\alpha_1$, normalized). They shrink with tmatd's tolerance to the floor of its narrow size
+distribution, about $10^{-8}$ in $g$ and the Greek coefficients; scatrs's own estimates are
+$10^{-11}$ or below. tmatd expands $F_{12}$ and $F_{34}$ in the generalized spherical functions
+$P^l_{02} = -d^l_{02}$, so its $\beta_1$ and $\beta_2$ have the opposite signs of scatrs's, which
+uses the Wigner d-functions; the phase matrices agree.
+
+tmatd stops ("convergence is not obtained") for five spheroids: $\varepsilon = 1/5$ at $x = 10$
+for every index, $\varepsilon = 1/5$ at $x = 6$ and $\varepsilon = 5$ at $x = 10$ for the absorbing
+index (at the tighter tolerance). There its number of orders grows to its limit of 140 without
+the cross sections settling: the loss of precision of the classical integrals, which scatrs
+removes ({doc}`/theory/spheroids`). scatrs computes them with about 45 orders.
+
+On one thread, the median time per spheroid, scatrs at `rtol` $10^{-6}$ and $10^{-8}$, tmatd at
+its tolerances $10^{-6}$ and $10^{-9}$ (the five failures excluded):
+
+| $x$ | scatrs, $10^{-6}$ (s) | scatrs, $10^{-8}$ (s) | tmatd, $10^{-6}$ (s) | tmatd, $10^{-9}$ (s) |
+|---|---|---|---|---|
+| 1 | 0.006 | 0.008 | 0.026 | 0.041 |
+| 3 | 0.020 | 0.024 | 0.080 | 0.18 |
+| 6 | 0.061 | 0.095 | 0.35 | 0.47 |
+| 10 | 2.1 | 3.0 | 1.2 | 1.7 |
+
+scatrs is 4 to 7 times faster up to $x = 6$. At $x = 10$ the modes that need refinement in
+double-double dominate its time, and tmatd is faster for most spheroids: up to 3 times for the
+extreme aspect ratios, where scatrs refines most (the slowest, $\varepsilon = 1/5$ with the
+absorbing index, took 154 s, a spheroid tmatd cannot compute).
+
+We thank M. I. Mishchenko, L. D. Travis and the NASA Goddard Institute for Space Studies for
+making the code publicly available; its references are listed in {doc}`/references`.
+
 ## Size distributions
 
 For averages over size distributions, {doc}`sasktran2` compares scatrs with the Mie

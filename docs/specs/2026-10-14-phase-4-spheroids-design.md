@@ -346,4 +346,10 @@ impl<T: Real> TMatrix<T> {
     - the brute-force orientation average (10⁻¹⁵);
     - 2π∫F₁₁ = C_sca;
     - the external comparisons.
-- **External comparisons.** `tmatd` and pytmatrix need downloads, which wait for the user's approval.
+- **External comparisons** (approved by the user, 2026-10-15).
+  - `tmatd`: `benchmarks/compare_tmatd.py` fetches Mishchenko's `tmq.lp.f`, `lpq.f` and `tmq.par.f`, checks them by SHA-256 and patches them (input, output digits, gfortran's quad intrinsics). The sources are not committed: no license is stated, only free public access.
+  - Agreement over 72 spheroids: Q_ext and Q_sca to 7.5·10⁻¹¹ at tmatd's tolerance 10⁻⁹; g and the Greek coefficients to the floor of its 10⁻⁷-wide size distribution (about 10⁻⁸, worst 2.9·10⁻⁷).
+  - β₁ and β₂ have opposite signs: tmatd expands in P⁰²ₗ = −d⁰²ₗ.
+  - tmatd stops at its NPN1 = 140 limit for 5 extreme spheroids that scatrs computes.
+  - Speed: scatrs is 4–7× faster up to x = 6, but tmatd is faster at x = 10, by up to 3× (the refined modes). The target of section 10 is met up to x = 6 only.
+  - pytmatrix 0.3.3 does not build: it needs `numpy.distutils`, and its sdist lacks the generated f2py source. It also wraps Mishchenko's own code, so it is left out.

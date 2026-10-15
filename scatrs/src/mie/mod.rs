@@ -36,10 +36,12 @@
 //!   ⌈x + 12x^(1/3) + 6⌉ in `DoubleDouble`, beyond Wiscombe's ⌈x + 4.05x^(1/3) + 2⌉, which
 //!   leaves truncation errors up to 10⁻⁶ in backscattering.
 //! * **Dₙ(mx)** by the downward recurrence of uₖ = ψₖ/ψₖ₋₁ = 1/((2k + 1)/(mx) − uₖ₊₁), from
-//!   uₖ₊₁ = 0 at k = max(N + 1, ⌈1.5|mx|⌉) plus a margin of about half the bits of precision.
-//!   Above 1.5|mx| every step shrinks an error at least sixfold, so the start value is
-//!   forgotten to rounding level. Then Dₙ = (n + 1)/(mx) − uₙ₊₁. No continued fraction is
-//!   evaluated, and nothing can fail to converge.
+//!   uₖ₊₁ = 0 at an index where the start value is forgotten to rounding level by order N + 1:
+//!   above max(N + 1, ⌈1.5|mx|⌉) by as many steps as the contraction of each step there
+//!   requires (a few for small |mx|), or, for large |mx|, above |mx| by a multiple of |mx|^(1/3)
+//!   from the asymptotics at the turning point, if that is lower. Then
+//!   Dₙ = (n + 1)/(mx) − uₙ₊₁. No continued fraction is evaluated, and nothing can fail to
+//!   converge.
 //! * **ψₙ and ξₙ.** Up to n = ⌊x⌋ (for x ≥ 1) by upward recurrence; above, through the ratios
 //!   Tₙ = ψₙ/ξₙ and 1/ξₙ, built from uₙ(x) (downward, as for Dₙ) and Rₙ = ξₙ₋₁/ξₙ (upward).
 //!   The upward ψ recurrence loses about log₁₀(1/x²) digits at small x (ψ₁ = sin x/x − cos x

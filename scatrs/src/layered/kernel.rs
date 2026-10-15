@@ -21,7 +21,7 @@
 
 use num_complex::Complex;
 
-use crate::complex::{exp_m1, inv};
+use crate::complex::{exp_m1, inv, times_i};
 use crate::mie::kernel::{Outer, OuterDerivs, Side, State, int, ratios, real};
 use crate::scalar::Real;
 
@@ -548,7 +548,6 @@ impl<T: Real> Kernel<T> {
     /// −[Im(∂B) − 2 Im(B) Re(∂B·ξ_n/Δ)]/|Δ|².
     fn inner_grads(&mut self, m: Complex<T>, n: usize) {
         let last = self.dh.len() - 1;
-        let i1 = Complex::new(T::zero(), T::one());
         let two = T::from_f64(2.0);
         let inv_m = inv(m);
         self.grads.resize_with(last, LayerGrad::new);
@@ -571,17 +570,17 @@ impl<T: Real> Kernel<T> {
                 let ba_m = dh[1][k] * inv_m;
                 let bb_x = m * dh[2][k];
                 let bb_m = m * dh[3][k];
-                g.da_dx.push(-(i1 * ba_x * ida2));
-                g.da_dm.push(-(i1 * ba_m * ida2));
-                g.db_dx.push(-(i1 * bb_x * idb2));
-                g.db_dm.push(-(i1 * bb_m * idb2));
+                g.da_dx.push(-(times_i(ba_x) * ida2));
+                g.da_dm.push(-(times_i(ba_m) * ida2));
+                g.db_dx.push(-(times_i(bb_x) * idb2));
+                g.db_dm.push(-(times_i(bb_m) * idb2));
                 let weight: T = int(2 * k + 3);
                 let pair = |da: Complex<T>, db: Complex<T>| {
                     term(b_a, da, da * g_a, na) + term(b_b, db, db * g_b, nb)
                 };
                 jac[0] += weight * pair(ba_x, bb_x);
                 jac[1] += weight * pair(ba_m, bb_m);
-                jac[2] += weight * pair(i1 * ba_m, i1 * bb_m);
+                jac[2] += weight * pair(times_i(ba_m), times_i(bb_m));
             }
             g.abs_sum = jac;
         }

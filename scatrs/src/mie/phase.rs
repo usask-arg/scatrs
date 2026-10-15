@@ -4,6 +4,7 @@ use num_complex::Complex;
 
 use super::amplitudes::no_derivatives;
 use super::{AmplitudeBuffers, AngularTable, Coefficients, Group, MieSolution};
+use crate::complex::times_i;
 use crate::scalar::Real;
 use crate::{Error, Result};
 
@@ -314,7 +315,6 @@ impl<T: Real> Coefficients<'_, T> {
                 [x_part, T::zero(), T::zero()]
             }
         };
-        let i1 = Complex::new(T::zero(), T::one());
         let v = values;
         let [mut dx, mut dr, mut di] = d;
         let [s1s, s2s, dx1, dx2, dm1, dm2] = s;
@@ -324,7 +324,7 @@ impl<T: Real> Coefficients<'_, T> {
             let df = [
                 element_derivatives(s1, s2, dx1[j], dx2[j]),
                 element_derivatives(s1, s2, dm1[j], dm2[j]),
-                element_derivatives(s1, s2, i1 * dm1[j], i1 * dm2[j]),
+                element_derivatives(s1, s2, times_i(dm1[j]), times_i(dm2[j])),
             ];
             v.f11[j] = c * f[0];
             v.f12[j] = c * f[1];

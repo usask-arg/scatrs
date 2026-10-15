@@ -138,7 +138,7 @@ impl ValidatedDomain {
     /// |---|---|
     /// | coefficients, Q_ext | 32 |
     /// | Q_sca, g | 16 |
-    /// | Q_abs | 128 |
+    /// | Q_abs | 256 |
     /// | Q_back | 64 |
     /// | S₁, S₂ | 128 |
     /// | derivatives of the coefficients and of S₁, S₂ | 1024 |
@@ -152,10 +152,11 @@ impl ValidatedDomain {
             MieOutput::Scattering | MieOutput::Asymmetry | MieOutput::GreekCoefficients { .. } => {
                 16.0
             }
-            MieOutput::Absorption | MieOutput::Amplitudes => 128.0,
+            MieOutput::Amplitudes => 128.0,
             MieOutput::Backscattering | MieOutput::PhaseMatrix => 64.0,
             MieOutput::CoefficientDerivatives | MieOutput::AmplitudeDerivatives => 1024.0,
-            MieOutput::EfficiencyJacobian
+            MieOutput::Absorption
+            | MieOutput::EfficiencyJacobian
             | MieOutput::PhaseMatrixDerivatives
             | MieOutput::GreekDerivatives { .. } => 256.0,
         }

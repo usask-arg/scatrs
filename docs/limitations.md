@@ -224,8 +224,8 @@ For `Complex<DoubleDouble>` specifically:
 - **NaN where `f64` is finite.** `exp`, `sin`, `cos`, `powc` and related functions return NaN
   when a component exceeds $2^{50}$, the double-double trigonometric domain.
 
-The Mie kernels use their own complex reciprocal (Smith's algorithm), validated against Arb,
-in place of num-complex's.
+The Mie kernels use their own complex reciprocal (the plain formula where it can neither overflow
+nor underflow, Smith's algorithm elsewhere), validated against Arb, in place of num-complex's.
 
 ### Dual numbers
 

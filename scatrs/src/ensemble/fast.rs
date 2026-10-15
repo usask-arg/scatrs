@@ -11,6 +11,7 @@ use super::matrix::{Mat, matmul, product};
 use num_complex::Complex;
 
 use crate::Result;
+use crate::complex::times_i;
 use crate::mie::{
     Coefficients as MieCoefficients, GreekProjector, Group, element_derivatives, elements,
     for_each_order,
@@ -159,7 +160,6 @@ impl PanelProducts {
         let lo = q / 2;
         let base = k * self.per;
         let c = |m: &Mat, i: usize, col: usize| Complex::new(m[(i, col)], m[(i, col + 1)]);
-        let i1 = Complex::new(0.0, 1.0);
         for i in 0..self.ce.nrows() {
             let j = lo + i;
             let (eu, ev) = (c(&self.ce, i, base), c(&self.ce, i, base + 2));
@@ -180,7 +180,7 @@ impl PanelProducts {
                 for (g, pair) in pairs.chunks_exact_mut(2).enumerate() {
                     let (d1, d2) = ds(base + 4 + 4 * g);
                     let fr = element_derivatives(s1, s2, d1, d2);
-                    let fi = element_derivatives(s1, s2, i1 * d1, i1 * d2);
+                    let fi = element_derivatives(s1, s2, times_i(d1), times_i(d2));
                     let [dre, dim] = pair else { unreachable!() };
                     for e in 0..4 {
                         dre[e * q + node] = scale * fr[e];

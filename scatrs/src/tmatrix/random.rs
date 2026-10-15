@@ -23,7 +23,9 @@ use num_complex::Complex;
 
 use super::functions::Angular;
 use super::kernel::TMatrixModes;
+use crate::Result;
 use crate::mie::kernel::real;
+use crate::mie::{GreekCoefficients, GreekProjector};
 use crate::scalar::Real;
 use crate::special::clebsch::clebsch_gordan;
 
@@ -256,6 +258,18 @@ impl<T: Real> TMatrixModes<T> {
         }
         let _ = active;
         mueller(&prod, nq)
+    }
+}
+
+impl<T: Real> TMatrixModes<T> {
+    /// The Greek coefficients of ⟨Z⟩ up to order `order` (at most 2N, above which they vanish),
+    /// unnormalized: α₁ at l = 0 is ⟨C_sca⟩/(4π) (in 1/k²). The elements are polynomials of
+    /// degree 2N in μ, so N + ⌈(L + 1)/2⌉ Gauss–Legendre nodes project them exactly.
+    pub(crate) fn greek_raw(&self, order: usize) -> Result<GreekCoefficients<T>> {
+        let order = order.min(2 * self.n);
+        let projector = GreekProjector::<T>::new(order, self.n + (order + 1).div_ceil(2))?;
+        let f = self.random_orientation(projector.nodes());
+        projector.project_six([&f.f11, &f.f12, &f.f22, &f.f33, &f.f34, &f.f44])
     }
 }
 

@@ -51,9 +51,11 @@ enum Kind {
 /// coefficient) and the j-part Taylor terms t_i = B̃_i ξ^{b_i}, as (exponent of the first term,
 /// values), with the prefix and suffix sums of the j-part (and of their magnitudes).
 pub(crate) struct NodeSeries<T> {
-    /// y[n][kind] = (a₀ exponent, terms Y_l).
+    /// `y[n][kind]` = (a₀ exponent, terms Y_l).
     y: Vec<[(i64, Vec<T>); 3]>,
-    /// j[k][kind] = (b₀ exponent, terms, prefix, prefix |·|, suffix, suffix |·|).
+    /// `ysuf[n][kind]` = (Σ_{l' ≥ l} Y_l', Σ_{l' ≥ l} |Y_l'|) for l = 0, …, len (0 at len).
+    ysuf: Vec<[(Vec<T>, Vec<T>); 3]>,
+    /// `j[k][kind]` = (b₀ exponent, terms, prefix, prefix |·|, suffix, suffix |·|).
     j: Vec<[JTerms<T>; 3]>,
 }
 
@@ -153,9 +155,11 @@ impl<T: Real> Series<T> {
         let inv_xmin = self.x_min.recip();
         let inv_sx = (self.s.scale(self.x_min)).inv();
         let mut y = Vec::with_capacity(n + 1);
+        let mut ysuf = Vec::with_capacity(n + 1);
         for (nn, a) in self.a.iter().enumerate() {
             if nn == 0 {
                 y.push(core::array::from_fn(|_| (0, Vec::new())));
+                ysuf.push(core::array::from_fn(|_| (Vec::new(), Vec::new())));
                 continue;
             }
             let e0 = -(nn as i64) - 1;
@@ -174,6 +178,7 @@ impl<T: Real> Series<T> {
                 over.push(v1);
                 p *= xi2;
             }
+            ysuf.push([suffix(&plain), suffix(&deriv), suffix(&over)]);
             y.push([(e0, plain), (e0 - 1, deriv), (e0 - 1, over)]);
         }
         let mut j = Vec::with_capacity(n + 1);
@@ -194,8 +199,24 @@ impl<T: Real> Series<T> {
             }
             j.push([sums(e0, &plain), sums(e0 - 1, &deriv), sums(e0 - 1, &over)]);
         }
-        NodeSeries { y, j }
+        NodeSeries { y, ysuf, j }
     }
+}
+
+/// |Re z| + |Im z|: the magnitudes of the bookkeeping (within √2 of |z|, without a square root).
+pub(crate) fn l1<T: Real>(z: Complex<T>) -> T {
+    z.re.abs() + z.im.abs()
+}
+
+fn suffix<T: Real>(terms: &[T]) -> (Vec<T>, Vec<T>) {
+    let len = terms.len();
+    let mut sum = vec![T::zero(); len + 1];
+    let mut abs = vec![T::zero(); len + 1];
+    for i in (0..len).rev() {
+        sum[i] = sum[i + 1] + terms[i];
+        abs[i] = abs[i + 1] + terms[i].abs();
+    }
+    (sum, abs)
 }
 
 fn sums<T: Real>(b0: i64, terms: &[Complex<T>]) -> JTerms<T> {
@@ -206,7 +227,7 @@ fn sums<T: Real>(b0: i64, terms: &[Complex<T>]) -> JTerms<T> {
     let (mut acc, mut acc_abs) = (zero, T::zero());
     for &t in terms {
         acc = acc + t;
-        acc_abs += t.norm();
+        acc_abs += l1(t);
         head.push(acc);
         head_abs.push(acc_abs);
     }
@@ -214,7 +235,7 @@ fn sums<T: Real>(b0: i64, terms: &[Complex<T>]) -> JTerms<T> {
     let mut tail_abs = vec![T::zero(); len + 1];
     for i in (0..len).rev() {
         tail[i] = tail[i + 1] + terms[i];
-        tail_abs[i] = tail_abs[i + 1] + terms[i].norm();
+        tail_abs[i] = tail_abs[i + 1] + l1(terms[i]);
     }
     JTerms {
         b0,
@@ -240,31 +261,39 @@ impl<T: Real> NodeSeries<T> {
         let (a0, ys) = &self.y[n][kind_index(yk)];
         let js = &self.j[k][kind_index(jk)];
         let xe = if e == 2 { x_e[0] } else { x_e[1] };
-        // For each l: the largest i with a₀ + 2l + b₀ + 2i + e ≤ cut.
+        let (ysum, yabs) = &self.ysuf[n][kind_index(yk)];
+        // For each l: the largest i with a₀ + 2l + b₀ + 2i + e ≤ cut. Past the last l with any
+        // (l > l*), every j term is kept: those l add (Σ_{l>l*} Y_l)·J, from the suffix sums.
         let calc = |cut: i64| -> (Complex<T>, T, Complex<T>, T) {
             let (mut neg, mut neg_abs) = (real(T::zero()), T::zero());
             let (mut pos, mut pos_abs) = (real(T::zero()), T::zero());
             let len = js.head.len() as i64;
-            for (l, &yl) in ys.iter().enumerate() {
-                let base = a0 + 2 * l as i64 + js.b0 + e;
+            let base0 = a0 + js.b0 + e;
+            let l_end = if cut >= base0 {
+                (((cut - base0) / 2 + 1) as usize).min(ys.len())
+            } else {
+                0
+            };
+            for (l, &yl) in ys.iter().enumerate().take(l_end) {
+                let base = base0 + 2 * l as i64;
                 // p(i) = base + 2i ≤ cut ⇔ i ≤ (cut − base)/2.
-                let i_max = if cut >= base { (cut - base) / 2 } else { -1 };
+                let i_max = (cut - base) / 2;
                 let yv = yl * xe;
-                if i_max >= 0 {
-                    let i = i_max.min(len - 1) as usize;
-                    neg = neg + js.head[i].scale(yv);
-                    neg_abs += js.head_abs[i] * yv.abs();
-                }
+                let i = i_max.min(len - 1) as usize;
+                neg = neg + js.head[i].scale(yv);
+                neg_abs += js.head_abs[i] * yv.abs();
                 let from = (i_max + 1).clamp(0, len) as usize;
                 pos = pos + js.tail[from].scale(yv);
                 pos_abs += js.tail_abs[from] * yv.abs();
             }
+            pos = pos + js.tail[0].scale(ysum[l_end] * xe);
+            pos_abs += js.tail_abs[0] * yabs[l_end] * xe.abs();
             (neg, neg_abs, pos, pos_abs)
         };
         let pick = |cut: i64| -> (Complex<T>, T) {
             let (neg, neg_abs, pos, pos_abs) = calc(cut);
             // R⁺ by its series, or as R − R_{≤cut}: whichever adds less.
-            let sub_abs = full.norm() + neg_abs;
+            let sub_abs = l1(full) + neg_abs;
             if pos_abs <= sub_abs {
                 (pos, pos_abs)
             } else {
@@ -290,8 +319,8 @@ fn kind_index(k: Kind) -> usize {
     }
 }
 
-/// The eight angular factors of element (row type rt, order n; column type ct, order k) at a
-/// node, for the products of `TYPES` (with s on the first column field, and ν' = −β sin θ cos θ on
+/// The four non-zero angular factors of element (row type rt, order n; column type ct, order k)
+/// at a node, as (index into `TYPES`, factor) (with s on the first column field, and ν' = −β sin θ cos θ on
 /// the ν terms, whose x² is in e): rows (A₁, A₂) = (Mₙ, Nₙ) | (Nₙ, Mₙ), columns (B₁, B₂) =
 /// (s N_k, M_k) | (s M_k, N_k), and n̂·(A × B) with the y-part components
 /// Mₙ = (0, i yₙ pₙ, −yₙ τₙ), Nₙ = (n(n+1) (yₙ/x) dₙ, Dyₙ τₙ, i Dyₙ pₙ), pₙ = −πₙ.
@@ -305,61 +334,31 @@ pub(crate) fn angular_factors<T: Real>(
     k: usize,
     (dn, pin, tn): (T, T, T),
     (dk, pik, tk): (T, T, T),
-) -> [Complex<T>; 8] {
+) -> [(usize, Complex<T>); 4] {
     let i1 = Complex::new(T::zero(), T::one());
     let pn = -pin;
     let nn1 = int::<T>(n * (n + 1));
     let kk1 = int::<T>(k * (k + 1));
-    let zero = real(T::zero());
-    // n̂·(A × B) of each (A, B) as coefficients of the TYPES.
-    let mm = [
+    // n̂·(A × B) of each (A, B) pair as coefficients of the TYPES: (M, M) has type 0, (M, N)
+    // types 1 and 4, (N, M) types 2 and 6, (N, N) types 3, 5 and 7.
+    let mm = i1.scale(tn * pik - pn * tk);
+    let mn = (real(tn * tk - pn * pik), real(-(nu * tn * kk1 * dk)));
+    let nm = (real(pn * pik - tn * tk), real(nu * nn1 * dn * tk));
+    let nnv = (
         i1.scale(tn * pik - pn * tk),
-        zero,
-        zero,
-        zero,
-        zero,
-        zero,
-        zero,
-        zero,
-    ];
-    let mn = [
-        zero,
-        real(tn * tk - pn * pik),
-        zero,
-        zero,
-        real(-(nu * tn * kk1 * dk)),
-        zero,
-        zero,
-        zero,
-    ];
-    let nm = [
-        zero,
-        zero,
-        real(pn * pik - tn * tk),
-        zero,
-        zero,
-        zero,
-        real(nu * nn1 * dn * tk),
-        zero,
-    ];
-    let nnv = [
-        zero,
-        zero,
-        zero,
-        i1.scale(tn * pik - pn * tk),
-        zero,
         i1.scale(nu * pn * kk1 * dk),
-        zero,
         i1.scale(-(nu * nn1 * dn * pik)),
-    ];
-    let combine = |a: [Complex<T>; 8], b: [Complex<T>; 8]| -> [Complex<T>; 8] {
-        core::array::from_fn(|t| s * a[t] + b[t])
-    };
+    );
+    // Rows (A₁, A₂), columns (B₁, B₂), s on B₁: s (A₁ × B₁) + (A₂ × B₂).
     match (rt, ct) {
-        (0, 0) => combine(mn, nm),
-        (0, _) => combine(mm, nnv),
-        (_, 0) => combine(nnv, mm),
-        _ => combine(nm, mn),
+        // (M, N) with (s N, M): s (M × N) + (N × M).
+        (0, 0) => [(1, s * mn.0), (4, s * mn.1), (2, nm.0), (6, nm.1)],
+        // (M, N) with (s M, N): s (M × M) + (N × N).
+        (0, _) => [(0, s * mm), (3, nnv.0), (5, nnv.1), (7, nnv.2)],
+        // (N, M) with (s N, M): s (N × N) + (M × M).
+        (_, 0) => [(3, s * nnv.0), (5, s * nnv.1), (7, s * nnv.2), (0, mm)],
+        // (N, M) with (s M, N): s (N × M) + (M × N).
+        _ => [(2, s * nm.0), (6, s * nm.1), (1, mn.0), (4, mn.1)],
     }
 }
 

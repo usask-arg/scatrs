@@ -14,7 +14,9 @@
 
 use num_complex::Complex;
 
-use super::kernel::{D4, SolveReport, TMatrixModes, tmatrix, tmatrix_derivatives, tmatrix_refined};
+use super::kernel::{
+    D4, SolveReport, TMatrixModes, tmatrix, tmatrix_derivatives, tmatrix_refined, tmatrix_upto,
+};
 use crate::scalar::{DoubleDouble as Dd, Dual};
 use crate::{Error, Result};
 
@@ -74,7 +76,7 @@ pub(crate) fn solve(
 ) -> Result<Solved> {
     let full_dd = || -> Result<Solved> {
         let sd = Complex::new(Dd::from(s.re), Dd::from(s.im));
-        let t = tmatrix(Dd::from(x), Dd::from(eps), sd, n, n_theta, true)?;
+        let t = tmatrix_upto(Dd::from(x), Dd::from(eps), sd, n, n_theta, true, m_max)?;
         let modes = t
             .modes
             .into_iter()

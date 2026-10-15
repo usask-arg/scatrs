@@ -11,7 +11,8 @@ describes what the accuracy figures rest on.
 ## Scope and availability
 
 - scatrs computes homogeneous spheres and layered spheres (a core and concentric shells),
-  single or averaged over size distributions and external mixtures.
+  single or averaged over size distributions and external mixtures, and randomly oriented
+  spheroids, single.
 - Python exposes only `f64` results. Double-double precision and the `Dual` derivatives of
   the Rust core are available from Rust only.
 - The tests run on Linux (x86_64), macOS (arm64) and Windows (x86_64) for every change. The
@@ -46,6 +47,21 @@ describes what the accuracy figures rest on.
   reaches a larger outer size parameter raises `OutsideValidatedDomain` unless
   `allow_unvalidated` is set. Its values, and its derivatives with respect to the
   distribution's own parameters, are validated up to $10^4$.
+
+## Spheroids
+
+- **Random orientation only.** Fixed orientations, other axisymmetric shapes (cylinders,
+  Chebyshev particles) and spheroids in size distributions and mixtures are not yet
+  available.
+- **Validated domain.** Aspect ratios from 1/5 to 5, $|m|\,x_{\max} \le 60$ with $x_{\max}$ the
+  size parameter of the longest semi-axis, $1 \le \mathrm{Re}\,m \le 3$,
+  $\mathrm{Im}\,m \le 1$, and `rtol` down to $10^{-12}$ ({doc}`validation/accuracy`).
+- **Cost.** It grows like $x_{\max}^4$, and much faster where the modes need mixed-precision
+  refinement, which is most often for prolate spheroids and at the largest $|m|\,x_{\max}$.
+  At `rtol = 1e-8` an oblate spheroid with $\varepsilon = 2$ takes about 25 ms at $x = 5$ and
+  5 s at $x = 15$; $\varepsilon = 1/5$ at $x = 12$ takes minutes. `precision="f64"` skips the
+  refinement: it is fastest, and the error estimate still reports what it costs in accuracy.
+- **Derivatives** cost 4 to 13 times the values.
 
 ## Mie scattering
 

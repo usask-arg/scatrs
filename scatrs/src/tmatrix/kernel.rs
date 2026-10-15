@@ -346,16 +346,30 @@ pub(crate) fn tmatrix<T: Real>(
     n_theta: usize,
     regularize: bool,
 ) -> Result<TMatrixModes<T>> {
+    tmatrix_upto(x, eps, s, n, n_theta, regularize, n)
+}
+
+/// As [`tmatrix`] for the modes m ≤ `m_max` (the others are left empty).
+pub(crate) fn tmatrix_upto<T: Real>(
+    x: T,
+    eps: T,
+    s: Complex<T>,
+    n: usize,
+    n_theta: usize,
+    regularize: bool,
+    m_max: usize,
+) -> Result<TMatrixModes<T>> {
     let shape = Spheroid::new(x, eps);
     let scales = Scales::new(shape.r_min(), s.scale(shape.r_max()), n);
     let lh = log_h(&scales);
-    let all = all_modes(&shape, s, n, n_theta, regularize, &vec![Some(0); n + 1])?;
+    let rows: Vec<Option<usize>> = (0..=n).map(|m| (m <= m_max).then_some(0)).collect();
+    let all = all_modes(&shape, s, n, n_theta, regularize, &rows)?;
     let mut modes = Vec::with_capacity(n + 1);
-    for mm in all {
+    for (m, mm) in all.into_iter().enumerate() {
         let mut ts: [Vec<Complex<T>>; 2] = [Vec::new(), Vec::new()];
         for ((slot, index), (q, p)) in ts.iter_mut().zip(&mm.index).zip(mm.q.iter().zip(&mm.p)) {
             let kc = index.len();
-            if kc == 0 {
+            if kc == 0 || m > m_max {
                 continue;
             }
             let mut t = solve_t(q, p, kc)?;

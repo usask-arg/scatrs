@@ -30,6 +30,9 @@ relative index, azimuthal mode, truncation and Gauss–Legendre points in cos θ
 | `regular.py`, `cancel_reg.py` | the regularized integrals at 53 bits, and the cancellation left per element; `cancel-reg-x15-eps4.txt` |
 | `amplitude.py`, `check_amplitude.py` | fixed-orientation amplitudes from T (a sphere gives Bohren & Huffman's i·S₁, i·S₂), the brute-force orientation average |
 | `ranks.py` | random orientation by the rank decomposition of T, against the brute-force average |
+| `where_cancel.py` | where an element's cancellation happens: among the terms at a node, across the nodes, between the term types after integration, between the ν terms and the others |
+| `partial_head.py` | subtracting only the Laurent powers p ≤ p_cut: which cuts are exact, and what each leaves |
+| `cancel_shapes.py` | the plain cancellation for a spheroid, a finite cylinder and a Chebyshev particle; with `y` or `h`, of the shell integrals of a coated particle |
 
 ## Findings (mode m = 1, s = 1.5 + 0.01i unless stated)
 
@@ -104,3 +107,16 @@ relative index, azimuthal mode, truncation and Gauss–Legendre points in cos θ
     - For an axisymmetric particle the rank-s components of T rotate as D^s_{q0}(R). So A_{pσ}(Θ; R) = Σ_{s,q} D^s_{q0}(R) Φ_{sq}(Θ), and ⟨A A'*⟩ = Σ Φ Φ'*/(2s + 1).
     - It matches the brute-force orientation average to 10⁻¹⁵ in all six elements (x = 2, ε = 1.8, s = 1.5 + 0.02i).
     - T^{ij}_{−m} = ±T^{ij}_m (+ for 11 and 22, − for 12 and 21) exactly, and the plane wave's helicity coefficients are 2 i^{n−1} √(π(2n + 1)).
+14. **The cancellation left after the removal is across the nodes, and no identity between the terms reaches it** (`where_cancel.py`, `partial_head.py`; x = 15, ε = 1/3, N = 42, rows 40–42 against columns 2–14).
+    - At a node the terms barely cancel: Σ|t| / |Σt| is 1.1 plain and 1.5 after the removal. The loss is across the nodes.
+    - Plain, it is inside each term's own integral (up to 6·10⁹): the electrostatic head. The ν terms against the others, the split the integration by parts of Somerville et al. (2011) acts on, cancel by 20–10⁴ plain and by about 3 after the removal, so that identity has nothing left to remove.
+    - Every cut p ≤ p_cut above the lowest two is an exact form, but each leaves a remainder of up to 10¹⁷ (the Laurent terms are large and alternate); only the complete head (p ≤ 0) leaves a small one, so the kernel's three forms are the best of this family.
+    - The head's coefficients near p = 0 are the leading y_n coefficient times Taylor coefficients of j_k at large |s r| (about 10¹⁴ here): large at every node, cancelled at the poles by the positive powers. The loss does not follow the shape's Bernstein ellipse alone (ε = 1/2 loses more than ε = 1/3 at x = 15).
+15. **Cylinders and Chebyshev particles cancel less; the shell integrals of a coated spheroid as much** (`cancel_shapes.py`, x = 8, N = 26, s = 1.5 + 0.02i, worst over the columns of row 26).
+    - Plain: spheroid ε = 1/2 5·10⁹, ε = 0.74 8·10¹²; cylinder (half-length/radius √3, the quadrature split at the edges) 1.4·10⁷; Chebyshev (T₄, δ = 0.15) 2·10⁴. Doubling the nodes changes none of them. Somerville et al. (2012) found no cancellation of the electrostatic kind for the last two at x_max = 0.5; at larger sizes the cylinder keeps a loss like a spheroid's after the removal.
+    - With outgoing internal functions h_k(s r), the integrals a coated particle's shell adds, a spheroid loses 1.5·10⁹ (ε = 1/2) and 5·10⁹ (ε = 2) at row 26; the y_n·y_k half alone 1.3–2·10⁹. Its j_k half is the plain integral the removal treats; the y_n·y_k half would need its own analysis.
+16. **For elongated or flattened spheroids the quadrature, not the precision, sets the cost** (the kernel, fixed N = 12, x_max = 1, s = 1.5 + 0.02i).
+    - r(cos θ) is singular at cos θ = ±1/e for a prolate spheroid and at ±i/√(ε² − 1) for an oblate one. Both give the Bernstein ellipse ρ = √((h + 1)/(h − 1)), h = max(ε, 1/ε), so Gauss–Legendre needs about ln(1/tol)/ln((h + 1)/(h − 1)) nodes on [−1, 1] whatever N is.
+    - Measured, half-range nodes → relative error of Q_ext, prolate and oblate alike: h = 10, 40 → 6·10⁻⁶, 80 → 2·10⁻¹²; h = 30, 160 → 5·10⁻⁸, 320 → 10⁻¹⁵; h = 100, 640 → 10⁻⁹, 1280 → 10⁻¹⁴. Per node on [−1, 1] the error falls by 1.205, 1.061 and 1.018, against (h + 1)/(h − 1) = 1.222, 1.069 and 1.020.
+    - With those nodes the kernel converges at h = 30 and 100 up to x_max = 10, for s = 1.5 + 0.02i and for the metal s = √(−4 + 0.5i), within 10⁻¹² of double-double; N = 40 for the dielectric, 60 for the metal, as the extra multipoles of Somerville et al. (2015).
+    - The driver's node floor (`driver::shape_theta`) follows from it: the nodes for 10⁻⁴·rtol at that rate, so that 2N nodes no longer leave the quadrature, not the orders, unconverged.

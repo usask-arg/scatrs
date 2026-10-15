@@ -94,9 +94,11 @@ def angular(m, nmax, ct, st):
 
 
 def bessels(z, nmax, kind):
-    """z_n(z) and [z z_n(z)]'/z for n = 0..nmax: j_n (kind 'j') or h_n^(1) (kind 'h')."""
+    """z_n(z) and [z z_n(z)]'/z for n = 0..nmax: j_n (kind 'j'), y_n ('y') or h_n^(1) ('h')."""
     j = [mp.sqrt(mp.pi / (2 * z)) * mp.besselj(n + mp.mpf(1) / 2, z) for n in range(nmax + 1)]
-    if kind == "h":
+    if kind == "y":
+        zn = [mp.sqrt(mp.pi / (2 * z)) * mp.bessely(n + mp.mpf(1) / 2, z) for n in range(nmax + 1)]
+    elif kind == "h":
         y = [mp.sqrt(mp.pi / (2 * z)) * mp.bessely(n + mp.mpf(1) / 2, z) for n in range(nmax + 1)]
         zn = [jj + 1j * yy for jj, yy in zip(j, y, strict=False)]
     else:
@@ -104,6 +106,8 @@ def bessels(z, nmax, kind):
     # [z z_n]' / z = z_{n-1} − n z_n / z, with z_{-1} from z_0: j_{-1} = cos z/z, y_{-1} = sin z/z.
     if kind == "h":
         zm1 = (mp.cos(z) + 1j * mp.sin(z)) / z
+    elif kind == "y":
+        zm1 = mp.sin(z) / z
     else:
         zm1 = mp.cos(z) / z
     der = [None] * (nmax + 1)

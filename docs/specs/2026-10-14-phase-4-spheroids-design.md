@@ -311,3 +311,39 @@ impl<T: Real> TMatrix<T> {
 
   Separation of variables in spheroidal coordinates is recorded as the research track that could extend f64 further.
 - The study's lab becomes the reference generator's core.
+
+## 13. Changes made during the implementation of 4a
+
+- **The Rust API is `f64`.** `TMatrix`, `TMatrixOptions` and `TMatrixSolution` are not generic over `Real`. The precision paths and the refinement are specific to `f64`, and `TMatrixOptions::precision` (`Auto`, `F64`, `DoubleDouble`) gives double-double results. The kernel itself stays generic, and runs in `f64`, `DoubleDouble`, `Dual<f64, 4>` and `Dual<DoubleDouble, 4>`.
+- **The paths are chosen by an error estimate, not a Skeel estimate.**
+  - Hager's estimate of Skeel(Qᵀ) mispredicted the f64 error by up to 10⁸, since the error depends on which rows carry it.
+  - Each mode now gets ΔT ≈ −(ΔP + T ΔQ) Q⁻¹, probed with random-signed element perturbations at their bounds and random-signed vectors (O(K²)), times 4.
+  - The element bounds are 2N·u times the magnitudes the element was summed from (the regularized forms' bookkeeping). The largest true error measured was about N·u times that sum.
+  - The estimate covers the f64 error on every map point, conservatively by 10–100×.
+- **Refinement factorizes the mixed matrix rounded to f64**, not the f64 integrals. For prolate spheroids the f64 elements of the high outgoing rows keep row-relative errors near 10⁻⁵, a cancellation the electrostatic removal does not reach. A factorization of those elements does not contract the residuals. The mixed matrix rounded contracts them by about 10⁻¹⁰ per sweep, so two sweeps suffice.
+- **Convergence as in `tmatd`.**
+  - N and then n_θ converge on mode 0 alone, refined if its estimate requires.
+  - All modes are then solved once.
+  - The Greek coefficients, if asked for, are checked by one more full step.
+  - This made the loop about 3× faster than converging every mode.
+- **Outputs from the Greek expansion.** The phase matrix at any angle, Q_back = 4πF₁₁(180°)/(πx²) and g = α₁(1)/3 come from the Greek coefficients up to 2N, which are projected exactly. This avoids the poles of πₙ at sin Θ = 0. Q_abs = Q_ext − Q_sca.
+- **Derivatives in dual numbers.**
+  - The elements run in `Dual<f64, 4>`, and dT = −(dP + T dQ) Q⁻¹ uses the solve's factors.
+  - Refined modes get double-double rows in `Dual<DoubleDouble, 4>` and refined derivative residuals.
+  - Cost: 4–13 times the values, against the target of 3. Closed-form differentiated integrands remain the way to the target (follow-up).
+- **Cost of the refined path.**
+  - Double-double integrals cost about 25 times f64 per element. A mode refined with rows n ≥ N/4 in double-double costs about 15–20 times its f64 solve, against the target of 4 times.
+  - Mitigations made: the series tail collapses into suffix sums; norms are replaced by |re| + |im| in the bookkeeping; the s-scaled column fields are hoisted; the angular factors are sparse; refinement covers only the modes whose estimate needs it.
+  - Measured at `rtol` = 10⁻⁸: x = 15, ε = 2 takes 5 s. Extreme aspect ratios at the edge of the domain (ε = 1/5, x = 12) take minutes.
+- **Python.**
+  - `scatrs.mie.PhaseBuffers` is not `non_exhaustive`, so it was not extended. `scatrs::tmatrix::PhaseBuffers` and `SpheroidPhaseMatrix` have six elements instead.
+  - `scatrs.tmatrix.compute` returns a `TMatrix` with the mode blocks, the convergence information and `random_orientation`.
+- **References.**
+  - The generator ports the study's from-definition EBCM to python-flint (Arb), not mpmath: it is 30–100× faster, and the package's single pinned dependency stays.
+  - It stores `fixed` records (Q_ext, Q_sca and a sample of Tᵐ at a given N and n_θ, certified for that truncation), which test every precision path, and `converged` records (Q_ext, Q_sca, Q_abs settled to 10⁻²⁰, high-precision).
+  - Greek coefficients are not in the references. They are covered by:
+    - the sphere limit;
+    - the brute-force orientation average (10⁻¹⁵);
+    - 2π∫F₁₁ = C_sca;
+    - the external comparisons.
+- **External comparisons.** `tmatd` and pytmatrix need downloads, which wait for the user's approval.

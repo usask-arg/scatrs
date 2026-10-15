@@ -72,23 +72,43 @@ pub(crate) fn int<T: Real>(k: usize) -> T {
     T::from_f64(k as f64)
 }
 
-/// Steps from the start of a downward ratio recurrence to the first stored value: enough for
-/// the start value to be forgotten to rounding level (each step shrinks it at least sixfold).
-fn margin<T: Real>() -> usize {
-    let bits = -T::epsilon().approx_f64().log2();
-    (bits / 2.0).ceil() as usize + 4
+/// Bits of precision of `T`.
+fn bits<T: Real>() -> f64 {
+    -T::epsilon().approx_f64().log2()
 }
 
-/// The first index of a downward ratio recurrence that must reach `n_top`: above both `n_top`
-/// and 1.5|ρ| by the margin.
+/// Steps from the start of a downward ratio recurrence to the first stored value in the
+/// asymptotic case of [`start_index`]: half the bits of precision, plus 4.
+fn margin<T: Real>() -> usize {
+    (bits::<T>() / 2.0).ceil() as usize + 4
+}
+
+/// The first index of a downward ratio recurrence (from u = 0) that must reach `n_top` with
+/// the start value forgotten to rounding level, for |ρ| = `rho_abs`.
+///
+/// From k₀ = max(`n_top`, ⌈1.5|ρ|⌉), where |c_k| = (2k + 1)/|ρ| ≥ 3, every step shrinks an
+/// error by at least q² with q = |c_{k₀}| − ½ (Lemma 1 of the theory chapter), so ⌈bits/(2 log₂ q)⌉
+/// steps above k₀, plus 2, suffice: few at small |ρ|, where q is large.
+///
+/// For large |ρ| (with `n_top` < 1.5|ρ|) a start closer to |ρ| suffices. Above the turning
+/// point, at k = |ρ| + s, a step shrinks an error by about exp(−2√(2s/|ρ|)), so from |ρ| + S
+/// down to |ρ| + s₀ by exp(−(4√2/3)(S^(3/2) − s₀^(3/2))/√|ρ|): with s₀ = max(`n_top` − |ρ|, 0),
+/// S^(3/2) = s₀^(3/2) + 0.37 bits √|ρ| reaches rounding level at `n_top`. The start is
+/// |ρ| + S, with S^(3/2) larger by a factor 1.4 for safety, plus [`margin`], if that is below
+/// the start above.
 fn start_index<T: Real>(n_top: usize, rho_abs: f64) -> usize {
-    let above = (1.5 * rho_abs).ceil();
-    let above = if above < n_top as f64 {
-        n_top
-    } else {
-        above as usize
-    };
-    above + margin::<T>()
+    let bits = bits::<T>();
+    let k0 = n_top.max((1.5 * rho_abs).ceil() as usize);
+    let q = (2 * k0 + 1) as f64 / rho_abs - 0.5;
+    let enclosed = k0 + (bits / (2.0 * q.log2())).ceil() as usize + 2;
+    if n_top as f64 >= 1.5 * rho_abs {
+        return enclosed;
+    }
+    let s0 = n_top as f64 - rho_abs;
+    let s0_32 = if s0 > 0.0 { s0 * s0.sqrt() } else { 0.0 };
+    let s = (s0_32 + 1.4 * 0.37 * bits * rho_abs.sqrt()).powf(2.0 / 3.0);
+    let asymptotic = (rho_abs + s).ceil() as usize + margin::<T>();
+    asymptotic.min(enclosed)
 }
 
 /// u_k(z) for k = 1, …, n_top + 1 into `out` (index k), complex z.

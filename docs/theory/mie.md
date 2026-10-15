@@ -86,18 +86,43 @@ the minimal solution of the recurrence as $k \to \infty$ ($j_k(\rho) \sim
 T_{j+K}(0)$, all of which lie in the disk; so does the limit. Then
 $\lvert u_k\rvert = 1/\lvert c_k - u_{k+1}\rvert \le 1/(\lvert c_k\rvert - 1)$. ∎
 
-scatrs runs the recurrence downward from $u = 0$ at an index
-$k_0 = \max(N + 1, \lceil 1.5\lvert\rho\rvert\rceil)$ plus a margin of half the bits of the
-type, plus 4. Above $1.5\lvert\rho\rvert$, $\lvert c_k\rvert \ge 3$, so both the true value
-and the iterate stay in the disk of radius $\tfrac12$, where $T_k$ contracts distances by
-at least $(\lvert c_k\rvert - \tfrac12)^2 \ge 6.25$: the start value is forgotten to rounding
-level before the first stored order. There is no continued fraction to converge, so no
-convergence test and no failure mode. An exactly zero denominator (at an exact zero of
-$\psi_{k-1}$, a pole of $D_{k-1}$) is replaced by a rounding-level value, as in Lentz's
-method. For real $m$ the real recurrence is used: twice as fast, and for $m = 1$ it reproduces
-$u_k(x)$ bit for bit, so $N_a = N_b = 0$ (below) and $a_n = b_n = 0$ exactly at the orders
-computed from ratios, $n > \lfloor x\rfloor$ (all orders for $x < 1$). The orders
-$n \le \lfloor x\rfloor$ come from $\psi_n$ and $\chi_n$ and are only rounding-level.
+scatrs runs the recurrence downward from $u = 0$ at an index chosen so that the start value
+is forgotten to rounding level by the highest order stored, $N + 1$. Two rules give such an
+index, and the lower one is used. Below, $b$ is the number of bits of the type (53 for `f64`).
+
+*Enclosure.* From $k_0 = \max(N + 1, \lceil 1.5\lvert\rho\rvert\rceil)$ upward,
+$\lvert c_k\rvert \ge 3$, so both the true value and the iterate stay in the disk of radius
+$\tfrac12$, where $T_k$ contracts distances by at least $(\lvert c_k\rvert - \tfrac12)^2 \ge
+q^2$, $q = \lvert c_{k_0}\rvert - \tfrac12 \ge 2.5$. Starting
+$\lceil b/(2\log_2 q)\rceil + 2$ steps above $k_0$ leaves an error below $2^{-b}$ relative to
+$u_{k_0}$; the two extra steps cover the factor $1/\lvert u_{k_0}\rvert \le
+\lvert c_{k_0}\rvert + \tfrac12$. That is 23 steps in `f64` at $q = 2.5$, and only a few for
+small spheres, where $q$ is large: 6 at $x = 0.1$, $m = 1.33$.
+
+*Turning point.* For large $\lvert\rho\rvert$, with $N + 1 < 1.5\lvert\rho\rvert$, the enclosure
+starts about $\lvert\rho\rvert/2$ steps above the turning point $k \approx \lvert\rho\rvert$,
+and the recurrence already contracts strongly closer to it. For real $\rho$ at $k = \rho + s$,
+$1 \ll s \ll \rho$, a step contracts an error by about $\exp(-2\sqrt{2s/\rho})$ (the ratio of
+the minimal to the dominant solution, which behave like the Airy functions $\mathrm{Ai}$ and
+$\mathrm{Bi}$ there), and from $\rho + S$ down to $\rho + s_0$ by about
+$\exp\bigl(-\tfrac{4\sqrt2}{3}(S^{3/2} - s_0^{3/2})/\sqrt\rho\bigr)$. With $s_0 = \max(N + 1 -
+\lvert\rho\rvert, 0)$, rounding level $2^{-b}$ at $N + 1$ needs $S^{3/2} = s_0^{3/2} +
+0.37\,b\sqrt{\lvert\rho\rvert}$. scatrs takes $S^{3/2}$ 1.4 times as large, starts at
+$\lvert\rho\rvert + S$ plus a margin of half the bits of the type, plus 4, and uses this start
+where it is below the enclosure's. In `f64` with $s_0 = 0$, $S \approx 9\lvert\rho\rvert^{1/3}$:
+at $x = 10^4$, $m = 1.33$, the recurrence for $D_n(mx)$ starts at order 13 547 rather than at
+the enclosure's 19 973, and the one for $u_k(x)$ (next section) at 10 296 rather than 15 023.
+This rule is an asymptotic estimate for real $\rho$, not a bound; the accuracy maps, which span
+absorbing and non-absorbing spheres up to $x = 2\cdot10^4$ and $\lvert m\rvert$ up to 14, and
+the double-double references, where the same rule must reach $b = 106$ bits, validate it.
+
+There is no continued fraction to converge, so no convergence test and no failure mode. An
+exactly zero denominator (at an exact zero of $\psi_{k-1}$, a pole of $D_{k-1}$) is replaced by
+a rounding-level value, as in Lentz's method. For real $m$ the real recurrence is used: twice as
+fast, and for $m = 1$ it reproduces $u_k(x)$ bit for bit, so $N_a = N_b = 0$ (below) and $a_n =
+b_n = 0$ exactly at the orders computed from ratios, $n > \lfloor x\rfloor$ (all orders for $x <
+1$). The orders $n \le \lfloor x\rfloor$ come from $\psi_n$ and $\chi_n$ and are only
+rounding-level.
 
 ## Riccati–Bessel functions: a hybrid scheme
 
@@ -440,20 +465,22 @@ longer sum lies inside the certified ball.
 
 <!-- synced with scatrs/benches/mie.rs -->
 
-$O(N + \lvert m\rvert x)$ per sphere: the $D_n(mx)$ recurrence starts at about
-$1.5\lvert m\rvert x$ (or $N$ if that is larger). Measured with
+$O(N + \lvert m\rvert x)$ per sphere: the $D_n(mx)$ recurrence starts a little above
+$\lvert m\rvert x$ (or $N$ if that is larger). Measured with
 `cargo bench -p scatrs --bench mie` on an Apple M4 Pro, timings varying by about 10% between
 runs:
 
-- the efficiencies at $m = 1.5 + 0.01i$: 0.55 µs at $x = 0.1$, 1.1 µs at $x = 10$, 36 µs at
-  $x = 1000$ and 0.34 ms at $x = 10^4$, about 34 ns per term for large $x$; the cost per term
-  grows with $\lvert m\rvert$, to about 130 ns at $\lvert m\rvert = 10$;
-- at real $m$, about 25% less: the values take a real recurrence;
-- with the full $(x, \mathrm{Re}\,m, \mathrm{Im}\,m)$ Jacobian, the same derivative work in
-  both cases: 1.2 to 1.8 times the values at $m = 1.5 + 0.01i$, and 1.4 to 2.0 times at
-  $m = 1.5$. The values cost less still at smaller real $m$, so for non-absorbing spheres with
-  $m \lesssim 1.4$ the Jacobian costs more than the target of twice the values: up to 2.2
-  times at $m = 0.75$, $x \ge 1000$;
+- the efficiencies at $m = 1.5 + 0.01i$: 0.21 µs at $x = 0.1$, 0.71 µs at $x = 10$, 22 µs at
+  $x = 1000$ and 0.20 ms at $x = 10^4$, about 20 ns per term for large $x$; the cost per term
+  grows with $\lvert m\rvert$, to about 60 ns at $m = 10 + 0.01i$ and 80 ns at $m = 10 + 10i$;
+- at real $m$, within 5% of that: the values take a real recurrence there, but it saves
+  little;
+- with the full $(x, \mathrm{Re}\,m, \mathrm{Im}\,m)$ Jacobian, 1.7 to 2.3 times the values at
+  $m = 1.5 + 0.01i$ and 1.6 to 2.3 times at $m = 1.5$, more than twice the values from
+  $x \approx 100$. The derivative work per term is about the same at every $m$ while the values
+  cost less at smaller $\lvert m\rvert$, so the ratio is largest for non-absorbing spheres of
+  small $m$ (up to 2.9 times at $m = 0.75$, $x \ge 1000$) and smallest at large $\lvert m\rvert$
+  (1.4 to 1.5 times at $\lvert m\rvert = 10$);
 - amplitudes at 100 angles add about 4 ns per angle and term, most of it in the recurrences
   of $\pi_n$ and $\tau_n$; from an {rust}`AngularTable <scatrs::mie::AngularTable>`, which
   evaluates those once for every sphere at the same angles, about 0.75 ns.

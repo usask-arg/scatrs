@@ -3,18 +3,29 @@
 //! num-complex computes 1/(c + id) as (c − id)/(c² + d²). That overflows once |c| or |d|
 //! exceeds about 10¹⁵⁴ (in `f64` and `DoubleDouble` alike) and underflows below about
 //! 10⁻¹⁵⁴. Smith's algorithm (Smith 1962) divides by the larger of c and d first, so the
-//! intermediate values stay near the size of the result.
+//! intermediate values stay near the size of the result, but it takes two dependent divisions,
+//! which dominate the downward recurrences of the Mie kernels; so the plain formula is used
+//! where c² + d² is far from both limits, and Smith's elsewhere.
 
 use num_complex::Complex;
 
 use crate::scalar::Real;
 
-/// 1/z by Smith's algorithm: correct to a few ulps of |1/z| wherever 1/z is a normal number.
+/// 1/z: correct to a few ulps of |1/z| wherever 1/z is a normal number. By (c − id)/(c² + d²)
+/// when 10⁻³⁰⁰ < c² + d² < 10³⁰⁰ (one division), and by Smith's algorithm otherwise, or when d
+/// is zero, where it gives 1/c exactly: so a complex recurrence at real arguments (as for dual
+/// numbers seeded in Im m) reproduces the real one bit for bit.
 ///
 /// Infinite or NaN for z = 0, like `1.0 / 0.0`.
 #[inline]
 pub(crate) fn inv<T: Real>(z: Complex<T>) -> Complex<T> {
     let (c, d) = (z.re, z.im);
+    let s = c * c + d * d;
+    let s_f64 = s.approx_f64();
+    if s_f64 > 1e-300 && s_f64 < 1e300 && d.approx_f64() != 0.0 {
+        let t = s.recip();
+        return Complex::new(c * t, -(d * t));
+    }
     if d.abs() <= c.abs() {
         let r = d / c;
         let t = (c + d * r).recip();

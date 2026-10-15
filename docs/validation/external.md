@@ -308,7 +308,7 @@ core radius half the outer) 4.3 to 8.4 times faster:
   quadrupoles and octupoles of modes 0 to 2 that are not zero to that order, including the
   couplings between electric and magnetic multipoles. Their errors are $O(X^7)$, so as the
   size halves, the relative error of $|T|^2$ must fall 16-fold for the two dipolar elements and
-  4-fold for the others, and that of the averaged cross sections 16-fold. Between $	ilde X$ =
+  4-fold for the others, and that of the averaged cross sections 16-fold. Between $\tilde X$ =
   0.08 and 0.04 (equal-volume size parameter), for prolate ($c/a$ = 3) and oblate ($c/a$ = 1/2
   and 1/4) spheroids, absorbing or not, scatrs's elements and cross sections approach them at
   exactly these rates (measured exponents 4.00 and 2.00, within 0.03;
@@ -354,15 +354,19 @@ its tolerances $10^{-6}$ and $10^{-9}$ (the five failures excluded):
 
 | $x$ | scatrs, $10^{-6}$ (s) | scatrs, $10^{-8}$ (s) | tmatd, $10^{-6}$ (s) | tmatd, $10^{-9}$ (s) |
 |---|---|---|---|---|
-| 1 | 0.006 | 0.008 | 0.026 | 0.041 |
-| 3 | 0.020 | 0.024 | 0.080 | 0.18 |
-| 6 | 0.061 | 0.095 | 0.35 | 0.47 |
-| 10 | 2.1 | 3.0 | 1.2 | 1.7 |
+| 1 | 0.006 | 0.008 | 0.030 | 0.049 |
+| 3 | 0.021 | 0.025 | 0.090 | 0.19 |
+| 6 | 0.065 | 0.10 | 0.37 | 0.49 |
+| 10 | 1.6 | 2.6 | 1.2 | 1.8 |
 
-scatrs is 4 to 7 times faster up to $x = 6$. At $x = 10$ the modes that need refinement in
-double-double dominate its time, and tmatd is faster for most spheroids: up to 3 times for the
-extreme aspect ratios, where scatrs refines most (the slowest, $\varepsilon = 1/5$ with the
-absorbing index, took 154 s, a spheroid tmatd cannot compute).
+scatrs at `rtol` $10^{-8}$ is 4 to 6 times faster than tmatd at $10^{-9}$ up to $x = 6$ (slower
+for one spheroid, by 1.14 times). At $x = 10$ the modes that need refinement in double-double
+dominate its time: it is faster for 11 of the 15 spheroids tmatd computes, and up to 1.5 times
+slower for the other four (aspect ratios 1/3, 3 and 5 with the weakly absorbing indices). The
+slowest spheroid, $\varepsilon = 1/5$ with the absorbing index, which tmatd cannot compute,
+takes 48 s. scatrs also runs its quadrature in parallel, with results that do not depend on the
+number of threads: on the 12 cores of the same machine every spheroid at $x = 10$ took between
+0.03 and 8 s.
 
 We thank M. I. Mishchenko, L. D. Travis and the NASA Goddard Institute for Space Studies for
 making the code publicly available; its references are listed in {doc}`/references`.

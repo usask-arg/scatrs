@@ -3,6 +3,7 @@
 
 pub mod check;
 pub mod greek;
+pub mod layered;
 pub mod mie;
 
 use std::collections::{BTreeMap, BTreeSet};

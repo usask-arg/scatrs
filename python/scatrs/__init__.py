@@ -3,7 +3,7 @@
 from importlib.metadata import PackageNotFoundError as _PackageNotFoundError
 from importlib.metadata import version as _version
 
-from scatrs import _scatrs, ensemble, mie, particles, refractive, size, special
+from scatrs import _scatrs, ensemble, layered, mie, particles, refractive, size, special
 from scatrs.ensemble import (
     Ensemble,
     EnsembleGreek,
@@ -18,7 +18,7 @@ from scatrs.errors import (
     OutsideValidatedDomainError,
     ScatrsError,
 )
-from scatrs.particles import Sphere
+from scatrs.particles import LayeredSphere, Sphere
 from scatrs.size import (
     Gamma,
     LogNormal,
@@ -37,6 +37,7 @@ __all__ = [
     "EnsembleResult",
     "Gamma",
     "InvalidInputError",
+    "LayeredSphere",
     "LogNormal",
     "Mixture",
     "ModifiedGamma",
@@ -50,6 +51,7 @@ __all__ = [
     "Tabulated",
     "__version__",
     "ensemble",
+    "layered",
     "mie",
     "particles",
     "refractive",

@@ -70,10 +70,11 @@
 //! use them to check the closed-form derivatives.
 
 mod amplitudes;
+mod coefficients;
 mod domain;
 mod efficiencies;
 mod greek;
-mod kernel;
+pub(crate) mod kernel;
 mod phase;
 
 use num_complex::Complex;
@@ -83,6 +84,7 @@ use crate::{Error, Result};
 
 pub(crate) use amplitudes::for_each_order;
 pub use amplitudes::{AmplitudeBuffers, AngularTable};
+pub(crate) use coefficients::{Coefficients, Group};
 pub use domain::{MieOutput, VALIDATED_DOMAIN, ValidatedDomain};
 pub use efficiencies::{Efficiencies, EfficiencyJacobian};
 pub use greek::{GreekCoefficients, GreekProjector, MAX_GREEK_ORDER, PhaseTables};
@@ -142,7 +144,7 @@ fn terms(x: f64, c: f64, d: f64) -> usize {
 
 /// The default truncation for scalar type `T`: [`default_n_max`] for `f64` (and `Dual<f64>`),
 /// ⌈x + 12x^(1/3) + 6⌉ for `DoubleDouble`.
-fn default_terms<T: Real>(x: f64) -> usize {
+pub(crate) fn default_terms<T: Real>(x: f64) -> usize {
     if T::epsilon().approx_f64() < 2f64.powi(-60) {
         terms(x, 12.0, 6.0)
     } else {

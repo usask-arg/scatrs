@@ -179,8 +179,85 @@ worst_c(greek, gnames)
 plot_map(greek, gx, gm, gnames, rows=2, height=7)
 ```
 
+(layered-accuracy)=
+## Layered spheres
+
+<!-- synced with scatrs/src/layered/domain.rs rustdoc -->
+
+The outputs of {mod}`scatrs.layered` follow the same model ({doc}`/theory/layered`), with the
+condition numbers summed over every layer's parameters and their own constants. Inside their
+validated domain ($10^{-6} \le x_L \le 10^4$ with $|m_l|\,x_L \le 3\cdot10^4$, every index in
+the sphere's domain, at most 16 layers; the derivatives up to $x_L = 1000$), four tests enforce
+them:
+
+- `scatrs/tests/layered_reference.rs` compares every output with the Arb reference values,
+  computed without scatrs's algorithm by matching the fields at each interface directly
+  ({doc}`/theory/reference-suite`): 362 particles in the domain, from $x_L = 10^{-6}$ to
+  $10^4$, including thin and thick shells, absorbing cores in clear shells, metallic shells,
+  near-unity and high-contrast indices, air shells, and up to ten layers; and the derivatives
+  for 8 particles. The 8 reference particles outside the domain must be refused.
+- `scatrs/tests/layered_accuracy_map.rs` compares the double-precision results with
+  double-double on 101 outer size parameters from $10^{-6}$ to $10^4$ against 51 particles:
+  12 pairs of core and shell indices at core radius fractions $10^{-3}$, 0.3, 0.9 and 0.999,
+  and three- and ten-layer particles.
+- `scatrs/tests/layered_greek_accuracy_map.rs` does the same for the phase matrix and the
+  Greek coefficients, on 46 outer size parameters up to $10^3$ against 21 particles.
+- `scatrs/tests/layered.rs` checks the identities that need no reference: one layer, and
+  layers of one index, are bitwise the homogeneous sphere; a shell of zero thickness changes
+  nothing; an air shell gives the bare core; the Rayleigh limit; and the derivatives against
+  central differences.
+
+The worst $C$ of each map against its declared constant, and the worst $C$ over all particles
+at each size (empty above $x_L = 1000$ for the derivatives):
+
+```{code-cell} python
+def worst_layered(name):
+    """Print the worst C of each output of a layered map; check the margin of 4."""
+    data = json.loads(Path("data", name).read_text())
+    print(f"{len(data['x'])} outer size parameters × {len(data['particles'])} particles")
+    print(f"{'output':<26}{'worst C':>10}{'declared':>10}")
+    for output, rows in data["c"].items():
+        # null: outside the (derivatives') domain.
+        c = np.array(rows, dtype=float)
+        worst = np.nanmax(c)
+        print(f"{output:<26}{worst:10.2f}{data['declared'][output]:10.0f}")
+        assert 4 * worst <= data["declared"][output], f"{output}: margin below 4"
+    return data
+
+
+layered_map = worst_layered("layered-accuracy-map.json")
+layered_greek = worst_layered("layered-greek-accuracy-map.json")
+```
+
+```{code-cell} python
+fig, axes = plt.subplots(1, 2, figsize=(11, 4), sharey=True, layout="constrained")
+for ax, data, title in [
+    (axes[0], layered_map, "coefficients, efficiencies, amplitudes"),
+    (axes[1], layered_greek, "phase matrix, Greek coefficients"),
+]:
+    x = np.array(data["x"])
+    for output, rows in data["c"].items():
+        c = np.array(rows, dtype=float)
+        with np.errstate(all="ignore"):
+            worst = np.nanmax(np.where(np.isnan(c), -np.inf, c), axis=1)
+        worst[~np.isfinite(worst)] = np.nan
+        ax.loglog(x, worst, lw=1, label=output)
+    ax.set(xlabel="outer size parameter $x_L$", title=title)
+axes[0].set_ylabel("worst $C$ over the particles")
+for ax in axes:
+    ax.legend(fontsize=7)
+plt.show()
+```
+
+The values use at most a quarter of their constants anywhere, and so do the derivatives up to
+$x_L = 1000$. Above it, the amplitude derivatives of thin lossless shells grow with the
+particle: for an air shell of a thousandth of the radius, the forward amplitude's derivative
+with respect to the shell's index would exceed its constant by 1.7 times at $x_L = 10^4$. The
+rounding errors of the recurrences at the shell's two surfaces are alike from one order to the
+next, so they add up in the forward sum, and the derivatives' domain ends at 1000.
+
 (ensemble-accuracy)=
-## Ensembles of spheres
+## Ensembles
 
 <!-- synced with scatrs/tests/ensemble.rs -->
 
@@ -192,10 +269,11 @@ solutions' own errors, declared above, are far smaller at the tolerances the ens
 and are not included.
 
 The test `error_estimates_bound_the_true_errors` in `scatrs/tests/ensemble.rs` checks the
-estimates for every change. It computes nine distributions at rtol $10^{-6}$ and again at rtol
-$10^{-11}$ (the reference), with backscattering refined, the Greek coefficients to order 24,
-the phase matrix at $\mu = 1, 0.7, 0, -1$, and the derivatives with respect to every parameter
-of the distribution and to $\mathrm{Re}\,m$ and $\mathrm{Im}\,m$:
+estimates for every change. It computes nine distributions of spheres and two of layered
+spheres at rtol $10^{-6}$ and again at rtol $10^{-11}$ (the reference), with backscattering
+refined, the Greek coefficients to order 24, the phase matrix at $\mu = 1, 0.7, 0, -1$, and the
+derivatives with respect to every parameter of the distribution and of the particle
+($\mathrm{Re}\,m$ and $\mathrm{Im}\,m$ of every layer, and the radius fractions):
 
 | Distribution | $m$ | $\lambda$ |
 |---|---|---|
@@ -208,6 +286,8 @@ of the distribution and to $\mathrm{Re}\,m$ and $\mathrm{Im}\,m$:
 | power law, $\alpha = 3.5$ on $[0.01, 5]$ | $1.5 + 0.01i$ | 0.5 |
 | tabulated, $(0.05, 0.1, 0.4, 1)$, densities $(0, 3, 1, 0.2)$ | $2 + 0.5i$ | 0.4 |
 | multimodal: weight 1000, lognormal $r_g = 0.05$, $\sigma_g = 1.5$; weight 1, lognormal $r_g = 1$, $\sigma_g = 1.4$ | $1.53 + 0.005i$ | 0.55 |
+| lognormal, $r_g = 0.1$, $\sigma_g = 1.6$, coated (core fraction 0.6) | core $1.95 + 0.79i$, shell $1.43 + 10^{-8}i$ | 0.55 |
+| gamma, $a = 0.8$, $b = 0.1$, three layers (fractions 0.3, 0.8) | $1.6 + 0.3i$, $2 + 0.05i$, $1.33 + 10^{-6}i$ | 0.5 |
 
 Both results must converge, and the refined cross sections must be within rtol of the
 reference ($g$ within $2\cdot10^{-6}$). The true errors of the refined outputs

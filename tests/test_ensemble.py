@@ -124,8 +124,12 @@ def test_mixture_results_carry_each_components_refractive_index():
     a = Ensemble(Sphere(1.45), LOGNORMAL)
     b = Ensemble(Sphere(refractive.Cauchy(1.5, 0.004)), LOGNORMAL)
     r = Mixture([(1.0, a), (1.0, b)]).compute(wl)
-    assert r.refractive_index.shape == (2, 1, 3) and r.c_ext.shape == (1, 3)
+    assert r.c_ext.shape == (1, 3)
+    assert isinstance(r.refractive_index, tuple) and len(r.refractive_index) == 2
+    assert r.refractive_index[0].shape == (1, 3)
     np.testing.assert_array_equal(r.refractive_index[1], b.particle.refractive_index.evaluate(wl))
+    with pytest.raises(ValueError):
+        r.refractive_index[0].flags.writeable = True
     assert dict(r.grid) == {}
 
 
@@ -275,9 +279,24 @@ def test_error_estimates_of_derivatives_and_convergence_flags():
 def test_a_single_distribution_has_one_component():
     from scatrs import _scatrs
 
-    spec = (("lognormal", 0.08, 1.6), np.array([1.5 + 0j]), 1.0)
+    spec = (("lognormal", 0.08, 1.6), ("sphere", np.array([1.5 + 0j])), 1.0)
     with pytest.raises(InvalidInputError, match="exactly one component"):
         _scatrs.ensemble_parameters([spec, spec], False)
+
+
+@pytest.mark.parametrize(
+    ("particle", "message"),
+    [
+        (("cube", np.array([1.5 + 0j])), "unknown particle kind"),
+        (("sphere", [1.5 + 0j]), "must be an array"),
+        ([1.5 + 0j], "must be a tuple"),
+    ],
+)
+def test_the_engine_rejects_unknown_particles(particle, message):
+    from scatrs import _scatrs
+
+    with pytest.raises(TypeError, match=message):
+        _scatrs.ensemble_parameters([(("lognormal", 0.08, 1.6), particle, 1.0)], False)
 
 
 def test_a_grid_shares_nodes_and_matches_each_distribution():

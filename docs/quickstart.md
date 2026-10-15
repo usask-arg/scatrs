@@ -110,7 +110,11 @@ print("alpha1 at 0.55 µm:", r.greek.alpha1[1, :4])
 ```
 
 A refractive index that varies with wavelength is a model from {mod}`scatrs.refractive`, such
-as a table of measured values ({doc}`theory/refractive-index`). A {class}`~scatrs.Mixture` combines
+as a table of measured values ({doc}`theory/refractive-index`). A
+{class}`~scatrs.LayeredSphere` is a core in concentric shells, such as black carbon coated in
+sulfate, with the core's radius 60% of the particle's:
+`scatrs.LayeredSphere.coated(1.95 + 0.79j, 1.43 + 1e-8j, core_fraction=0.6)`
+({doc}`examples/coated`). A {class}`~scatrs.Mixture` combines
 ensembles of different materials. Distribution parameters given as arrays make a grid of
 distributions, computed at once, as an optics table needs:
 
@@ -128,7 +132,8 @@ print("C_ext of r_g = 0.05 µm, σ_g = 1.6:", t.c_ext[0, 1])
 
 `derivatives=True` adds derivatives of every output, in closed form, at little extra cost:
 with respect to the size parameter and the real and imaginary parts of the refractive index
-for single spheres, and to the distribution parameters and refractive index for ensembles.
+for single spheres, and to the distribution parameters and the particle's refractive indices
+(and a layered sphere's radius fractions) for ensembles.
 
 ```{code-cell} python
 q = mie.efficiencies(x, m, derivatives=True)

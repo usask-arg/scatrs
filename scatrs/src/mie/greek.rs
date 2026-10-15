@@ -1,6 +1,7 @@
 //! Greek (generalized-spherical-function) expansion coefficients of the phase matrix.
 
-use super::{MAX_MIE_ORDER, MieSolution, Normalization, PhaseBuffers};
+use super::amplitudes::no_derivatives;
+use super::{Coefficients, Group, MAX_MIE_ORDER, MieSolution, Normalization, PhaseBuffers};
 use crate::scalar::Real;
 use crate::special::{GaussLegendre, MAX_GAUSS_LEGENDRE_POINTS, gauss_legendre, wigner_d};
 use crate::{Error, Result};
@@ -322,23 +323,6 @@ fn buffers<T>(b: &mut [Vec<T>; 4]) -> PhaseBuffers<'_, T> {
 }
 
 impl<T: Real> MieSolution<'_, T> {
-    /// The order L asked for (default 2N) and the projector for orders up to min(L, 2N): the
-    /// coefficients of an N-term sphere vanish above 2N.
-    fn greek_projector(&self, order: Option<usize>) -> Result<(usize, GreekProjector<T>)> {
-        let n = self.n_terms();
-        let order = order.unwrap_or(2 * n);
-        check_order(order)?;
-        let projected = order.min(2 * n);
-        let nodes = n + (projected + 1).div_ceil(2);
-        if nodes > MAX_GAUSS_LEGENDRE_POINTS {
-            return Err(Error::InvalidInput(format!(
-                "the Greek coefficients of a sphere with {n} terms up to order {projected} need \
-                 {nodes} quadrature nodes, more than {MAX_GAUSS_LEGENDRE_POINTS}"
-            )));
-        }
-        Ok((order, GreekProjector::new(projected, nodes)?))
-    }
-
     /// The Greek coefficients up to `order` (default: all, 2N), exact up to rounding: the phase
     /// matrix at the nodes of an (N + ⌈(L + 1)/2⌉)-point Gauss–Legendre rule, projected. Orders
     /// above 2N are exactly 0. Normalized coefficients are divided by the projected α₁ at l = 0,
@@ -358,6 +342,50 @@ impl<T: Real> MieSolution<'_, T> {
         order: Option<usize>,
         normalization: Normalization,
     ) -> Result<GreekCoefficients<T>> {
+        self.coefficients().greek(order, normalization)
+    }
+
+    /// The Greek coefficients and their derivatives with respect to x, Re m and Im m.
+    ///
+    /// # Errors
+    ///
+    /// As [`greek`](Self::greek), and [`Error::InvalidInput`] if the solution was computed
+    /// without derivatives.
+    pub fn greek_with_derivatives(
+        &self,
+        order: Option<usize>,
+        normalization: Normalization,
+    ) -> Result<(GreekCoefficients<T>, [GreekCoefficients<T>; 3])> {
+        let g = self.group().ok_or_else(|| no_derivatives("Greek"))?;
+        self.coefficients()
+            .greek_with_derivatives(order, &g, normalization)
+    }
+}
+
+impl<T: Real> Coefficients<'_, T> {
+    /// The order L asked for (default 2N) and the projector for orders up to min(L, 2N): the
+    /// coefficients of an N-term sphere vanish above 2N.
+    fn greek_projector(&self, order: Option<usize>) -> Result<(usize, GreekProjector<T>)> {
+        let n = self.n_terms();
+        let order = order.unwrap_or(2 * n);
+        check_order(order)?;
+        let projected = order.min(2 * n);
+        let nodes = n + (projected + 1).div_ceil(2);
+        if nodes > MAX_GAUSS_LEGENDRE_POINTS {
+            return Err(Error::InvalidInput(format!(
+                "the Greek coefficients of a sphere with {n} terms up to order {projected} need \
+                 {nodes} quadrature nodes, more than {MAX_GAUSS_LEGENDRE_POINTS}"
+            )));
+        }
+        Ok((order, GreekProjector::new(projected, nodes)?))
+    }
+
+    /// As [`MieSolution::greek`].
+    pub(crate) fn greek(
+        &self,
+        order: Option<usize>,
+        normalization: Normalization,
+    ) -> Result<GreekCoefficients<T>> {
         let (order, projector) = self.greek_projector(order)?;
         let n = projector.nodes().len();
         let mut f: [Vec<T>; 4] = core::array::from_fn(|_| vec![T::zero(); n]);
@@ -372,22 +400,14 @@ impl<T: Real> MieSolution<'_, T> {
         Ok(g)
     }
 
-    /// The Greek coefficients and their derivatives with respect to x, Re m and Im m.
-    ///
-    /// # Errors
-    ///
-    /// As [`greek`](Self::greek), and [`Error::InvalidInput`] if the solution was computed
-    /// without derivatives.
-    pub fn greek_with_derivatives(
+    /// As [`MieSolution::greek_with_derivatives`], with the derivatives of `group`.
+    pub(crate) fn greek_with_derivatives(
         &self,
         order: Option<usize>,
+        group: &Group<'_, T>,
         normalization: Normalization,
     ) -> Result<(GreekCoefficients<T>, [GreekCoefficients<T>; 3])> {
-        let Some(jac) = self.efficiencies_jacobian() else {
-            return Err(Error::InvalidInput(
-                "Greek derivatives need a solution from Mie::compute_with_derivatives".into(),
-            ));
-        };
+        let jac = self.efficiencies_jacobian(group);
         let (order, projector) = self.greek_projector(order)?;
         let n = projector.nodes().len();
         let mut f: [[Vec<T>; 4]; 4] =
@@ -396,6 +416,7 @@ impl<T: Real> MieSolution<'_, T> {
             let [v, dx, dr, di] = &mut f;
             self.phase_matrix_with_derivatives(
                 projector.nodes(),
+                group,
                 Normalization::Unnormalized,
                 buffers(v),
                 [buffers(dx), buffers(dr), buffers(di)],

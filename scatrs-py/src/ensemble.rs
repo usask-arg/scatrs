@@ -1,8 +1,10 @@
 //! Bindings for `scatrs::ensemble`.
 //!
 //! Distributions arrive as tagged tuples from `scatrs.ensemble` (`("lognormal", r_g, σ_g)`,
-//! `("tabulated", radii, densities)`, `("multimodal", [(weight, spec), …])`, …), components as
-//! `(spec, refractive indices, weight)`, with one refractive index per wavelength. Results
+//! `("tabulated", radii, densities)`, `("multimodal", [(weight, spec), …])`, …), particles as
+//! tagged tuples too (`("sphere", m)`, one refractive index per wavelength; `("layered",
+//! fractions, m)`, L − 1 radius fractions and m of shape (L, wavelengths)), and components as
+//! `(spec, particle, weight)`. Results
 //! return as a dict of arrays, one row per wavelength, which `scatrs.ensemble` wraps;
 //! derivatives are selected by their index in `ensemble_parameters`. Arrays are borrowed with
 //! `try_readonly` (see `special.rs`), and the outputs are computed and laid out without the GIL.
@@ -13,8 +15,9 @@ use pyo3::exceptions::PyTypeError;
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyTuple};
 use scatrs::ensemble::{
-    Component, EnsembleOptions, EnsembleParam, EnsembleResult, GreekOrder, Outputs,
-    SizeDistribution, compute_batch, compute_mixture, mixture_parameters, parameters,
+    Component, EnsembleOptions, EnsembleParam, EnsembleResult, GreekOrder, Outputs, Particle,
+    SizeDistribution, compute_batch_with_particle, compute_mixture, mixture_parameters,
+    parameters_with_particle,
 };
 use scatrs::mie::{MAX_GREEK_ORDER, Normalization};
 
@@ -73,18 +76,63 @@ fn distribution(spec: &Bound<'_, PyAny>) -> PyResult<SizeDistribution> {
     })
 }
 
-/// A component as passed from Python: (spec, refractive indices, weight).
-type Item<'py> = (Bound<'py, PyAny>, Bound<'py, PyArrayDyn<Complex64>>, f64);
+/// A particle from its tagged tuple.
+fn particle(spec: &Bound<'_, PyAny>) -> PyResult<Particle> {
+    let t = spec
+        .cast::<PyTuple>()
+        .map_err(|_| PyTypeError::new_err("a particle spec must be a tuple"))?;
+    let kind: String = t.get_item(0)?.extract()?;
+    match kind.as_str() {
+        "sphere" => {
+            let m = t.get_item(1)?;
+            let m = m.cast::<PyArrayDyn<Complex64>>().map_err(|_| {
+                PyTypeError::new_err("a sphere's refractive indices must be an array")
+            })?;
+            let m = borrow(m, "refractive_index")?;
+            Ok(Particle::sphere(m.as_array().iter().copied().collect()))
+        }
+        "layered" => {
+            let f = t.get_item(1)?;
+            let f = f.cast::<PyArrayDyn<f64>>().map_err(|_| {
+                PyTypeError::new_err("a layered sphere's radius fractions must be an array")
+            })?;
+            let f = borrow(f, "radius_fraction")?;
+            let m = t.get_item(2)?;
+            let m = m.cast::<PyArrayDyn<Complex64>>().map_err(|_| {
+                PyTypeError::new_err("a layered sphere's refractive indices must be an array")
+            })?;
+            let m = borrow(m, "refractive_index")?;
+            let m = m.as_array();
+            if m.ndim() != 2 {
+                return Err(PyTypeError::new_err(format!(
+                    "a layered sphere's refractive indices must have shape (layers, \
+                     wavelengths), got {} axes",
+                    m.ndim()
+                )));
+            }
+            let layers = m.outer_iter().map(|row| row.iter().copied().collect());
+            Ok(Particle::layered_sphere(
+                f.as_array().iter().copied().collect(),
+                layers.collect(),
+            ))
+        }
+        other => Err(PyTypeError::new_err(format!(
+            "unknown particle kind {other:?}"
+        ))),
+    }
+}
+
+/// A component as passed from Python: (distribution spec, particle spec, weight).
+type Item<'py> = (Bound<'py, PyAny>, Bound<'py, PyAny>, f64);
 
 /// Components from their items.
 fn components(items: &[Item<'_>]) -> PyResult<Vec<Component>> {
     items
         .iter()
-        .map(|(spec, m, w)| {
-            let m = borrow(m, "refractive_index")?;
-            Ok(Component::new(
+        .map(|(spec, p, w)| {
+            Ok(Component::with_particle(
                 distribution(spec)?,
-                m.as_array().iter().copied().collect(),
+                particle(p)?,
                 *w,
             ))
         })
@@ -105,7 +153,7 @@ fn all_parameters(py: Python<'_>, cs: &[Component], mixture: bool) -> PyResult<V
     Ok(if mixture {
         mixture_parameters(cs)
     } else {
-        parameters(&cs[0].distribution)
+        parameters_with_particle(&cs[0].distribution, &cs[0].particle)
     })
 }
 
@@ -388,15 +436,15 @@ fn into_dict(py: Python<'_>, arrays: Arrays) -> PyResult<Bound<'_, PyDict>> {
     Ok(out)
 }
 
-/// The ensemble outputs of each distribution (tagged tuples `specs`) at each wavelength, sharing
-/// the size nodes: as `ensemble_compute` without derivatives, one row per (distribution,
-/// wavelength), distribution-major.
+/// The ensemble outputs of each distribution (tagged tuples `specs`) of one particle (a tagged
+/// tuple) at each wavelength, sharing the size nodes: as `ensemble_compute` without derivatives,
+/// one row per (distribution, wavelength), distribution-major.
 #[pyfunction]
 #[allow(clippy::too_many_arguments)]
 pub fn ensemble_compute_batch<'py>(
     py: Python<'py>,
     specs: Vec<Bound<'py, PyAny>>,
-    refractive_index: Bound<'py, PyArrayDyn<Complex64>>,
+    particle_spec: Bound<'py, PyAny>,
     wavelengths: Bound<'py, PyArrayDyn<f64>>,
     greek: Option<u64>,
     all_orders: bool,
@@ -410,11 +458,7 @@ pub fn ensemble_compute_batch<'py>(
     let err = |e| to_pyerr(py, e);
     let distributions: Vec<SizeDistribution> =
         specs.iter().map(distribution).collect::<PyResult<_>>()?;
-    let m: Vec<Complex64> = borrow(&refractive_index, "refractive_index")?
-        .as_array()
-        .iter()
-        .copied()
-        .collect();
+    let particle = particle(&particle_spec)?;
     let wl: Vec<f64> = borrow(&wavelengths, "wavelength")?
         .as_array()
         .iter()
@@ -435,10 +479,11 @@ pub fn ensemble_compute_batch<'py>(
     let (opts, order) = settings.options(mu, Vec::new(), n, 0).map_err(err)?;
     let arrays = py
         .detach(|| -> scatrs::Result<Arrays> {
-            let results: Vec<EnsembleResult> = compute_batch(&distributions, &wl, &m, &opts)?
-                .into_iter()
-                .flatten()
-                .collect();
+            let results: Vec<EnsembleResult> =
+                compute_batch_with_particle(&distributions, &wl, &particle, &opts)?
+                    .into_iter()
+                    .flatten()
+                    .collect();
             arrays(&results, 0, width(order, &results), n_mu)
         })
         .map_err(err)?;

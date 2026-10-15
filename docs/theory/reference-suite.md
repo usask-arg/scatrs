@@ -78,6 +78,8 @@ coefficient records are all certified. {doc}`/theory/mie` derives the bound.
 | `dd_parse.jsonl` | 2 | exact values of 300 random decimal literals and of hand-picked edge cases |
 | `dd_trig.jsonl` | 14 | `sin`, `cos`, `tan`, `atan`, `asin`, `acos` and `atan2`, each with 200 random inputs and a record of edge cases |
 | `gauss_legendre.jsonl` | 17 | see below |
+| `layered.jsonl` | 740 | see below |
+| `layered_derivatives.jsonl` | 8 | see below |
 | `mie.jsonl` | 612 | see below |
 | `mie_derivatives.jsonl` | 160 | see below |
 | `mie_greek.jsonl` | 36 | see below |
@@ -127,7 +129,22 @@ coefficients come from Gauss–Legendre quadrature on Arb's own Legendre roots, 
 polynomial integrands, and the Wigner d-functions from their three-term recurrence in ball
 arithmetic, so every value is certified.
 
-The committed data take about 13.3 MB, within the 20 MB budget, which a test enforces.
+**`layered.jsonl`** holds two records per layered sphere, for 370 particles, computed without
+scatrs's algorithm: the generator evaluates $\psi_n$ and $\xi_n$ of every layer's arguments
+and matches the fields at each interface directly, all in ball arithmetic. The particles are
+two-layer spheres of 9 pairs of indices (black carbon in sulfate, water on ice, a silica core
+in a gold-like shell, absorbing cores in a clear shell, high contrast, near unity and an air
+shell) with core radius fractions $10^{-3}$, 0.3, 0.9 and 0.999, at outer size parameters from
+$10^{-6}$ to $10^4$; three- and ten-layer particles; and 40 random particles of 2 to 8
+layers. A `,coefficients` record holds $a_n$ and $b_n$ at up to 11 orders, certified; a
+`,series` record the efficiencies, $g$, and $S_1$, $S_2$ at 9 angles, summed to
+$\lceil x + 18x^{1/3} + 32 \rceil$ terms without a tail bound, so high-precision.
+**`layered_derivatives.jsonl`** holds, for 8 particles of up to three layers, the derivatives
+of the coefficients and the efficiencies with respect to every layer's $x_l$, $\mathrm{Re}\,m_l$
+and $\mathrm{Im}\,m_l$, from five-point central differences in ball arithmetic
+(high-precision).
+
+The committed data take about 17.5 MB, within the 20 MB budget, which a test enforces.
 
 ## How the tests use it
 

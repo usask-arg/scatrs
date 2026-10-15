@@ -31,7 +31,7 @@ pub const MAX_MIE_VALUES: usize = 1 << 27;
 
 /// An error raised without the GIL: a core error, converted to its `scatrs.errors` class once
 /// the GIL is held again, or a Python exception that needs no GIL to create.
-enum Failure {
+pub(crate) enum Failure {
     Core(scatrs::Error),
     Py(PyErr),
 }
@@ -49,7 +49,7 @@ impl From<PyErr> for Failure {
 }
 
 impl Failure {
-    fn into_pyerr(self, py: Python<'_>) -> PyErr {
+    pub(crate) fn into_pyerr(self, py: Python<'_>) -> PyErr {
         match self {
             Self::Core(e) => to_pyerr(py, e),
             Self::Py(e) => e,
@@ -57,7 +57,7 @@ impl Failure {
     }
 }
 
-fn invalid(message: String) -> scatrs::Error {
+pub(crate) fn invalid(message: String) -> scatrs::Error {
     scatrs::Error::InvalidInput(message)
 }
 
@@ -106,7 +106,7 @@ fn prepare(
 }
 
 /// Prefixes an input error with the index of the failing element.
-fn at(i: usize) -> impl FnOnce(scatrs::Error) -> scatrs::Error {
+pub(crate) fn at(i: usize) -> impl FnOnce(scatrs::Error) -> scatrs::Error {
     move |e| match e {
         scatrs::Error::InvalidInput(s) => invalid(format!("element {i}: {s}")),
         scatrs::Error::OutsideValidatedDomain(s) => {
@@ -148,7 +148,7 @@ fn largest_n_terms(
 
 /// The most values an angular table may hold, 2²² (32 MiB). Above it, the amplitudes come from
 /// the cosines, which give the same values (bitwise) without the table.
-const MAX_TABLE_VALUES: usize = 1 << 22;
+pub(crate) const MAX_TABLE_VALUES: usize = 1 << 22;
 
 /// An angular table at the cosines `mu` for every sphere, if there are several to share it and
 /// it holds at most `MAX_TABLE_VALUES`.
@@ -198,7 +198,11 @@ fn bounded(
 }
 
 /// `count` complex values, at most `MAX_MIE_VALUES`.
-fn complex_values(what: &str, count: Option<usize>, derivatives: bool) -> scatrs::Result<usize> {
+pub(crate) fn complex_values(
+    what: &str,
+    count: Option<usize>,
+    derivatives: bool,
+) -> scatrs::Result<usize> {
     bounded(
         what,
         count,
@@ -211,7 +215,11 @@ fn complex_values(what: &str, count: Option<usize>, derivatives: bool) -> scatrs
 
 /// `count` real values, at most 2·`MAX_MIE_VALUES` (the bytes of `MAX_MIE_VALUES` complex
 /// values).
-fn real_values(what: &str, count: Option<usize>, derivatives: bool) -> scatrs::Result<usize> {
+pub(crate) fn real_values(
+    what: &str,
+    count: Option<usize>,
+    derivatives: bool,
+) -> scatrs::Result<usize> {
     bounded(
         what,
         count,
@@ -222,7 +230,7 @@ fn real_values(what: &str, count: Option<usize>, derivatives: bool) -> scatrs::R
     )
 }
 
-fn normalization(normalized: bool) -> Normalization {
+pub(crate) fn normalization(normalized: bool) -> Normalization {
     if normalized {
         Normalization::Normalized
     } else {
@@ -232,7 +240,7 @@ fn normalization(normalized: bool) -> Normalization {
 
 /// The cosines `mu` as a vector, every one in [−1, 1] (checked here too, so that an empty x
 /// does not hide a bad cosine).
-fn cosines(py: Python<'_>, mu: &PyReadonlyArrayDyn<'_, f64>) -> PyResult<Vec<f64>> {
+pub(crate) fn cosines(py: Python<'_>, mu: &PyReadonlyArrayDyn<'_, f64>) -> PyResult<Vec<f64>> {
     let mu: Vec<f64> = mu.as_array().iter().copied().collect();
     if let Some((j, v)) = mu
         .iter()
@@ -250,7 +258,7 @@ fn cosines(py: Python<'_>, mu: &PyReadonlyArrayDyn<'_, f64>) -> PyResult<Vec<f64
 }
 
 /// A zeroed vector of `len` values, or `MemoryError`.
-fn zeros<T: Clone + Default>(len: usize, what: &str) -> PyResult<Vec<T>> {
+pub(crate) fn zeros<T: Clone + Default>(len: usize, what: &str) -> PyResult<Vec<T>> {
     let mut v = Vec::new();
     v.try_reserve_exact(len).map_err(|e| {
         PyMemoryError::new_err(format!("cannot allocate {len} values for {what}: {e}"))
@@ -259,7 +267,7 @@ fn zeros<T: Clone + Default>(len: usize, what: &str) -> PyResult<Vec<T>> {
     Ok(v)
 }
 
-fn shape_error(e: impl std::fmt::Display) -> PyErr {
+pub(crate) fn shape_error(e: impl std::fmt::Display) -> PyErr {
     PyRuntimeError::new_err(format!("output shape: {e}"))
 }
 
@@ -604,7 +612,7 @@ pub fn mie_phase_matrix<'py>(
 
 /// The rows `row` of the four consecutive arrays of `per_array` values in `buf`, as
 /// phase-matrix buffers.
-fn phase_buffers(
+pub(crate) fn phase_buffers(
     buf: &mut [f64],
     per_array: usize,
     row: std::ops::Range<usize>,
@@ -627,7 +635,7 @@ type GreekArrays<'py> = (
 );
 
 /// The arrays of `g` in the order α₁, α₂, α₃, α₄, β₁, β₂.
-fn greek_arrays(g: &GreekCoefficients<f64>) -> [&[f64]; 6] {
+pub(crate) fn greek_arrays(g: &GreekCoefficients<f64>) -> [&[f64]; 6] {
     [
         &g.alpha1, &g.alpha2, &g.alpha3, &g.alpha4, &g.beta1, &g.beta2,
     ]

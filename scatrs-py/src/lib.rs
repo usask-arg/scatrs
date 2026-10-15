@@ -8,6 +8,7 @@ use pyo3::prelude::*;
 
 mod ensemble;
 mod errors;
+mod layered;
 mod mie;
 mod special;
 mod testing;
@@ -31,6 +32,12 @@ fn _scatrs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("MAX_GREEK_ORDER", scatrs::mie::MAX_GREEK_ORDER)?;
     m.add_function(wrap_pyfunction!(mie::mie_phase_matrix, m)?)?;
     m.add_function(wrap_pyfunction!(mie::mie_greek, m)?)?;
+    m.add("MAX_LAYERS", scatrs::layered::MAX_LAYERS)?;
+    m.add_function(wrap_pyfunction!(layered::layered_efficiencies, m)?)?;
+    m.add_function(wrap_pyfunction!(layered::layered_coefficients, m)?)?;
+    m.add_function(wrap_pyfunction!(layered::layered_amplitudes, m)?)?;
+    m.add_function(wrap_pyfunction!(layered::layered_phase_matrix, m)?)?;
+    m.add_function(wrap_pyfunction!(layered::layered_greek, m)?)?;
     m.add_function(wrap_pyfunction!(ensemble::ensemble_parameters, m)?)?;
     m.add_function(wrap_pyfunction!(ensemble::ensemble_compute, m)?)?;
     m.add_function(wrap_pyfunction!(ensemble::ensemble_compute_batch, m)?)?;

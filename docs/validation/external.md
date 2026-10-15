@@ -182,6 +182,116 @@ assert np.all(q.q_abs == 0)
 assert np.allclose(q.q_ext, q.q_sca, rtol=1e-13, atol=0)
 ```
 
+## Layered spheres
+
+A layered sphere has its own checks from physics, which do not depend on any code.
+
+**An air shell changes nothing.** A shell of the medium's own index ($m = 1$) around a core is
+not there: the coefficients are the bare core's. scatrs computes them from the shell's
+functions at both radii, so the check exercises the whole recursion.
+
+```{code-cell} python
+from scatrs import layered
+
+for x_core, m_core in [(0.5, 1.5 + 0.01j), (12.0, 1.95 + 0.79j), (80.0, 1.33)]:
+    core = mie.coefficients(x_core, m_core)
+    n = int(core.n_terms)
+    coated = layered.coefficients([x_core, 1.6 * x_core], [m_core, 1.0], n_max=n,
+                                  allow_unvalidated=True)
+    err = max(abs(coated.a[:n] - core.a).max(), abs(coated.b[:n] - core.b).max())
+    scale = max(abs(core.a).max(), abs(core.b).max())
+    print(f"x_core = {x_core:g}, m = {m_core}: relative difference {err / scale:.1e}")
+    assert err <= 1e-12 * scale
+```
+
+**Layers of one index are one sphere.** Splitting a sphere into shells of its own index
+gives the homogeneous sphere of the outer radius, exactly:
+
+```{code-cell} python
+q = layered.efficiencies([2.0, 5.0, 9.0], [1.5 + 0.01j] * 3)
+q0 = mie.efficiencies(9.0, 1.5 + 0.01j)
+assert q.q_ext == q0.q_ext and q.q_abs == q0.q_abs and q.g == q0.g
+```
+
+**The Rayleigh limit.** A coated sphere much smaller than the wavelength scatters as a
+dipole of the electrostatic polarizability of a coated sphere (Bohren & Huffman 1983,
+chapter 5): with $\varepsilon = m^2$ of the core (1) and shell (2) and the core volume fraction
+$f = (x_1/x_2)^3$, $a_1 \to -\tfrac{2i}{3}x^3\,\tilde\alpha$ with
+
+$$\tilde\alpha = \frac{(\varepsilon_2 - 1)(\varepsilon_1 + 2\varepsilon_2) + f(2\varepsilon_2 + 1)(\varepsilon_1 - \varepsilon_2)}
+                      {(\varepsilon_2 + 2)(\varepsilon_1 + 2\varepsilon_2) + 2f(\varepsilon_2 - 1)(\varepsilon_1 - \varepsilon_2)},$$
+
+with corrections of order $x^2$:
+
+```{code-cell} python
+x_out = 1e-4
+for m1, m2 in [(1.95 + 0.79j, 1.43 + 0.01j), (1.33, 10 + 10j), (0.2 + 3j, 1.45)]:
+    for f_r in (0.1, 0.5, 0.9):
+        e1, e2, f = m1 * m1, m2 * m2, f_r**3
+        ratio = ((e2 - 1) * (e1 + 2 * e2) + f * (2 * e2 + 1) * (e1 - e2)) / (
+            (e2 + 2) * (e1 + 2 * e2) + 2 * f * (e2 - 1) * (e1 - e2)
+        )
+        a1 = layered.coefficients([f_r * x_out, x_out], [m1, m2]).a[0]
+        assert abs(a1 / (-2j / 3 * x_out**3 * ratio) - 1) < 10 * x_out**2
+print("the Rayleigh limit holds to order x² for every case")
+```
+
+**Energy.** A particle of real indices absorbs nothing, and for absorbing ones the extinction
+equals the forward amplitude (the optical theorem), computed independently:
+
+```{code-cell} python
+q = layered.efficiencies([3.0, 6.0, 9.0], [1.5, 2.5, 1.33])
+assert q.q_abs == 0 and q.q_ext == q.q_sca
+x, m = [20.0, 35.0], [1.95 + 0.79j, 1.43 + 1e-8j]
+q, s = layered.efficiencies(x, m), layered.amplitudes(x, m, 1.0)
+assert abs(4 / 35.0**2 * s.s1.real / q.q_ext - 1) < 1e-12
+```
+
+### Comparison with scattnlay
+
+[scattnlay](https://github.com/ovidiopr/scattnlay) (Peña & Pal 2009) computes layered spheres
+by the recursion scatrs builds on, in double precision. The script
+`benchmarks/compare_scattnlay.py` measures both, and the textbook method (direct matching at
+the interfaces in double precision, as Bohren & Huffman's BHCOAT does), against the 362 Arb
+reference cases inside scatrs's validated domain. The results it wrote are in
+`benchmarks/results/2026-10-14-arm64-scattnlay.json`. Apple M4 Pro, macOS; scatrs 0.2.0,
+scattnlay 2.4, 2026-10-14.
+
+| output | scatrs: largest error | scattnlay: cases above $10^{-10}$, above $10^{-6}$, failed | direct matching: the same |
+|---|---|---|---|
+| $a_n$, $b_n$ | $2.9\cdot10^{-12}$ | 118, 50, 9 | 143, 94, 43 |
+| $Q_\text{ext}$ | $4.1\cdot10^{-12}$ | 102, 63, 6 | 157, 111, 59 |
+| $Q_\text{sca}$ | $4.1\cdot10^{-12}$ | 100, 49, 6 | 151, 108, 59 |
+| $Q_\text{abs}$ | $6.3\cdot10^{-11}$ | 174, 71, 6 | 205, 110, 53 |
+| $Q_\text{back}$ | $5.4\cdot10^{-11}$ | 110, 46, 6 | 188, 109, 59 |
+| $g$ | $7.3\cdot10^{-12}$ | 108, 55, 9 | 173, 131, 59 |
+| $S_1$, $S_2$ | $9.3\cdot10^{-11}$ | 140, 50, 6 | 142, 50, 0 |
+
+The errors are measured as in {doc}`accuracy` (relative, $Q_\text{back}$ relative to the larger
+of $Q_\text{back}$ and $Q_\text{sca}$, $g$ to the larger of $|g|$ and $10^{-3}$, the amplitudes
+to the larger of $|S|$ and its RMS size); a failure is a missing or non-finite result. Where
+scattnlay disagrees, Arb sides with scatrs. Its errors have identifiable causes:
+
+- **Absorption.** scattnlay computes $Q_\text{abs} = Q_\text{ext} - Q_\text{sca}$, which loses
+  the digits of a weak absorption: a relative error of 2.4 for a core of index
+  $1.5 + 10^{-8}i$ in a clear shell at $x_L = 1$. scatrs computes $Q_\text{abs}$ directly
+  ({doc}`/theory/layered`).
+- **Very small particles.** Below $x \approx 10^{-3}$, scattnlay reduces its number of terms
+  ("nmax value was changed due to unexpected error") or fails, and its numerators lose the
+  cancelling terms that scatrs removes.
+- **Near-unity indices and air shells**: for a small core in an air shell, errors of
+  $4\cdot10^{-7}$ in the coefficients and $3\cdot10^{-4}$ in $g$.
+
+On one thread, scatrs computed the efficiencies of a coated sphere (black carbon in sulfate,
+core radius half the outer) 4.3 to 8.4 times faster:
+
+| $x_L$ | scatrs (µs) | with every derivative (µs) | scattnlay (µs) |
+|---|---|---|---|
+| 1 | 1.7 | 9.0 | 14.2 |
+| 10 | 2.7 | 18.4 | 21.1 |
+| 100 | 10.9 | 83.7 | 58.3 |
+| 1000 | 104 | | 451 |
+
 ## Size distributions
 
 For averages over size distributions, {doc}`sasktran2` compares scatrs with the Mie

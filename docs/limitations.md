@@ -10,8 +10,8 @@ describes what the accuracy figures rest on.
 
 ## Scope and availability
 
-- scatrs computes homogeneous spheres, single or averaged over size distributions and
-  external mixtures.
+- scatrs computes homogeneous spheres and layered spheres (a core and concentric shells),
+  single or averaged over size distributions and external mixtures.
 - Python exposes only `f64` results. Double-double precision and the `Dual` derivatives of
   the Rust core are available from Rust only.
 - The tests run on Linux (x86_64), macOS (arm64) and Windows (x86_64) for every change. The
@@ -21,6 +21,31 @@ describes what the accuracy figures rest on.
   $x = 2\cdot10^3$, $10^4$ and $2\cdot10^4$. The released wheels are also tested on aarch64
   Linux and Windows and on Intel macOS; the s390x, ppc64le and musl Linux wheels are built
   but not tested. 32-bit platforms are not supported.
+
+## Layered spheres
+
+- **Concentric layers only.** Inclusions off the centre, and non-spherical layers, need the
+  T-matrix method, which is planned.
+- **Validated domain.** $10^{-6} \le x_L \le 10^4$ with $|m_l|\,x_L \le 3\cdot10^4$ for every
+  layer, every index in the sphere's domain, and at most 16 layers. Beyond
+  $|m|\,x_L = 3\cdot10^4$ the narrow resonances of thin lossless shells of high index cost the
+  coefficients up to $10^9$ ulps. A single layer is a sphere, with the sphere's domain.
+- **Derivatives up to $x_L = 1000$.** Above it the derivatives lose accuracy faster than the
+  values for thin lossless shells (the forward amplitude's derivative with respect to the index
+  of a thin air shell around a large core reached errors of $2\cdot10^{-8}$ relative at
+  $x_L = 10^4$). Above $x_L = 1000$, `compute_with_derivatives` and `derivatives=` raise
+  `OutsideValidatedDomain` unless `allow_unvalidated` is set.
+- **Cost.** About 2.5 times a sphere of the outer size for a coated sphere, and roughly
+  1.5 times more per further layer ({doc}`theory/layered`).
+- **Fixed fractions in ensembles.** A size distribution of layered spheres scales the whole
+  particle: each interface stays at a fixed fraction of the outer radius. A coating of fixed
+  thickness across the sizes, and fractions or layer indices as grid axes, are not available.
+- **Ensemble derivatives up to $x_L = 1000$.** The derivatives of an ensemble of layered
+  spheres with respect to their indices and fractions, and the radius derivative of a
+  monodisperse one, need every size node within the derivatives' domain: a distribution that
+  reaches a larger outer size parameter raises `OutsideValidatedDomain` unless
+  `allow_unvalidated` is set. Its values, and its derivatives with respect to the
+  distribution's own parameters, are validated up to $10^4$.
 
 ## Mie scattering
 

@@ -2,7 +2,8 @@
 
 use num_complex::Complex;
 
-use super::{AmplitudeBuffers, AngularTable, MieSolution};
+use super::amplitudes::no_derivatives;
+use super::{AmplitudeBuffers, AngularTable, Coefficients, Group, MieSolution};
 use crate::scalar::Real;
 use crate::{Error, Result};
 
@@ -71,17 +72,6 @@ pub(crate) fn element_derivatives<T: Real>(
 }
 
 impl<T: Real> MieSolution<'_, T> {
-    /// The scale of the phase matrix: 4/(x²Q_sca) for [`Normalization::Normalized`], 4/x² for
-    /// [`Normalization::Unnormalized`].
-    fn phase_scale(&self, normalization: Normalization) -> T {
-        let x = self.x();
-        let four_x2 = T::from_f64(4.0) / (x * x);
-        match normalization {
-            Normalization::Normalized => four_x2 / self.efficiencies().q_sca,
-            Normalization::Unnormalized => four_x2,
-        }
-    }
-
     /// The phase matrix F₁₁, F₁₂, F₃₃, F₃₄ at the cosines `mu` (Bohren & Huffman 1983, §4.4),
     /// scaled by `normalization`.
     ///
@@ -90,6 +80,84 @@ impl<T: Real> MieSolution<'_, T> {
     /// As [`amplitudes`](Self::amplitudes), and [`Error::InvalidInput`] if a buffer's length
     /// differs from `mu.len()`. Nothing is written then.
     pub fn phase_matrix(
+        &self,
+        mu: &[T],
+        normalization: Normalization,
+        out: PhaseBuffers<'_, T>,
+    ) -> Result<()> {
+        self.coefficients().phase_matrix(mu, normalization, out)
+    }
+
+    /// The phase matrix at the cosines of `table`, as [`phase_matrix`](Self::phase_matrix)
+    /// gives it (bitwise).
+    ///
+    /// # Errors
+    ///
+    /// As [`amplitudes_from_table`](Self::amplitudes_from_table).
+    pub fn phase_matrix_from_table(
+        &self,
+        table: &AngularTable<T>,
+        normalization: Normalization,
+        out: PhaseBuffers<'_, T>,
+    ) -> Result<()> {
+        self.coefficients()
+            .phase_matrix_from_table(table, normalization, out)
+    }
+
+    /// The phase matrix and its derivatives with respect to x, Re m and Im m, in `d[0]`, `d[1]`
+    /// and `d[2]`. For [`Normalization::Normalized`] the derivatives include those of Q_sca.
+    ///
+    /// # Errors
+    ///
+    /// As [`phase_matrix`](Self::phase_matrix), and [`Error::InvalidInput`] if the solution was
+    /// computed without derivatives.
+    pub fn phase_matrix_with_derivatives(
+        &self,
+        mu: &[T],
+        normalization: Normalization,
+        values: PhaseBuffers<'_, T>,
+        d: [PhaseBuffers<'_, T>; 3],
+    ) -> Result<()> {
+        let g = self.group().ok_or_else(|| no_derivatives("phase-matrix"))?;
+        self.coefficients()
+            .phase_matrix_with_derivatives(mu, &g, normalization, values, d)
+    }
+
+    /// The phase matrix and its derivatives at the cosines of `table`, as
+    /// [`phase_matrix_with_derivatives`](Self::phase_matrix_with_derivatives) gives them
+    /// (bitwise).
+    ///
+    /// # Errors
+    ///
+    /// As [`phase_matrix_from_table`](Self::phase_matrix_from_table), and
+    /// [`Error::InvalidInput`] if the solution was computed without derivatives.
+    pub fn phase_matrix_with_derivatives_from_table(
+        &self,
+        table: &AngularTable<T>,
+        normalization: Normalization,
+        values: PhaseBuffers<'_, T>,
+        d: [PhaseBuffers<'_, T>; 3],
+    ) -> Result<()> {
+        let g = self.group().ok_or_else(|| no_derivatives("phase-matrix"))?;
+        self.coefficients()
+            .phase_matrix_with_derivatives_from_table(table, &g, normalization, values, d)
+    }
+}
+
+impl<T: Real> Coefficients<'_, T> {
+    /// The scale of the phase matrix: 4/(x²Q_sca) for [`Normalization::Normalized`], 4/x² for
+    /// [`Normalization::Unnormalized`].
+    fn phase_scale(&self, normalization: Normalization) -> T {
+        let x = self.x;
+        let four_x2 = T::from_f64(4.0) / (x * x);
+        match normalization {
+            Normalization::Normalized => four_x2 / self.efficiencies().q_sca,
+            Normalization::Unnormalized => four_x2,
+        }
+    }
+
+    /// As [`MieSolution::phase_matrix`].
+    pub(crate) fn phase_matrix(
         &self,
         mu: &[T],
         normalization: Normalization,
@@ -109,13 +177,8 @@ impl<T: Real> MieSolution<'_, T> {
         Ok(())
     }
 
-    /// The phase matrix at the cosines of `table`, as [`phase_matrix`](Self::phase_matrix)
-    /// gives it (bitwise).
-    ///
-    /// # Errors
-    ///
-    /// As [`amplitudes_from_table`](Self::amplitudes_from_table).
-    pub fn phase_matrix_from_table(
+    /// As [`MieSolution::phase_matrix_from_table`].
+    pub(crate) fn phase_matrix_from_table(
         &self,
         table: &AngularTable<T>,
         normalization: Normalization,
@@ -154,16 +217,11 @@ impl<T: Real> MieSolution<'_, T> {
         }
     }
 
-    /// The phase matrix and its derivatives with respect to x, Re m and Im m, in `d[0]`, `d[1]`
-    /// and `d[2]`. For [`Normalization::Normalized`] the derivatives include those of Q_sca.
-    ///
-    /// # Errors
-    ///
-    /// As [`phase_matrix`](Self::phase_matrix), and [`Error::InvalidInput`] if the solution was
-    /// computed without derivatives.
-    pub fn phase_matrix_with_derivatives(
+    /// As [`MieSolution::phase_matrix_with_derivatives`], with the derivatives of `group`.
+    pub(crate) fn phase_matrix_with_derivatives(
         &self,
         mu: &[T],
+        group: &Group<'_, T>,
         normalization: Normalization,
         values: PhaseBuffers<'_, T>,
         d: [PhaseBuffers<'_, T>; 3],
@@ -172,26 +230,22 @@ impl<T: Real> MieSolution<'_, T> {
             let [s1, s2, dx1, dx2, dm1, dm2] = s;
             self.amplitudes_with_derivatives(
                 mu,
+                group,
                 AmplitudeBuffers { s1, s2 },
                 AmplitudeBuffers { s1: dx1, s2: dx2 },
                 AmplitudeBuffers { s1: dm1, s2: dm2 },
             )
         })?;
-        self.phase_derivatives_from_amplitudes(&s, normalization, values, d);
+        self.phase_derivatives_from_amplitudes(&s, group, normalization, values, d);
         Ok(())
     }
 
-    /// The phase matrix and its derivatives at the cosines of `table`, as
-    /// [`phase_matrix_with_derivatives`](Self::phase_matrix_with_derivatives) gives them
-    /// (bitwise).
-    ///
-    /// # Errors
-    ///
-    /// As [`phase_matrix_from_table`](Self::phase_matrix_from_table), and
-    /// [`Error::InvalidInput`] if the solution was computed without derivatives.
-    pub fn phase_matrix_with_derivatives_from_table(
+    /// As [`MieSolution::phase_matrix_with_derivatives_from_table`], with the derivatives of
+    /// `group`.
+    pub(crate) fn phase_matrix_with_derivatives_from_table(
         &self,
         table: &AngularTable<T>,
+        group: &Group<'_, T>,
         normalization: Normalization,
         values: PhaseBuffers<'_, T>,
         d: [PhaseBuffers<'_, T>; 3],
@@ -200,16 +254,17 @@ impl<T: Real> MieSolution<'_, T> {
             let [s1, s2, dx1, dx2, dm1, dm2] = s;
             self.amplitudes_with_derivatives_from_table(
                 table,
+                group,
                 AmplitudeBuffers { s1, s2 },
                 AmplitudeBuffers { s1: dx1, s2: dx2 },
                 AmplitudeBuffers { s1: dm1, s2: dm2 },
             )
         })?;
-        self.phase_derivatives_from_amplitudes(&s, normalization, values, d);
+        self.phase_derivatives_from_amplitudes(&s, group, normalization, values, d);
         Ok(())
     }
 
-    /// After checking that the solution has derivatives and the buffers' lengths are `len`,
+    /// After checking that the buffers' lengths are `len`,
     /// S₁, S₂, ∂S₁/∂x, ∂S₂/∂x, dS₁/dm, dS₂/dm from `amplitudes`.
     fn phase_derivative_amplitudes(
         &self,
@@ -218,12 +273,6 @@ impl<T: Real> MieSolution<'_, T> {
         d: &[PhaseBuffers<'_, T>; 3],
         amplitudes: impl FnOnce([&mut [Complex<T>]; 6]) -> Result<()>,
     ) -> Result<[Vec<Complex<T>>; 6]> {
-        if self.derivatives().is_none() {
-            return Err(Error::InvalidInput(
-                "phase-matrix derivatives need a solution from Mie::compute_with_derivatives"
-                    .into(),
-            ));
-        }
         values.check(len, "phase-matrix")?;
         for buffers in d {
             buffers.check(len, "derivative")?;
@@ -239,27 +288,31 @@ impl<T: Real> MieSolution<'_, T> {
     fn phase_derivatives_from_amplitudes(
         &self,
         s: &[Vec<Complex<T>>; 6],
+        group: &Group<'_, T>,
         normalization: Normalization,
         values: PhaseBuffers<'_, T>,
         d: [PhaseBuffers<'_, T>; 3],
     ) {
-        let jac = self
-            .efficiencies_jacobian()
-            .expect("a solution with derivatives");
+        let jac = self.efficiencies_jacobian(group);
         // The scale c and its derivatives: c = 4/(x²Q) or 4/x².
-        let x = self.x();
+        let x = self.x;
         let c = self.phase_scale(normalization);
         let two = T::from_f64(2.0);
+        // Only the outer size parameter's derivative has the term of 4/x².
         let dc = match normalization {
             Normalization::Normalized => {
                 let q = self.efficiencies().q_sca;
-                [
-                    -c * (two / x + jac.x.q_sca / q),
-                    -c * jac.m_re.q_sca / q,
-                    -c * jac.m_im.q_sca / q,
-                ]
+                let x_part = if group.outer {
+                    -c * (two / x + jac.x.q_sca / q)
+                } else {
+                    -c * (jac.x.q_sca / q)
+                };
+                [x_part, -c * jac.m_re.q_sca / q, -c * jac.m_im.q_sca / q]
             }
-            Normalization::Unnormalized => [-two * c / x, T::zero(), T::zero()],
+            Normalization::Unnormalized => {
+                let x_part = if group.outer { -two * c / x } else { T::zero() };
+                [x_part, T::zero(), T::zero()]
+            }
         };
         let i1 = Complex::new(T::zero(), T::one());
         let v = values;

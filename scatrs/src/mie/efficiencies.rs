@@ -2,7 +2,7 @@
 
 use num_complex::Complex;
 
-use super::MieSolution;
+use super::{Coefficients, Group, MieSolution};
 use crate::scalar::Real;
 
 /// Efficiencies (cross sections divided by the geometric cross section πr²) and the
@@ -117,17 +117,30 @@ fn derivative_sums<T: Real>(
 impl<T: Real> MieSolution<'_, T> {
     /// The efficiencies and the asymmetry parameter.
     pub fn efficiencies(&self) -> Efficiencies<T> {
-        self.efficiencies_from(&value_sums(&self.state.a, &self.state.b))
+        self.coefficients().efficiencies()
+    }
+
+    /// The derivatives of the efficiencies with respect to x, Re m and Im m, if the solution
+    /// was computed by [`Mie::compute_with_derivatives`](super::Mie::compute_with_derivatives).
+    pub fn efficiencies_jacobian(&self) -> Option<EfficiencyJacobian<T>> {
+        let g = self.group()?;
+        Some(self.coefficients().efficiencies_jacobian(&g))
+    }
+}
+
+impl<T: Real> Coefficients<'_, T> {
+    /// The efficiencies and the asymmetry parameter.
+    pub(crate) fn efficiencies(&self) -> Efficiencies<T> {
+        self.efficiencies_from(&value_sums(self.a, self.b))
     }
 
     /// The efficiencies from the value sums of [`value_sums`].
     fn efficiencies_from(&self, sums: &Sums<T>) -> Efficiencies<T> {
-        let s = self.state;
-        let inv_x = s.x.recip();
+        let inv_x = self.x.recip();
         let inv_x2 = inv_x * inv_x;
         let two_x2 = T::from_f64(2.0) * inv_x2;
         let q_sca = two_x2 * sums.sca;
-        let q_abs = two_x2 * s.abs_sum;
+        let q_abs = two_x2 * self.abs_sum;
         let g = if sums.sca == T::zero() {
             T::zero()
         } else {
@@ -142,31 +155,35 @@ impl<T: Real> MieSolution<'_, T> {
         }
     }
 
-    /// The derivatives of the efficiencies with respect to x, Re m and Im m, if the solution
-    /// was computed by [`Mie::compute_with_derivatives`](super::Mie::compute_with_derivatives).
-    pub fn efficiencies_jacobian(&self) -> Option<EfficiencyJacobian<T>> {
-        let s = self.state;
-        if !s.derivatives {
-            return None;
-        }
+    /// The derivatives of the efficiencies with respect to the size parameter and the real and
+    /// imaginary parts of the refractive index of `group` (Q = (2/x²)·sum: only the outer size
+    /// parameter's derivative has the term of 2/x²).
+    pub(crate) fn efficiencies_jacobian(&self, group: &Group<'_, T>) -> EfficiencyJacobian<T> {
+        let (a, b, d) = (self.a, self.b, &group.d);
         let i1 = Complex::new(T::zero(), T::one());
         let two = T::from_f64(2.0);
-        let inv_x = s.x.recip();
+        let inv_x = self.x.recip();
         let inv_x2 = inv_x * inv_x;
         let two_x2 = two * inv_x2;
-        let values = value_sums(&s.a, &s.b);
+        let values = value_sums(a, b);
         let q = self.efficiencies_from(&values);
         let mut out = [q; 3];
         for (p, o) in out.iter_mut().enumerate() {
             let sums = match p {
-                0 => derivative_sums(&s.a, &s.b, |k| s.da_dx[k], |k| s.db_dx[k]),
-                1 => derivative_sums(&s.a, &s.b, |k| s.da_dm[k], |k| s.db_dm[k]),
-                _ => derivative_sums(&s.a, &s.b, |k| i1 * s.da_dm[k], |k| i1 * s.db_dm[k]),
+                0 => derivative_sums(a, b, |k| d.da_dx[k], |k| d.db_dx[k]),
+                1 => derivative_sums(a, b, |k| d.da_dm[k], |k| d.db_dm[k]),
+                _ => derivative_sums(a, b, |k| i1 * d.da_dm[k], |k| i1 * d.db_dm[k]),
             };
             // Q = (2/x²)·sum: ∂Q/∂x = (2/x²)·∂sum/∂x − (2/x)·Q.
-            let x_term = |v: T| if p == 0 { two * inv_x * v } else { T::zero() };
+            let x_term = |v: T| {
+                if p == 0 && group.outer {
+                    two * inv_x * v
+                } else {
+                    T::zero()
+                }
+            };
             let q_sca = two_x2 * sums.sca - x_term(q.q_sca);
-            let q_abs = two_x2 * s.abs_sum_jacobian[p] - x_term(q.q_abs);
+            let q_abs = two_x2 * group.abs_sum[p] - x_term(q.q_abs);
             let q_back = two * re_mul_conj(sums.back, values.back) * inv_x2 - x_term(q.q_back);
             // g = 2G/S with S the scattering sum: ∂g = (2∂G − g ∂S)/S (x cancels).
             let g = if values.sca == T::zero() {
@@ -183,6 +200,6 @@ impl<T: Real> MieSolution<'_, T> {
             };
         }
         let [x, m_re, m_im] = out;
-        Some(EfficiencyJacobian { x, m_re, m_im })
+        EfficiencyJacobian { x, m_re, m_im }
     }
 }

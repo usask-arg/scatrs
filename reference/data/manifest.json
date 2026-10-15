@@ -56,6 +56,22 @@
       "records": 17,
       "sha256": "b6a15c32cc8656697fbf95d27edea72e4b6694d4a1b641a7c20e346d18d5ee99"
     },
+    "layered.jsonl": {
+      "flint": "3.6.0",
+      "generator": "layered",
+      "precision_bits": 320,
+      "python_flint": "0.9.0",
+      "records": 740,
+      "sha256": "5df7e9627a2f1deafbf3da221917bf91b1a1f718c41b7ee056f73ccff0356547"
+    },
+    "layered_derivatives.jsonl": {
+      "flint": "3.6.0",
+      "generator": "layered_derivatives",
+      "precision_bits": 640,
+      "python_flint": "0.9.0",
+      "records": 8,
+      "sha256": "c5be657c491510ff2d4a81ad1597c54458b4b2ec8cdb0da5a7c6392203c91d8c"
+    },
     "mie.jsonl": {
       "flint": "3.6.0",
       "generator": "mie",

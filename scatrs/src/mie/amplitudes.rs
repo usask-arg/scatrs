@@ -2,7 +2,7 @@
 
 use num_complex::Complex;
 
-use super::{MAX_MIE_ORDER, MieSolution};
+use super::{Coefficients, Group, MAX_MIE_ORDER, MieSolution};
 use crate::scalar::Real;
 use crate::{Error, Result};
 
@@ -174,19 +174,14 @@ impl<T: Real> AngularTable<T> {
     }
 }
 
-impl<T: Real> MieSolution<'_, T> {
-    /// The number of terms, if `table` has as many orders.
-    fn table_terms(&self, table: &AngularTable<T>) -> Result<usize> {
-        let n = self.n_terms();
-        if n > table.n_max {
-            return Err(Error::InvalidInput(format!(
-                "the solution has {n} terms, more than the {} orders of the angular table",
-                table.n_max
-            )));
-        }
-        Ok(n)
-    }
+/// The error for derivatives of a solution computed without them.
+pub(super) fn no_derivatives(what: &str) -> Error {
+    Error::InvalidInput(format!(
+        "{what} derivatives need a solution from Mie::compute_with_derivatives"
+    ))
+}
 
+impl<T: Real> MieSolution<'_, T> {
     /// S₁ and S₂ at the cosines of `table`, as [`amplitudes`](Self::amplitudes) gives them
     /// (bitwise).
     ///
@@ -199,21 +194,7 @@ impl<T: Real> MieSolution<'_, T> {
         table: &AngularTable<T>,
         out: AmplitudeBuffers<'_, T>,
     ) -> Result<()> {
-        out.check(table.mu.len(), "amplitude")?;
-        let n = self.table_terms(table)?;
-        let zero = Complex::new(T::zero(), T::zero());
-        out.s1.fill(zero);
-        out.s2.fill(zero);
-        let (a, b) = (&self.state.a, &self.state.b);
-        for (k, (pi, tau)) in table.orders(n).enumerate() {
-            let (an, bn) = (a[k], b[k]);
-            let s = out.s1.iter_mut().zip(out.s2.iter_mut());
-            for ((s1, s2), (&p, &t)) in s.zip(pi.iter().zip(tau)) {
-                *s1 = *s1 + an.scale(p) + bn.scale(t);
-                *s2 = *s2 + an.scale(t) + bn.scale(p);
-            }
-        }
-        Ok(())
+        self.coefficients().amplitudes_from_table(table, out)
     }
 
     /// S₁, S₂ and their derivatives at the cosines of `table`, as
@@ -231,41 +212,11 @@ impl<T: Real> MieSolution<'_, T> {
         d_dx: AmplitudeBuffers<'_, T>,
         d_dm: AmplitudeBuffers<'_, T>,
     ) -> Result<()> {
-        let Some(d) = self.derivatives() else {
-            return Err(Error::InvalidInput(
-                "amplitude derivatives need a solution from Mie::compute_with_derivatives".into(),
-            ));
-        };
-        let len = table.mu.len();
-        values.check(len, "amplitude")?;
-        d_dx.check(len, "derivative")?;
-        d_dm.check(len, "derivative")?;
-        let n = self.table_terms(table)?;
-        // S₁, S₂, ∂S₁/∂x, ∂S₂/∂x, dS₁/dm, dS₂/dm.
-        let mut s = [values.s1, values.s2, d_dx.s1, d_dx.s2, d_dm.s1, d_dm.s2];
-        let zero = Complex::new(T::zero(), T::zero());
-        for buffer in &mut s {
-            buffer.fill(zero);
-        }
-        let (a, b) = (&self.state.a, &self.state.b);
-        for (k, (pi, tau)) in table.orders(n).enumerate() {
-            let pairs = [
-                (a[k], b[k]),
-                (d.da_dx[k], d.db_dx[k]),
-                (d.da_dm[k], d.db_dm[k]),
-            ];
-            for (j, (&p, &t)) in pi.iter().zip(tau).enumerate() {
-                for (i, &(u, v)) in pairs.iter().enumerate() {
-                    s[2 * i][j] = s[2 * i][j] + u.scale(p) + v.scale(t);
-                    s[2 * i + 1][j] = s[2 * i + 1][j] + u.scale(t) + v.scale(p);
-                }
-            }
-        }
-        Ok(())
+        let g = self.group().ok_or_else(|| no_derivatives("amplitude"))?;
+        self.coefficients()
+            .amplitudes_with_derivatives_from_table(table, &g, values, d_dx, d_dm)
     }
-}
 
-impl<T: Real> MieSolution<'_, T> {
     /// S₁(μ) and S₂(μ) at the cosines `mu` of the scattering angle (Bohren & Huffman 1983,
     /// Eq. 4.74): S₁ = Σ (2n + 1)/(n(n + 1)) (aₙπₙ + bₙτₙ) and
     /// S₂ = Σ (2n + 1)/(n(n + 1)) (aₙτₙ + bₙπₙ).
@@ -275,21 +226,7 @@ impl<T: Real> MieSolution<'_, T> {
     /// [`Error::InvalidInput`] if a cosine is NaN or outside [−1, 1] (for `Dual`, its value),
     /// or a buffer's length differs from `mu.len()`. Nothing is written then.
     pub fn amplitudes(&self, mu: &[T], out: AmplitudeBuffers<'_, T>) -> Result<()> {
-        out.check(mu.len(), "amplitude")?;
-        check_cosines(mu)?;
-        let (a, b) = (&self.state.a, &self.state.b);
-        for (j, &muj) in mu.iter().enumerate() {
-            let zero = Complex::new(T::zero(), T::zero());
-            let (mut s1, mut s2) = (zero, zero);
-            for_each_order(muj, a.len(), |n, pi, tau| {
-                let (an, bn) = (a[n - 1], b[n - 1]);
-                s1 = s1 + an.scale(pi) + bn.scale(tau);
-                s2 = s2 + an.scale(tau) + bn.scale(pi);
-            });
-            out.s1[j] = s1;
-            out.s2[j] = s2;
-        }
-        Ok(())
+        self.coefficients().amplitudes(mu, out)
     }
 
     /// S₁, S₂ and their derivatives: `d_dx` receives ∂S/∂x and `d_dm` the complex
@@ -306,16 +243,121 @@ impl<T: Real> MieSolution<'_, T> {
         d_dx: AmplitudeBuffers<'_, T>,
         d_dm: AmplitudeBuffers<'_, T>,
     ) -> Result<()> {
-        let Some(d) = self.derivatives() else {
-            return Err(Error::InvalidInput(
-                "amplitude derivatives need a solution from Mie::compute_with_derivatives".into(),
-            ));
-        };
+        let g = self.group().ok_or_else(|| no_derivatives("amplitude"))?;
+        self.coefficients()
+            .amplitudes_with_derivatives(mu, &g, values, d_dx, d_dm)
+    }
+}
+
+impl<T: Real> Coefficients<'_, T> {
+    /// The number of terms, if `table` has as many orders.
+    fn table_terms(&self, table: &AngularTable<T>) -> Result<usize> {
+        let n = self.n_terms();
+        if n > table.n_max {
+            return Err(Error::InvalidInput(format!(
+                "the solution has {n} terms, more than the {} orders of the angular table",
+                table.n_max
+            )));
+        }
+        Ok(n)
+    }
+
+    /// As [`MieSolution::amplitudes_from_table`].
+    pub(crate) fn amplitudes_from_table(
+        &self,
+        table: &AngularTable<T>,
+        out: AmplitudeBuffers<'_, T>,
+    ) -> Result<()> {
+        out.check(table.mu.len(), "amplitude")?;
+        let n = self.table_terms(table)?;
+        let zero = Complex::new(T::zero(), T::zero());
+        out.s1.fill(zero);
+        out.s2.fill(zero);
+        let (a, b) = (self.a, self.b);
+        for (k, (pi, tau)) in table.orders(n).enumerate() {
+            let (an, bn) = (a[k], b[k]);
+            let s = out.s1.iter_mut().zip(out.s2.iter_mut());
+            for ((s1, s2), (&p, &t)) in s.zip(pi.iter().zip(tau)) {
+                *s1 = *s1 + an.scale(p) + bn.scale(t);
+                *s2 = *s2 + an.scale(t) + bn.scale(p);
+            }
+        }
+        Ok(())
+    }
+
+    /// As [`MieSolution::amplitudes_with_derivatives_from_table`], with the derivatives of
+    /// `group`.
+    pub(crate) fn amplitudes_with_derivatives_from_table(
+        &self,
+        table: &AngularTable<T>,
+        group: &Group<'_, T>,
+        values: AmplitudeBuffers<'_, T>,
+        d_dx: AmplitudeBuffers<'_, T>,
+        d_dm: AmplitudeBuffers<'_, T>,
+    ) -> Result<()> {
+        let d = &group.d;
+        let len = table.mu.len();
+        values.check(len, "amplitude")?;
+        d_dx.check(len, "derivative")?;
+        d_dm.check(len, "derivative")?;
+        let n = self.table_terms(table)?;
+        // S₁, S₂, ∂S₁/∂x, ∂S₂/∂x, dS₁/dm, dS₂/dm.
+        let mut s = [values.s1, values.s2, d_dx.s1, d_dx.s2, d_dm.s1, d_dm.s2];
+        let zero = Complex::new(T::zero(), T::zero());
+        for buffer in &mut s {
+            buffer.fill(zero);
+        }
+        let (a, b) = (self.a, self.b);
+        for (k, (pi, tau)) in table.orders(n).enumerate() {
+            let pairs = [
+                (a[k], b[k]),
+                (d.da_dx[k], d.db_dx[k]),
+                (d.da_dm[k], d.db_dm[k]),
+            ];
+            for (j, (&p, &t)) in pi.iter().zip(tau).enumerate() {
+                for (i, &(u, v)) in pairs.iter().enumerate() {
+                    s[2 * i][j] = s[2 * i][j] + u.scale(p) + v.scale(t);
+                    s[2 * i + 1][j] = s[2 * i + 1][j] + u.scale(t) + v.scale(p);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// As [`MieSolution::amplitudes`].
+    pub(crate) fn amplitudes(&self, mu: &[T], out: AmplitudeBuffers<'_, T>) -> Result<()> {
+        out.check(mu.len(), "amplitude")?;
+        check_cosines(mu)?;
+        let (a, b) = (self.a, self.b);
+        for (j, &muj) in mu.iter().enumerate() {
+            let zero = Complex::new(T::zero(), T::zero());
+            let (mut s1, mut s2) = (zero, zero);
+            for_each_order(muj, a.len(), |n, pi, tau| {
+                let (an, bn) = (a[n - 1], b[n - 1]);
+                s1 = s1 + an.scale(pi) + bn.scale(tau);
+                s2 = s2 + an.scale(tau) + bn.scale(pi);
+            });
+            out.s1[j] = s1;
+            out.s2[j] = s2;
+        }
+        Ok(())
+    }
+
+    /// As [`MieSolution::amplitudes_with_derivatives`], with the derivatives of `group`.
+    pub(crate) fn amplitudes_with_derivatives(
+        &self,
+        mu: &[T],
+        group: &Group<'_, T>,
+        values: AmplitudeBuffers<'_, T>,
+        d_dx: AmplitudeBuffers<'_, T>,
+        d_dm: AmplitudeBuffers<'_, T>,
+    ) -> Result<()> {
+        let d = &group.d;
         values.check(mu.len(), "amplitude")?;
         d_dx.check(mu.len(), "derivative")?;
         d_dm.check(mu.len(), "derivative")?;
         check_cosines(mu)?;
-        let (a, b) = (&self.state.a, &self.state.b);
+        let (a, b) = (self.a, self.b);
         for (j, &muj) in mu.iter().enumerate() {
             let zero = Complex::new(T::zero(), T::zero());
             let mut s = [zero; 6]; // S₁, S₂, ∂S₁/∂x, ∂S₂/∂x, dS₁/dm, dS₂/dm

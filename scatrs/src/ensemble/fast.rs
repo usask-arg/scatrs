@@ -11,7 +11,10 @@ use super::matrix::{Mat, matmul, product};
 use num_complex::Complex;
 
 use crate::Result;
-use crate::mie::{GreekProjector, MieSolution, element_derivatives, elements, for_each_order};
+use crate::mie::{
+    Coefficients as MieCoefficients, GreekProjector, Group, element_derivatives, elements,
+    for_each_order,
+};
 use crate::special::wigner_d;
 
 /// G_E and G_O of one band (h × N, one column per order).
@@ -46,67 +49,88 @@ impl BandTables {
 }
 
 /// The right-hand sides of a panel's spheres (4 columns each: u and v, real and imaginary
-/// parts; 4 more with derivatives: du/dm, dv/dm) and the products.
+/// parts; 4 more per derivative group: du/dm, dv/dm; and 4 more per real direction: x·du/dx_j,
+/// x·dv/dx_j of group j, the derivatives with respect to a radius fraction) and the products.
 pub(crate) struct PanelProducts {
     per: usize,
+    groups: usize,
+    reals: usize,
     x: Mat,
     ce: Mat,
     co: Mat,
 }
 
 impl PanelProducts {
-    /// Room for `spheres` spheres of at most `n` orders, at `h` half nodes.
-    pub(crate) fn new(tables: &BandTables, spheres: usize, derivatives: bool) -> Self {
-        let per = if derivatives { 8 } else { 4 };
+    /// Room for `spheres` spheres with `groups` derivative groups and `reals` real directions
+    /// each, at the band's orders and half nodes.
+    pub(crate) fn new(tables: &BandTables, spheres: usize, groups: usize, reals: usize) -> Self {
+        let per = 4 + 4 * (groups + reals);
         let (h, n) = (tables.ge.nrows(), tables.orders());
         Self {
             per,
+            groups,
+            reals,
             x: Mat::zeros(n, per * spheres),
             ce: Mat::zeros(h, per * spheres),
             co: Mat::zeros(h, per * spheres),
         }
     }
 
-    /// Whether this fits `tables` and `spheres` spheres.
-    pub(crate) fn fits(&self, tables: &BandTables, spheres: usize, derivatives: bool) -> bool {
+    /// Whether this fits `tables` and `spheres` spheres with `groups` derivative groups and
+    /// `reals` real directions.
+    pub(crate) fn fits(
+        &self,
+        tables: &BandTables,
+        spheres: usize,
+        groups: usize,
+        reals: usize,
+    ) -> bool {
         self.x.nrows() == tables.orders()
             && self.ce.nrows() == tables.ge.nrows()
-            && self.per == if derivatives { 8 } else { 4 }
+            && (self.groups, self.reals) == (groups, reals)
             && self.x.ncols() == self.per * spheres
     }
 
-    /// Sphere `k`'s coefficients (zero beyond its number of terms); with derivatives, also
-    /// daₙ/dm and dbₙ/dm.
-    pub(crate) fn set(&mut self, k: usize, s: &MieSolution<'_, f64>) {
-        let (a, b) = (s.a(), s.b());
-        let d = if self.per == 8 { s.derivatives() } else { None };
+    /// Sphere `k`'s coefficients (zero beyond its number of terms), daₙ/dm, dbₙ/dm of each of
+    /// the first `self.groups` of `groups`, and x·daₙ/dx_j, x·dbₙ/dx_j of the first
+    /// `self.reals` (x = `c.x`, the outer size parameter).
+    pub(crate) fn set(
+        &mut self,
+        k: usize,
+        c: &MieCoefficients<'_, f64>,
+        groups: &[Group<'_, f64>],
+    ) {
+        let (a, b) = (c.a, c.b);
+        let reals = &groups[..self.reals];
+        let groups = &groups[..self.groups];
         let base = k * self.per;
         let n = self.x.nrows();
+        let mut put = |row: usize, col: usize, u: Complex<f64>, v: Complex<f64>| {
+            self.x[(row, col)] = u.re;
+            self.x[(row, col + 1)] = u.im;
+            self.x[(row, col + 2)] = v.re;
+            self.x[(row, col + 3)] = v.im;
+        };
+        // Order row + 1: u = a for odd orders (even rows), b for even ones.
+        let uv = |row: usize, a: Complex<f64>, b: Complex<f64>| {
+            if row % 2 == 0 { (a, b) } else { (b, a) }
+        };
         for row in 0..n {
-            let (u, v, du, dv) = if row < a.len() {
-                let (dan, dbn) = d
-                    .as_ref()
-                    .map_or((Complex::default(), Complex::default()), |d| {
-                        (d.da_dm[row], d.db_dm[row])
-                    });
-                // Order row + 1: u = a for odd orders (even rows), b for even ones.
-                if row % 2 == 0 {
-                    (a[row], b[row], dan, dbn)
-                } else {
-                    (b[row], a[row], dbn, dan)
+            if row < a.len() {
+                let (u, v) = uv(row, a[row], b[row]);
+                put(row, base, u, v);
+                for (i, g) in groups.iter().enumerate() {
+                    let (du, dv) = uv(row, g.d.da_dm[row], g.d.db_dm[row]);
+                    put(row, base + 4 + 4 * i, du, dv);
+                }
+                for (j, g) in reals.iter().enumerate() {
+                    let (du, dv) = uv(row, g.d.da_dx[row] * c.x, g.d.db_dx[row] * c.x);
+                    put(row, base + 4 + 4 * (groups.len() + j), du, dv);
                 }
             } else {
-                Default::default()
-            };
-            self.x[(row, base)] = u.re;
-            self.x[(row, base + 1)] = u.im;
-            self.x[(row, base + 2)] = v.re;
-            self.x[(row, base + 3)] = v.im;
-            if self.per == 8 {
-                self.x[(row, base + 4)] = du.re;
-                self.x[(row, base + 5)] = du.im;
-                self.x[(row, base + 6)] = dv.re;
-                self.x[(row, base + 7)] = dv.im;
+                for i in 0..=groups.len() + reals.len() {
+                    put(row, base + 4 * i, Complex::default(), Complex::default());
+                }
             }
         }
     }
@@ -120,15 +144,16 @@ impl PanelProducts {
     }
 
     /// Sphere `k`'s phase matrix times `scale` at every node of the band (F₁₁, F₁₂, F₃₃, F₃₄,
-    /// each n_q values, into `out`), and with derivatives its derivatives with respect to Re m
-    /// and Im m into `d`.
+    /// each n_q values, into `out`), and its derivatives into `d`: with respect to Re m and
+    /// Im m of each group (Re m, Im m of the first group, then of the next), then along each
+    /// real direction (empty for none).
     pub(crate) fn phase(
         &self,
         tables: &BandTables,
         k: usize,
         scale: f64,
         out: &mut [f64],
-        mut d: Option<[&mut [f64]; 2]>,
+        d: &mut [&mut [f64]],
     ) {
         let q = tables.q;
         let lo = q / 2;
@@ -139,27 +164,34 @@ impl PanelProducts {
             let j = lo + i;
             let (eu, ev) = (c(&self.ce, i, base), c(&self.ce, i, base + 2));
             let (ou, ov) = (c(&self.co, i, base), c(&self.co, i, base + 2));
-            let derivs = (self.per == 8).then(|| {
-                (
-                    c(&self.ce, i, base + 4),
-                    c(&self.ce, i, base + 6),
-                    c(&self.co, i, base + 4),
-                    c(&self.co, i, base + 6),
-                )
-            });
             let mut write = |node: usize, sign: f64| {
                 let (s1, s2) = (eu + ov * sign, ev + ou * sign);
                 let f = elements(s1, s2);
                 for (e, v) in f.into_iter().enumerate() {
                     out[e * q + node] = scale * v;
                 }
-                if let (Some([dre, dim]), Some((deu, dev, dou, dov))) = (d.as_mut(), derivs) {
-                    let (d1, d2) = (deu + dov * sign, dev + dou * sign);
+                // dS₁, dS₂ along the derivative columns `col`.
+                let ds = |col: usize| {
+                    let (deu, dev) = (c(&self.ce, i, col), c(&self.ce, i, col + 2));
+                    let (dou, dov) = (c(&self.co, i, col), c(&self.co, i, col + 2));
+                    (deu + dov * sign, dev + dou * sign)
+                };
+                let (pairs, reals) = d.split_at_mut(2 * self.groups);
+                for (g, pair) in pairs.chunks_exact_mut(2).enumerate() {
+                    let (d1, d2) = ds(base + 4 + 4 * g);
                     let fr = element_derivatives(s1, s2, d1, d2);
                     let fi = element_derivatives(s1, s2, i1 * d1, i1 * d2);
+                    let [dre, dim] = pair else { unreachable!() };
                     for e in 0..4 {
                         dre[e * q + node] = scale * fr[e];
                         dim[e * q + node] = scale * fi[e];
+                    }
+                }
+                for (j, dx) in reals.iter_mut().enumerate() {
+                    let (d1, d2) = ds(base + 4 + 4 * (self.groups + j));
+                    let fx = element_derivatives(s1, s2, d1, d2);
+                    for e in 0..4 {
+                        dx[e * q + node] = scale * fx[e];
                     }
                 }
             };
@@ -272,14 +304,15 @@ mod tests {
             let nodes = gauss_legendre::<f64>(q).unwrap().nodes;
             let tables = BandTables::new(&nodes, n_max);
             for derivatives in [false, true] {
-                let mut p = PanelProducts::new(&tables, cases.len(), derivatives);
+                let mut p = PanelProducts::new(&tables, cases.len(), usize::from(derivatives), 0);
                 for (k, &(x, m)) in cases.iter().enumerate() {
                     let s = if derivatives {
                         mie.compute_with_derivatives(x, m, &opts).unwrap()
                     } else {
                         mie.compute(x, m, &opts).unwrap()
                     };
-                    p.set(k, &s);
+                    let groups: Vec<_> = s.group().into_iter().collect();
+                    p.set(k, &s.coefficients(), &groups);
                 }
                 p.multiply(&tables, n_max);
                 for (k, &(x, m)) in cases.iter().enumerate() {
@@ -300,8 +333,12 @@ mod tests {
                     let scale = 4.0 / (x * x);
                     let mut got = vec![0.0; 4 * q];
                     let (mut gre, mut gim) = (vec![0.0; 4 * q], vec![0.0; 4 * q]);
-                    let d = derivatives.then_some([&mut gre[..], &mut gim[..]]);
-                    p.phase(&tables, k, scale, &mut got, d);
+                    let mut d: Vec<&mut [f64]> = if derivatives {
+                        vec![&mut gre[..], &mut gim[..]]
+                    } else {
+                        Vec::new()
+                    };
+                    p.phase(&tables, k, scale, &mut got, &mut d);
                     let check = |got: &[f64], want: &[f64], what: &str| {
                         let size = want.iter().fold(0.0f64, |a, v| a.max(v.abs()));
                         for (j, (g, w)) in got.iter().zip(want).enumerate() {

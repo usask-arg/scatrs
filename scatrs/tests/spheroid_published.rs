@@ -9,7 +9,8 @@
 //! * Table 1 B: a prolate spheroid of aspect ratio 4, x_max = 35, m = 1.5 + 0.02i (about 20 s in
 //!   release, so ignored by default).
 //! * Table 1 A: a silver nanorod at its dipolar plasmon resonance, aspect ratio 20,
-//!   m ≈ 1.02 + 13.4i, outside the validated domain.
+//!   m ≈ 1.02 + 13.4i, outside the validated domain; with the default convergence loop, which
+//!   needs the nodes its aspect ratio sets (`driver::shape_theta`), not the 2N of N.
 //!
 //! The paper's efficiencies are cross sections over the orientation-averaged projected area, S/4
 //! for a convex particle (Cauchy), and its x_max is k times the long semi-axis; scatrs's are over
@@ -128,8 +129,6 @@ fn silver_nanorod_at_resonance() {
     let rtol = 1e-12;
     let opts = TMatrixOptions::new()
         .with_rtol(rtol)
-        .with_n_terms(31)
-        .with_n_theta(400)
         .with_allow_unvalidated(true);
     let (diff, est, n, nth) = case.compare(&opts);
     let tol = rtol.max(est);

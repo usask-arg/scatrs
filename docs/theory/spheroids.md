@@ -123,10 +123,11 @@ within $3\cdot10^{-14}$ of the double-double one after two sweeps.
 
 ## Convergence
 
-The number of orders $N$ and of nodes $n_\theta$ are chosen as in Mishchenko's `tmatd`:
+The number of orders $N$ and of nodes $n_\theta$ are chosen as in Mishchenko's `tmatd`, with a
+floor on $n_\theta$ set by the shape:
 
 1. $N$ starts at $\lceil x_{\max} + 4x_{\max}^{1/3}\rceil + 2$ and grows by an eighth
-   (at least 2), with $n_\theta = 2N$, until the contributions of mode 0 to
+   (at least 2), with $n_\theta = \max(2N, n_\text{shape})$, until the contributions of mode 0 to
    $\langle C_{\mathrm{ext}}\rangle$ and $\langle C_{\mathrm{sca}}\rangle$ change by less than
    `rtol` (mode 0 involves every order, and the other modes converge faster). Each step's
    error estimate counts in the change.
@@ -141,6 +142,21 @@ The number of orders $N$ and of nodes $n_\theta$ are chosen as in Mishchenko's `
    solved.
 4. If Greek coefficients up to an order must settle, one more step in $N$ and $n_\theta$ with
    every mode must leave them, and the cross sections, within `rtol`.
+
+The floor $n_\text{shape}$ comes from the shape, not from $N$. The surface $r(\cos\theta)$ of a
+spheroid is singular at $\cos\theta = \pm 1/e$ for a prolate spheroid ($e$ its eccentricity)
+and at $\pm i/\sqrt{\varepsilon^2 - 1}$ for an oblate one, close to the range of integration when
+the spheroid is elongated or flattened. The Bernstein ellipse through these points is the same
+for $\varepsilon$ and $1/\varepsilon$, $\rho^2 = (h + 1)/(h - 1)$ with
+$h = \max(\varepsilon, 1/\varepsilon)$, so the error of Gauss–Legendre quadrature in $\cos\theta$
+falls by that factor per node on $[-1, 1]$ (Trefethen 2013, Theorem 19.3), whatever $N$. At a
+fixed $N$ the measured errors fall by 1.205, 1.061 and 1.018 per node at $h$ = 10, 30 and 100,
+against 1.222, 1.069 and 1.020, prolate and oblate alike. scatrs
+starts with the nodes for $10^{-4}$`rtol` at that rate,
+$n_\text{shape} = \lceil \ln(10^4/\mathtt{rtol}) / (2\ln\rho^2)\rceil$ in $0 < \theta < \pi/2$:
+35 at $h = 5$ and `rtol` = $10^{-8}$, below $2N$ for most of the validated domain, but 208 at
+$h = 30$ and 691 at $h = 100$, where $2N$ nodes would leave the quadrature, not the orders,
+unconverged.
 
 $N$ and $n_\theta$ have caps; reaching one raises `NotConverged` unless the unconverged result
 is asked for. The result's error estimate is the last change of the loop (with the modes left

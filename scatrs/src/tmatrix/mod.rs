@@ -297,7 +297,7 @@ impl TMatrix {
             .min(MAX_TMATRIX_ORDER);
         let theta_cap = opts
             .n_theta_max
-            .unwrap_or(4 * driver::theta_of(start, eps) + 40);
+            .unwrap_or(4 * driver::theta_of(start, eps, opts.rtol) + 40);
         if let Some(n) = opts.n_terms {
             if n == 0 || n > MAX_TMATRIX_ORDER {
                 return invalid(format!("N must be in 1..={MAX_TMATRIX_ORDER}, got {n}"));
@@ -1078,6 +1078,28 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// The nodes the shape needs: the same for ε and 1/ε, none for a sphere, under 2N for the
+    /// aspect ratios of the validated domain at their usual N, hundreds for needles and discs.
+    #[test]
+    fn shape_nodes() {
+        assert_eq!(driver::shape_theta(1.0, 1e-8), 0);
+        for h in [1.25, 5.0, 30.0, 100.0] {
+            assert_eq!(
+                driver::shape_theta(h, 1e-8),
+                driver::shape_theta(1.0 / h, 1e-8)
+            );
+        }
+        assert_eq!(driver::shape_theta(5.0, 1e-8), 35);
+        assert_eq!(driver::shape_theta(30.0, 1e-8), 208);
+        assert_eq!(driver::shape_theta(100.0, 1e-8), 691);
+        assert!(driver::shape_theta(5.0, 1e-12) > driver::shape_theta(5.0, 1e-8));
+        assert_eq!(driver::theta_of(30, 2.0, 1e-8), 60);
+        assert_eq!(
+            driver::theta_of(30, 0.05, 1e-8),
+            driver::shape_theta(20.0, 1e-8)
+        );
     }
 
     /// A cap reached first raises `NotConverged`, unless an unconverged result is allowed.

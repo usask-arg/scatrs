@@ -175,10 +175,27 @@ pub(crate) fn start_n(x: f64, eps: f64) -> usize {
     ((xm + 4.0 * xm.cbrt()).ceil() as usize + 2).max(4)
 }
 
-/// n_θ tied to N: 2N nodes in 0 < θ < π/2, as in Mishchenko's `tmatd` (the node loop then
-/// grows it as far as the cross sections need).
-pub(crate) fn theta_of(n: usize, _eps: f64) -> usize {
-    2 * n
+/// n_θ tied to N: 2N nodes in 0 < θ < π/2, as in Mishchenko's `tmatd`, and at least the nodes
+/// the shape needs whatever N ([`shape_theta`]); the node loop then grows it as far as the cross
+/// sections need.
+pub(crate) fn theta_of(n: usize, eps: f64, rtol: f64) -> usize {
+    (2 * n).max(shape_theta(eps, rtol))
+}
+
+/// The nodes in 0 < θ < π/2 the shape itself needs. r(cos θ) is singular at cos θ = ±1/e for a
+/// prolate spheroid and at ±i/√(ε² − 1) for an oblate one (e the eccentricity), and the
+/// Bernstein ellipse through the singularity is the same for both, ρ² = (h + 1)/(h − 1) with
+/// h = max(ε, 1/ε): the error of Gauss–Legendre quadrature in cos θ falls by that factor per
+/// node on [−1, 1], whatever N. Enough nodes for 10⁻⁴·`rtol` (the measured prefactor is about
+/// 10²): 35 at h = 5 and `rtol` = 10⁻⁸, under 2N for most of the validated domain, but 208 at
+/// h = 30 and 691 at h = 100. None for a sphere.
+pub(crate) fn shape_theta(eps: f64, rtol: f64) -> usize {
+    let h = eps.max(eps.recip());
+    if h <= 1.0 {
+        return 0;
+    }
+    let per_node = ((h + 1.0) / (h - 1.0)).ln();
+    ((1e4 / rtol).ln() / (2.0 * per_node)).ceil() as usize
 }
 
 /// The next node count of the node loop: a tenth more, at least 2.
@@ -316,7 +333,7 @@ pub(crate) fn converge(x: f64, eps: f64, s: Complex<f64>, opts: &Loop) -> Result
     let rtol = opts.rtol;
     let theta = |n: usize| {
         opts.n_theta_fixed
-            .unwrap_or_else(|| theta_of(n, eps).min(opts.n_theta_cap))
+            .unwrap_or_else(|| theta_of(n, eps, rtol).min(opts.n_theta_cap))
     };
     // The steps on mode 0 refine only if their estimate is a sizeable part of `rtol` (above
     // rtol/2): the convergence test counts the estimates of both steps in the change. The final

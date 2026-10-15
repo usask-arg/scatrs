@@ -401,8 +401,7 @@ k = 2 * np.pi * 1.33 / 2560  # the nanorod: a = 10 nm, c = 200 nm in a solvent o
 cases = {
     "Kuik et al. model 1": (4, 10.079368, 1.55 + 0.01j, 3.21290554203154, 3.36721292620919, {}),
     "silver nanorod": (20, 200 * k, np.sqrt(-318 + 48.5j) / 1.33, 2.91644692910476,
-                       18.6590264036833,
-                       {"n_terms": 31, "n_theta": 400, "allow_unvalidated": True}),
+                       18.6590264036833, {"allow_unvalidated": True}),
 }
 for name, (h, x_max, m, q_sca, q_ext, options) in cases.items():
     d_sca, d_ext, est = published(h, x_max, m, q_sca, q_ext, rtol=1e-12, **options)
@@ -414,7 +413,7 @@ for name, (h, x_max, m, q_sca, q_ext, options) in cases.items():
 |---|---|---|---|---|---|
 | Kuik et al. model 1 | 4 | 10.079368 | $1.55 + 0.01i$ | $1.5\cdot10^{-14}$, $9\cdot10^{-16}$ | $6\cdot10^{-15}$, $9\cdot10^{-15}$ |
 | large | 4 | 35 | $1.5 + 0.02i$ | $4.4\cdot10^{-14}$, $2\cdot10^{-15}$ | $7.1\cdot10^{-5}$, $2.6\cdot10^{-5}$ |
-| silver nanorod | 20 | 0.653 | $1.02 + 13.45i$ | $2\cdot10^{-15}$, $9\cdot10^{-16}$ | $2.4\cdot10^{-12}$, $1.2\cdot10^{-12}$ |
+| silver nanorod | 20 | 0.653 | $1.02 + 13.45i$ | $1\cdot10^{-15}$, $3\cdot10^{-15}$ | $2.4\cdot10^{-12}$, $1.2\cdot10^{-12}$ |
 
 The differences are relative to the published values, at `rtol` $10^{-12}$ (the large
 spheroid at $10^{-10}$). The large spheroid takes about 20 s, so it is checked by the test
@@ -424,7 +423,8 @@ column is the same paper's double-precision code, SMARTIES's algorithm, against 
 values. The paper's albedo for the large spheroid, 0.718371249381958, is not the ratio of
 its own $Q_\text{sca}$ and $Q_\text{ext}$, 0.7183712495692; scatrs's albedo agrees with the
 ratio to $2\cdot10^{-14}$. The nanorod's index and aspect ratio are far outside the validated
-domain, so it is computed here at a fixed $N = 31$ and 400 nodes.
+domain, but with the default settings it converges as closely; at an aspect ratio of 20 the
+nodes are set by the shape rather than by $N$ ({doc}`/theory/spheroids`).
 
 ### SMARTIES
 
@@ -445,8 +445,10 @@ does that. Where the two overlap:
 
 scatrs's validated domain ends where its cost, not its accuracy, grows: on its accuracy map the
 results stay within their tolerance up to $|m|\,x_{\max} = 70$ ({doc}`accuracy`). SMARTIES reaches
-aspect ratios up to 100 and metallic indices, which are outside scatrs's validated domain. The
-analytic expansion of its authors (above) checks the low-order T-matrix.
+aspect ratios up to 100 and metallic indices. They are outside scatrs's validated domain:
+scatrs computes them with `allow_unvalidated`, as it does the nanorod above, but declares no
+accuracy constants there. The analytic expansion of its authors (above) checks the low-order
+T-matrix.
 
 ## Size distributions
 

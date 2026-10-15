@@ -50,7 +50,13 @@ into the next release's notes, above GitHub's generated list, then delete this f
     of 221 spheroids, the long-wavelength expansion of Majić et al. (2019), the Rayleigh limit
     and the sphere limit: aspect ratios 1/5 to 5, |m|·x_max ≤ 60. Compared with Mishchenko's
     extended-precision `tmatd` (agreement to 7.5·10⁻¹¹ in the cross sections; faster on one
-    thread for every spheroid it computes) and with the published reach of SMARTIES.
+    thread for every spheroid it computes), with the arbitrary-precision values of Somerville,
+    Auguié & Le Ru (2013) (agreement to 5·10⁻¹⁴, including the benchmark of Kuik et al. 1992),
+    and with the published reach of SMARTIES.
+  - Outside the validated domain the quadrature follows the aspect ratio, so needles, discs
+    (aspect ratios to 100) and metallic indices converge with `allow_unvalidated`, without
+    declared accuracy constants (a silver nanorod of aspect ratio 20 at its plasmon resonance
+    agrees with its published value to 3·10⁻¹⁵).
   - Documentation: the theory chapter "Spheroids", and the validation pages.
 
 ## 0.2.0 (the notes of v0.2.0: delete this section once they are on its GitHub release)

@@ -57,7 +57,8 @@
   of the `f64` rules above 100 points.
 - L. N. Trefethen, *Approximation Theory and Approximation Practice*, SIAM (2013), Theorem
   19.3. The error bound for Gauss quadrature of analytic functions, used in
-  {doc}`utilities/legendre-moments`. The theorem is stated for rules with $n + 1$ points.
+  {doc}`utilities/legendre-moments` and for the nodes of spheroids ({doc}`theory/spheroids`).
+  The theorem is stated for rules with $n + 1$ points.
 
 **Spheroids and the T-matrix method**
 

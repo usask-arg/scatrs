@@ -267,7 +267,7 @@ the size parameter of the longest semi-axis, $1.3 \le \mathrm{Re}\,m \le 3$,
 $\mathrm{Im}\,m \le 0.5$), every output is within $C\cdot\max(\mathtt{rtol}, \hat\varepsilon)$
 of the exact value, in the measures of the sphere's outputs ($Q_{\mathrm{abs}}$ relative to
 $Q_{\mathrm{ext}}$, the Greek coefficients relative to the largest $|\alpha_1|$, the phase matrix
-relative to $\max(F_{11}, 1)$, normalized). Two tests enforce it:
+relative to $\max(F_{11}, 1)$, normalized). Three tests enforce it:
 
 - `scatrs/tests/spheroid_reference.rs` compares with Arb reference values of an EBCM computed
   from its definition, with no simplification of the integrands ({doc}`/theory/reference-suite`),
@@ -275,6 +275,9 @@ relative to $\max(F_{11}, 1)$, normalized). Two tests enforce it:
   within 4 times the solution's own estimate on each of the three precision paths (`f64`,
   refined and double-double); the converged efficiencies must be within the declared
   tolerance.
+- `scatrs/tests/spheroid_published.rs` compares with the arbitrary-precision $Q_\text{sca}$ and
+  $Q_\text{ext}$ published by Somerville, Auguié & Le Ru (2013) for two spheroids inside the
+  domain, one of them the benchmark of Kuik, de Haan & Hovenier (1992) ({doc}`external`).
 - `scatrs/tests/tmatrix_accuracy_map.rs` compares the default results (`rtol = 1e-8`) with a
   reference using more orders and nodes and every mode refined, for 221 spheroids: 8 aspect
   ratios, $x$ from 0.3 to 14 and four indices, up to $|m|\,x_{\max} = 70$.

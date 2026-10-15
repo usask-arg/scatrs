@@ -77,8 +77,12 @@
   (2012), 524–535; "A new numerically stable implementation of the T-matrix method for
   electromagnetic scattering by spheroidal particles", 123 (2013), 153–168; and "Accurate and
   convergent T-matrix calculations of light scattering by spheroids", 160 (2015), 29–35. The
-  cancellations in the integrals for spheroids, an algorithm that avoids them, and its
-  convergence.
+  cancellations in the integrals for spheroids, an algorithm that avoids them (with the
+  arbitrary-precision values {doc}`validation/external` compares), and its convergence.
+- F. Kuik, J. F. de Haan and J. W. Hovenier, "Benchmark results for single scattering by
+  spheroids", *Journal of Quantitative Spectroscopy and Radiative Transfer* 47 (1992),
+  477–489. The benchmark spheroid whose arbitrary-precision values {doc}`validation/external`
+  compares.
 - W. R. C. Somerville, B. Auguié and E. C. Le Ru, "SMARTIES: User-friendly codes for fast and
   accurate calculations of light scattering by spheroids", *Journal of Quantitative
   Spectroscopy and Radiative Transfer* 174 (2016), 39–55. The code, and the range it reaches,

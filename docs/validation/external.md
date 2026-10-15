@@ -370,11 +370,67 @@ with results that do not depend on the number of threads.
 We thank M. I. Mishchenko, L. D. Travis and the NASA Goddard Institute for Space Studies for
 making the code publicly available; its references are listed in {doc}`/references`.
 
+### Published arbitrary-precision values
+
+Somerville, Auguié & Le Ru (2013) tabulate $Q_\text{sca}$ and $Q_\text{ext}$ of three randomly
+oriented prolate spheroids computed with the T-matrix and its inversion in arbitrary
+precision, to 15 digits. The values do not depend on any double-precision code. The three
+spheroids are model 1 of the benchmark of Kuik, de Haan & Hovenier (1992), a large spheroid,
+and a silver nanorod at its plasmon resonance, outside scatrs's validated domain. The paper's
+efficiencies are cross sections over the orientation-averaged projected area, $S/4$ for a
+convex particle, and its size parameter is $x_{\max} = kc$; scatrs's efficiencies are over the
+cross section of the sphere of equal volume, so the conversion below multiplies by the ratio
+of the two areas.
+
+```{code-cell} python
+from scatrs import tmatrix
+
+
+def published(h, x_max, m, q_sca, q_ext, **options):
+    """scatrs against the paper for a prolate spheroid of c/a = h: relative differences."""
+    eps = 1 / h
+    x = x_max * eps ** (2 / 3)
+    e = np.sqrt(1 - eps**2)
+    surface = 2 * np.pi * eps**2 * (1 + 1 / (eps * e) * np.arcsin(e))  # with c = 1
+    ratio = surface / 4 / (np.pi * eps ** (4 / 3))
+    q = tmatrix.efficiencies(x, m, eps, **options)
+    return abs(q.q_sca / ratio / q_sca - 1), abs(q.q_ext / ratio / q_ext - 1), float(q.error)
+
+
+k = 2 * np.pi * 1.33 / 2560  # the nanorod: a = 10 nm, c = 200 nm in a solvent of index 1.33
+cases = {
+    "Kuik et al. model 1": (4, 10.079368, 1.55 + 0.01j, 3.21290554203154, 3.36721292620919, {}),
+    "silver nanorod": (20, 200 * k, np.sqrt(-318 + 48.5j) / 1.33, 2.91644692910476,
+                       18.6590264036833,
+                       {"n_terms": 31, "n_theta": 400, "allow_unvalidated": True}),
+}
+for name, (h, x_max, m, q_sca, q_ext, options) in cases.items():
+    d_sca, d_ext, est = published(h, x_max, m, q_sca, q_ext, rtol=1e-12, **options)
+    print(f"{name:20} Q_sca {d_sca:.1e}  Q_ext {d_ext:.1e}  (estimate {est:.1e})")
+    assert max(d_sca, d_ext) < 1e-13
+```
+
+| spheroid | $c/a$ | $x_{\max}$ | $m$ | scatrs: $Q_\text{sca}$, $Q_\text{ext}$ | SMARTIES's double precision |
+|---|---|---|---|---|---|
+| Kuik et al. model 1 | 4 | 10.079368 | $1.55 + 0.01i$ | $1.5\cdot10^{-14}$, $9\cdot10^{-16}$ | $6\cdot10^{-15}$, $9\cdot10^{-15}$ |
+| large | 4 | 35 | $1.5 + 0.02i$ | $4.4\cdot10^{-14}$, $2\cdot10^{-15}$ | $7.1\cdot10^{-5}$, $2.6\cdot10^{-5}$ |
+| silver nanorod | 20 | 0.653 | $1.02 + 13.45i$ | $2\cdot10^{-15}$, $9\cdot10^{-16}$ | $2.4\cdot10^{-12}$, $1.2\cdot10^{-12}$ |
+
+The differences are relative to the published values, at `rtol` $10^{-12}$ (the large
+spheroid at $10^{-10}$). The large spheroid takes about 20 s, so it is checked by the test
+`large_prolate_spheroid` of `scatrs/tests/spheroid_published.rs` (ignored by default) rather
+than on this page; the other two are checked by that file's default tests as well. The last
+column is the same paper's double-precision code, SMARTIES's algorithm, against the same
+values. The paper's albedo for the large spheroid, 0.718371249381958, is not the ratio of
+its own $Q_\text{sca}$ and $Q_\text{ext}$, 0.7183712495692; scatrs's albedo agrees with the
+ratio to $2\cdot10^{-14}$. The nanorod's index and aspect ratio are far outside the validated
+domain, so it is computed here at a fixed $N = 31$ and 400 nodes.
+
 ### SMARTIES
 
-SMARTIES (Somerville, Auguié & Le Ru 2016) computes spheroids in double precision with an
-algorithm that avoids the cancellations of the classical integrals. Its code is not run here.
-Its paper does not tabulate cross sections, but it reports the largest maximum size parameter
+SMARTIES (Somerville, Auguié & Le Ru 2016) computes spheroids in double precision with the
+algorithm of their 2013 paper, which avoids the cancellations of the classical integrals. Its
+code is not run here. Its paper reports the largest maximum size parameter
 $x_{\max} = k\max(a, c)$ at which the orientation-averaged extinction still converged, for
 each index and aspect ratio. Its authors attribute the remaining limit to the matrix inversion
 in double precision, which extended precision would lift; scatrs's mixed-precision refinement

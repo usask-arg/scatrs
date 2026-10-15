@@ -60,12 +60,16 @@ fn i_pow<T: Real>(k: i64) -> Complex<T> {
 }
 
 impl<T: Real> TMatrixModes<T> {
-    /// T^{ij}_m(n, n') of mode m ≥ 0 as four dense (N+1)×(N+1) blocks (index by order).
+    /// T^{ij}_m(n, n') of mode m ≥ 0 as four dense (N+1)×(N+1) blocks (index by order); zero
+    /// for the modes above the cutoff.
     fn dense(&self, m: usize) -> [Vec<Complex<T>>; 4] {
         let n = self.n;
         let size = (n + 1) * (n + 1);
         let mut out: [Vec<Complex<T>>; 4] = core::array::from_fn(|_| vec![real(T::zero()); size]);
-        let (ts, index) = &self.modes[m];
+        // The modes above the cutoff were not computed: their contribution is negligible.
+        let Some((ts, index)) = self.modes.get(m) else {
+            return out;
+        };
         for c in 0..2 {
             let kc = index[c].len();
             for (i, &(ti, ni)) in index[c].iter().enumerate() {

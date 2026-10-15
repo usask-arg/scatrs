@@ -135,26 +135,41 @@ pub(crate) fn p_negligible_from(modes: &[ModeMatrices<f64>], n: usize) -> usize 
     from.min(n + 1)
 }
 
-/// The order pairs (n, k) whose elements kept a regularized form in some mode, as a mask
-/// indexed n·(N + 1) + k: in double-double the plain integrals of the others are accurate
-/// (their cancellation is far below 10³²), so only these need the forms.
-pub(crate) fn regularized_pairs<T: Real>(modes: &[ModeMatrices<T>], n: usize) -> Vec<bool> {
-    let n1 = n + 1;
-    let mut mask = vec![false; n1 * n1];
-    for mm in modes {
-        for c in 0..2 {
-            let idx = &mm.index[c];
-            let kc = idx.len();
-            for (i, &(_, nn)) in idx.iter().enumerate() {
-                for (j, &(_, kk)) in idx.iter().enumerate() {
-                    if mm.form[c].get(i * kc + j).is_some_and(|&f| f != 0) {
-                        mask[nn * n1 + kk] = true;
+/// The forms the `f64` pass kept, for the double-double pass of refinement to compute only
+/// those: in double-double the plain integrals of the elements that kept them are accurate
+/// (their cancellation is far below 10³²), and the regularized forms equal one another.
+pub(crate) struct Choice {
+    /// Per order pair n·(N + 1) + k, the regularized forms some mode kept (bit 0: minus the
+    /// powers < 0, bit 1: minus the powers ≤ 0).
+    pub(crate) pairs: Vec<u8>,
+    /// Per mode and class, the form each element kept (0 plain, 1, 2 as `ModeMatrices::form`).
+    pub(crate) forms: Vec<[Vec<u8>; 2]>,
+}
+
+impl Choice {
+    pub(crate) fn of<T: Real>(modes: &[ModeMatrices<T>], n: usize) -> Self {
+        let n1 = n + 1;
+        let mut pairs = vec![0u8; n1 * n1];
+        for mm in modes {
+            for c in 0..2 {
+                let idx = &mm.index[c];
+                let kc = idx.len();
+                for (i, &(_, nn)) in idx.iter().enumerate() {
+                    for (j, &(_, kk)) in idx.iter().enumerate() {
+                        match mm.form[c].get(i * kc + j) {
+                            Some(1) => pairs[nn * n1 + kk] |= 1,
+                            Some(2) => pairs[nn * n1 + kk] |= 2,
+                            _ => {}
+                        }
                     }
                 }
             }
         }
+        Self {
+            pairs,
+            forms: modes.iter().map(|mm| mm.form.clone()).collect(),
+        }
     }
-    mask
 }
 
 /// The quadrature nodes accumulated together: blocks are the unit of parallel work.
@@ -193,7 +208,8 @@ fn add_partial<T: Real>(
     }
 }
 
-/// As [`all_modes`], regularizing only the order pairs of `mask` (all with `None`), and leaving
+/// As [`all_modes`], with `choice` computing and accumulating only the forms an `f64` pass kept
+/// (all three, and the cleanest kept, with `None`), and leaving
 /// P out (zero) in the rows of order ≥ `p_from`, whose Q is then its outgoing part Y alone:
 /// refinement takes P there from the `f64` pass, where it is negligible ([`p_negligible_from`]).
 #[allow(clippy::too_many_arguments)]
@@ -204,11 +220,11 @@ pub(crate) fn all_modes_masked<T: Real>(
     n_theta: usize,
     regularize: bool,
     rows: &[Option<usize>],
-    mask: Option<&[bool]>,
+    choice: Option<&Choice>,
     p_from: usize,
 ) -> Result<Vec<ModeMatrices<T>>> {
     let n1_ = n + 1;
-    let regular_pair = |nn: usize, kk: usize| mask.is_none_or(|m| m[nn * n1_ + kk]);
+    let wanted = |nn: usize, kk: usize| choice.map_or(3, |c| c.pairs[nn * n1_ + kk]);
     // The lowest row order integrated in any mode (rows below are left zero).
     let low = rows.iter().flatten().copied().min().unwrap_or(n + 1);
     let zero = real(T::zero());
@@ -314,12 +330,13 @@ pub(crate) fn all_modes_masked<T: Real>(
                 for ti in 0..8 {
                     for nn in 0..=n {
                         for kk in 0..=n {
-                            if nn == 0 || kk == 0 || nn == kk || nn < low || !regular_pair(nn, kk) {
+                            let want = wanted(nn, kk);
+                            if nn == 0 || kk == 0 || nn == kk || nn < low || want == 0 {
                                 forms.push(None);
                                 continue;
                             }
                             let f = full[(ti * n1 + nn) * n1 + kk];
-                            forms.push(Some(ns.forms(ti, nn, kk, f, x_e)));
+                            forms.push(Some(ns.forms_wanted(ti, nn, kk, f, x_e, want)));
                         }
                     }
                 }
@@ -381,6 +398,27 @@ pub(crate) fn all_modes_masked<T: Real>(
                             let ak = (ang.d[kk_], ang.pi[kk_], ang.tau[kk_]);
                             let a = angular_factors(rt, ctp, s, nu_prime, nn, kk_, an, ak);
                             let ge = g0 * gg;
+                            let ys = &mut yv[m][c];
+                            let ys_abs = &mut ya[m][c];
+                            if let Some(ch) = choice {
+                                // Only the form the f64 pass kept.
+                                let kept = ch.forms[m][c][slot] as usize;
+                                let (mut v, mut va) = (zero, T::zero());
+                                for &(ti, at) in &a {
+                                    let fi = (ti * n1 + nn) * n1 + kk_;
+                                    let mag = l1(at);
+                                    let (r, ra) = match (kept, forms.get(fi)) {
+                                        (1, Some(Some(f))) => (f.lt0, f.lt0_abs),
+                                        (2, Some(Some(f))) => (f.le0, f.le0_abs),
+                                        _ => (full[fi], l1(full[fi])),
+                                    };
+                                    v = v + at * r;
+                                    va += mag * ra;
+                                }
+                                ys[kept][slot] = ys[kept][slot] + v.scale(ge);
+                                ys_abs[kept][slot] += va * ge.abs();
+                                continue;
+                            }
                             let (mut va, mut aa) = (zero, T::zero());
                             let (mut vb, mut ab) = (zero, T::zero());
                             let (mut vc, mut ac) = (zero, T::zero());
@@ -397,8 +435,6 @@ pub(crate) fn all_modes_masked<T: Real>(
                                     ab += mag * f.lt0_abs;
                                 }
                             }
-                            let ys = &mut yv[m][c];
-                            let ys_abs = &mut ya[m][c];
                             ys[0][slot] = ys[0][slot] + va.scale(ge);
                             ys_abs[0][slot] += aa * ge.abs();
                             ys[1][slot] = ys[1][slot] + vb.scale(ge);
@@ -434,7 +470,9 @@ pub(crate) fn all_modes_masked<T: Real>(
                 for (j, &(_, kk_)) in idx.iter().enumerate() {
                     let slot = i * kc + j;
                     let mut best = 0;
-                    if regularize && nn != kk_ && regular_pair(nn, kk_) {
+                    if let Some(ch) = choice {
+                        best = ch.forms[m][c][slot] as usize;
+                    } else if regularize && nn != kk_ {
                         if ya[m][c][2][slot] < ya[m][c][best][slot] {
                             best = 2;
                         }
@@ -477,6 +515,7 @@ pub(crate) struct TMatrixModes<T> {
 
 /// T of every mode for orders up to n and n_theta nodes in 0 < θ < π/2, with or without the
 /// regularized integrals.
+#[cfg(test)]
 pub(crate) fn tmatrix<T: Real>(
     x: T,
     eps: T,
@@ -488,7 +527,8 @@ pub(crate) fn tmatrix<T: Real>(
     tmatrix_upto(x, eps, s, n, n_theta, regularize, n)
 }
 
-/// As [`tmatrix`] for the modes m ≤ `m_max` (the others are left empty).
+/// T of the modes m ≤ `m_max` (the others are left empty) for orders up to n on n_theta nodes in
+/// 0 < θ < π/2, with or without the regularized integrals.
 pub(crate) fn tmatrix_upto<T: Real>(
     x: T,
     eps: T,
@@ -635,7 +675,7 @@ pub(crate) fn tmatrix_refined(
     if rows.iter().any(Option::is_some) {
         let shape_dd = Spheroid::new(Dd::from(x), Dd::from(eps));
         let s_dd = Complex::new(Dd::from(s.re), Dd::from(s.im));
-        let mask = regularized_pairs(&all, n);
+        let choice = Choice::of(&all, n);
         let p_from = p_negligible_from(&all, n);
         let exact = all_modes_masked(
             &shape_dd,
@@ -644,7 +684,7 @@ pub(crate) fn tmatrix_refined(
             n_theta,
             true,
             &rows,
-            Some(&mask),
+            Some(&choice),
             p_from,
         )?;
         for (m, from) in rows.iter().enumerate() {
@@ -735,7 +775,7 @@ fn log_h_t<T: Real>(scales: &Scales<T>) -> Vec<T> {
     out
 }
 
-/// As [`tmatrix_refined`] for all modes, with the derivatives of T with respect to x, ε, Re m
+/// As [`tmatrix_refined`] for the modes m ≤ `m_max` (the list truncated there), with the derivatives of T with respect to x, ε, Re m
 /// and Im m (the dual parts, in that order). The elements are computed in `Dual<f64, 4>`, whose
 /// values are bitwise those of `f64`; the derivatives follow from dT' = −(dP + T' dQ) Q⁻¹ with
 /// the same factors, and in the refined modes from double-double residuals as T' is refined.
@@ -746,6 +786,7 @@ pub(crate) fn tmatrix_derivatives(
     n: usize,
     n_theta: usize,
     tol: f64,
+    m_max: usize,
 ) -> Result<(TMatrixModes<D4>, SolveReport)> {
     let u = f64::EPSILON / 2.0 * (2 * n) as f64;
     let u_dd = u * f64::EPSILON / 2.0;
@@ -755,7 +796,8 @@ pub(crate) fn tmatrix_derivatives(
     let scales = Scales::new(shape.r_min(), sd.scale(shape.r_max()), n);
     let lh_d = log_h_t(&scales);
     let lh: Vec<f64> = lh_d.iter().map(|v| v.re()).collect();
-    let all = all_modes(&shape, sd, n, n_theta, true, &vec![Some(0); n + 1])?;
+    let modes_in: Vec<Option<usize>> = (0..=n).map(|m| (m <= m_max).then_some(0)).collect();
+    let all = all_modes(&shape, sd, n, n_theta, true, &modes_in)?;
     let value = |v: &[Complex<D4>]| -> Vec<Complex<f64>> {
         v.iter()
             .map(|c| Complex::new(c.re.re(), c.im.re()))
@@ -779,7 +821,7 @@ pub(crate) fn tmatrix_derivatives(
         for (c, slot) in pair.iter_mut().enumerate() {
             let index = &mm.index[c];
             let kc = index.len();
-            if kc == 0 {
+            if kc == 0 || m > m_max {
                 continue;
             }
             let (qv, pv) = (value(&mm.q[c]), value(&mm.p[c]));
@@ -813,7 +855,7 @@ pub(crate) fn tmatrix_derivatives(
         type Dd4 = Dual<Dd, 4>;
         let [xd, ed, sr, si] =
             Dd4::variables([Dd::from(x), Dd::from(eps), Dd::from(s.re), Dd::from(s.im)]);
-        let mask = regularized_pairs(&all, n);
+        let choice = Choice::of(&all, n);
         let exact = all_modes_masked(
             &Spheroid::new(xd, ed),
             Complex::new(sr, si),
@@ -821,7 +863,7 @@ pub(crate) fn tmatrix_derivatives(
             n_theta,
             true,
             &rows,
-            Some(&mask),
+            Some(&choice),
             usize::MAX,
         )?;
         let dd = |c: Complex<f64>| Complex::new(Dd::from(c.re), Dd::from(c.im));
@@ -935,6 +977,7 @@ pub(crate) fn tmatrix_derivatives(
         }
         modes.push((out, mm.index));
     }
+    modes.truncate(m_max + 1);
     Ok((TMatrixModes { n, modes }, report))
 }
 
@@ -975,7 +1018,7 @@ mod tests {
         let (x, eps, n, nth) = (6.0, 3.0, 20, 40);
         let s = Complex::new(1.5, 0.02);
         for tol in [1.0, 0.0] {
-            let (d, rep) = tmatrix_derivatives(x, eps, s, n, nth, tol).unwrap();
+            let (d, rep) = tmatrix_derivatives(x, eps, s, n, nth, tol, n).unwrap();
             assert_eq!(rep.sweeps.iter().flatten().any(|&k| k > 0), tol == 0.0);
             let (ext, sca) = d.cross_sections();
             let g = d.greek_raw(12).unwrap();
@@ -1460,31 +1503,6 @@ mod element_diagnostics {
 mod profile {
     use super::*;
 
-    /// Refined-like double-double passes, for a sampling profiler: run with `--ignored`.
-    #[test]
-    #[ignore = "a profile target"]
-    fn dd_refined_rows() {
-        let (x, eps, n, nth) = (10.0, 1.0 / 3.0, 42, 121);
-        let sh = Spheroid::new(Dd::from(x), Dd::from(eps));
-        let s = Complex::new(Dd::from(1.33), Dd::from(0.0));
-        let rows: Vec<Option<usize>> = (0..=n).map(|m| (m <= 8).then_some(14)).collect();
-        let t0 = std::time::Instant::now();
-        for _ in 0..5 {
-            all_modes_masked(
-                &sh,
-                s,
-                n,
-                nth,
-                true,
-                &rows,
-                Some(&vec![false; (n + 1) * (n + 1)]),
-                20,
-            )
-            .unwrap();
-        }
-        println!("5 passes: {:.2?}", t0.elapsed());
-    }
-
     /// One double-double `all_modes`, to profile: run with `--ignored`.
     #[test]
     #[ignore = "a profile target"]
@@ -1537,7 +1555,7 @@ mod derivative_cost {
             let (_, r) = tmatrix_refined(x, eps, s, n, nth, tol, n).unwrap();
             let tv = t0.elapsed();
             let t0 = std::time::Instant::now();
-            tmatrix_derivatives(x, eps, s, n, nth, tol).unwrap();
+            tmatrix_derivatives(x, eps, s, n, nth, tol, n).unwrap();
             let td = t0.elapsed();
             let refined = r.sweeps.iter().filter(|s| s[0] + s[1] > 0).count();
             println!(

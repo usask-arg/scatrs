@@ -330,7 +330,8 @@ impl TMatrix {
         let derivatives = if with_derivatives {
             let solved = &mut converged.solved;
             let (n, nth) = (solved.t.n, solved.n_theta);
-            let d = driver::solve_derivatives(x, eps, m, n, nth, opts.precision, opts.rtol)?;
+            let m_max = solved.t.modes.len() - 1;
+            let d = driver::solve_derivatives(x, eps, m, n, nth, opts.precision, opts.rtol, m_max)?;
             // The values are the dual T's, so that they match the derivatives.
             solved.t = d.0.values();
             solved.paths = d.1;
@@ -578,12 +579,17 @@ impl TMatrixSolution<'_> {
         self.solved().t.n
     }
 
+    /// The number of azimuthal modes computed, m = 0, …, `n_modes()` − 1 (at most N + 1).
+    pub fn n_modes(&self) -> usize {
+        self.solved().t.modes.len()
+    }
+
     /// The number of quadrature nodes in 0 < θ < π/2.
     pub fn n_theta(&self) -> usize {
         self.solved().n_theta
     }
 
-    /// How each mode m = 0, …, N was solved.
+    /// How each computed mode m = 0, …, `n_modes()` − 1 was solved.
     pub fn precision_paths(&self) -> &[PrecisionPath] {
         &self.solved().paths
     }
@@ -613,13 +619,12 @@ impl TMatrixSolution<'_> {
         (self.s.eps, self.s.x, self.s.m, self.s.rtol)
     }
 
-    /// The T-matrix blocks of mode `m` (`None` above N).
+    /// The T-matrix blocks of mode `m`: `None` above the highest mode computed. Modes whose
+    /// contribution to the cross sections falls below `rtol`/10 are not computed (as in
+    /// Mishchenko's `tmatd`); [`n_modes`](Self::n_modes) gives how many were.
     pub fn block(&self, m: usize) -> Option<ModeBlocks> {
         let t = &self.solved().t;
-        if m > t.n {
-            return None;
-        }
-        let (ts, index) = &t.modes[m];
+        let (ts, index) = t.modes.get(m)?;
         let orders: Vec<usize> = (m.max(1)..=t.n).collect();
         let k = orders.len();
         let mut blocks: [Vec<Complex<f64>>; 4] =

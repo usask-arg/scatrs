@@ -249,15 +249,17 @@ fn sums<T: Real>(b0: i64, terms: &[Complex<T>]) -> JTerms<T> {
 }
 
 impl<T: Real> NodeSeries<T> {
-    /// The forms of the product of type t for orders (n, k) at this node; `x_e` = (x², x⁴) at the
-    /// node.
-    pub(crate) fn forms(
+    /// The forms of the product of type t for orders (n, k) at this node, those of `want` (bit
+    /// 0: minus the powers < 0; bit 1: minus the powers ≤ 0; the others are left zero); `x_e` =
+    /// (x², x⁴) at the node.
+    pub(crate) fn forms_wanted(
         &self,
         t: usize,
         n: usize,
         k: usize,
         full: Complex<T>,
         x_e: [T; 2],
+        want: u8,
     ) -> Forms<T> {
         let (yk, jk, e) = TYPES[t];
         let (a0, ys) = &self.y[n][kind_index(yk)];
@@ -302,8 +304,9 @@ impl<T: Real> NodeSeries<T> {
                 (full - neg, sub_abs)
             }
         };
-        let (le0, le0_abs) = pick(0);
-        let (lt0, lt0_abs) = pick(-1);
+        let none = (real(T::zero()), T::zero());
+        let (le0, le0_abs) = if want & 2 != 0 { pick(0) } else { none };
+        let (lt0, lt0_abs) = if want & 1 != 0 { pick(-1) } else { none };
         Forms {
             le0,
             le0_abs,

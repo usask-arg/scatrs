@@ -246,6 +246,11 @@ impl TMatrix {
         self.run(shape, x, m, opts, true)
     }
 
+    /// The last solution, if any.
+    pub fn solution(&self) -> Option<TMatrixSolution<'_>> {
+        self.state.as_ref().map(|s| TMatrixSolution { s })
+    }
+
     fn run(
         &mut self,
         shape: Shape,
@@ -407,6 +412,16 @@ pub struct Derivatives<V> {
 }
 
 impl<V> Derivatives<V> {
+    /// The derivatives with respect to x, ε, Re m and Im m (output buffers, for example).
+    pub fn new(x: V, aspect_ratio: V, m_re: V, m_im: V) -> Self {
+        Self {
+            x,
+            aspect_ratio,
+            m_re,
+            m_im,
+        }
+    }
+
     fn from_fn(mut f: impl FnMut(usize) -> V) -> Self {
         Self {
             x: f(0),
@@ -1058,6 +1073,24 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// A cap reached first raises `NotConverged`, unless an unconverged result is allowed.
+    #[test]
+    fn caps() {
+        let mut tm = TMatrix::new();
+        let start = driver::start_n(6.0, 2.0);
+        let mut o = TMatrixOptions::new().with_rtol(1e-12);
+        o.n_terms_max = Some(start + 1);
+        let m = Complex::new(1.5, 0.01);
+        assert!(matches!(
+            tm.compute(spheroid(2.0), 6.0, m, &o),
+            Err(Error::NotConverged { .. })
+        ));
+        let s = tm
+            .compute(spheroid(2.0), 6.0, m, &o.with_allow_unconverged(true))
+            .unwrap();
+        assert!(!s.converged() && s.error_estimate() > 1e-12);
     }
 
     #[test]

@@ -3,7 +3,17 @@
 from importlib.metadata import PackageNotFoundError as _PackageNotFoundError
 from importlib.metadata import version as _version
 
-from scatrs import _scatrs, ensemble, layered, mie, particles, refractive, size, special
+from scatrs import (
+    _scatrs,
+    ensemble,
+    layered,
+    mie,
+    particles,
+    refractive,
+    size,
+    special,
+    tmatrix,
+)
 from scatrs.ensemble import (
     Ensemble,
     EnsembleGreek,
@@ -57,6 +67,7 @@ __all__ = [
     "refractive",
     "size",
     "special",
+    "tmatrix",
 ]
 
 # The distribution's version, in PEP 440 form: maturin derives it from the Cargo workspace

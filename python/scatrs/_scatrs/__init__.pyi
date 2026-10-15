@@ -1,5 +1,5 @@
 # Stubs for the extension module scatrs._scatrs (a stub package, for its _testing submodule).
-from typing import Any, Final
+from typing import Any, Final, final
 
 import numpy as np
 from numpy.typing import NDArray
@@ -12,7 +12,9 @@ __all__ = [
     "MAX_LAYERS",
     "MAX_MIE_ORDER",
     "MAX_MIE_VALUES",
+    "MAX_TMATRIX_ORDER",
     "MAX_WIGNER_D_VALUES",
+    "TMatrixObject",
     "__version__",
     "ensemble_compute",
     "ensemble_compute_batch",
@@ -29,6 +31,7 @@ __all__ = [
     "mie_efficiencies",
     "mie_greek",
     "mie_phase_matrix",
+    "tmatrix_random",
     "wigner_d",
 ]
 
@@ -163,3 +166,65 @@ def ensemble_compute_batch(
     allow_unvalidated: bool,
     refine_backscatter: bool,
 ) -> dict[str, Any]: ...
+
+MAX_TMATRIX_ORDER: Final[int]
+
+def tmatrix_random(
+    x: NDArray[np.float64],
+    m: NDArray[np.complex128],
+    eps: NDArray[np.float64],
+    rtol: float,
+    precision: str,
+    n_terms: int | None,
+    n_theta: int | None,
+    allow_unconverged: bool,
+    allow_unvalidated: bool,
+    derivatives: bool,
+    greek: bool,
+    order: int | None,
+    mu: NDArray[np.float64] | None,
+    normalized: bool,
+) -> dict[str, NDArray[Any]]: ...
+
+@final
+class TMatrixObject:
+    def __new__(
+        cls,
+        x: float,
+        m_re: float,
+        m_im: float,
+        eps: float,
+        rtol: float,
+        precision: str,
+        n_terms: int | None,
+        n_theta: int | None,
+        allow_unconverged: bool,
+        allow_unvalidated: bool,
+        derivatives: bool,
+    ) -> TMatrixObject: ...
+    @property
+    def n_terms(self) -> int: ...
+    @property
+    def n_theta(self) -> int: ...
+    @property
+    def error_estimate(self) -> float: ...
+    @property
+    def converged(self) -> bool: ...
+    @property
+    def precision_paths(self) -> list[str]: ...
+    def block(
+        self, m: int
+    ) -> (
+        tuple[
+            NDArray[np.int64],
+            list[NDArray[np.complex128]],
+        ]
+        | None
+    ): ...
+    def efficiencies(self) -> tuple[NDArray[np.float64], NDArray[np.float64] | None]: ...
+    def greek(
+        self, order: int | None, normalized: bool
+    ) -> tuple[NDArray[np.float64], NDArray[np.float64] | None]: ...
+    def phase_matrix(
+        self, mu: NDArray[np.float64], normalized: bool
+    ) -> tuple[NDArray[np.float64], NDArray[np.float64] | None]: ...

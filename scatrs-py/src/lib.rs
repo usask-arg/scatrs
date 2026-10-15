@@ -12,6 +12,7 @@ mod layered;
 mod mie;
 mod special;
 mod testing;
+mod tmatrix;
 
 #[pymodule]
 fn _scatrs(m: &Bound<'_, PyModule>) -> PyResult<()> {
@@ -38,6 +39,9 @@ fn _scatrs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(layered::layered_amplitudes, m)?)?;
     m.add_function(wrap_pyfunction!(layered::layered_phase_matrix, m)?)?;
     m.add_function(wrap_pyfunction!(layered::layered_greek, m)?)?;
+    m.add("MAX_TMATRIX_ORDER", scatrs::tmatrix::MAX_TMATRIX_ORDER)?;
+    m.add_function(wrap_pyfunction!(tmatrix::tmatrix_random, m)?)?;
+    m.add_class::<tmatrix::TMatrixObject>()?;
     m.add_function(wrap_pyfunction!(ensemble::ensemble_parameters, m)?)?;
     m.add_function(wrap_pyfunction!(ensemble::ensemble_compute, m)?)?;
     m.add_function(wrap_pyfunction!(ensemble::ensemble_compute_batch, m)?)?;

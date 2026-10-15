@@ -89,7 +89,9 @@ def test_test_hooks_live_outside_the_extension_namespace():
         "MAX_LAYERS",
         "MAX_MIE_ORDER",
         "MAX_MIE_VALUES",
+        "MAX_TMATRIX_ORDER",
         "MAX_WIGNER_D_VALUES",
+        "TMatrixObject",
         "__version__",
         "ensemble_compute",
         "ensemble_compute_batch",
@@ -106,6 +108,7 @@ def test_test_hooks_live_outside_the_extension_namespace():
         "mie_efficiencies",
         "mie_greek",
         "mie_phase_matrix",
+        "tmatrix_random",
         "wigner_d",
     }
     assert not hasattr(_scatrs, "_raise_core_error")

@@ -13,6 +13,7 @@ from scatrs_reference.generators import (
     layered,
     mie,
     mie_greek,
+    spheroid,
     wigner_d,
 )
 
@@ -31,5 +32,6 @@ GENERATORS: dict[str, Generator] = {
     "mie": mie.generate,
     "mie_derivatives": mie.generate_derivatives,
     "mie_greek": mie_greek.generate,
+    "spheroid": spheroid.generate,
     "wigner_d": wigner_d.generate,
 }

@@ -188,8 +188,8 @@ $$
 $$
 
 reuses the factors of the solve, refined in double-double in the modes where $T$ is. The
-averages are computed in the same dual numbers, so every output has its derivatives. They cost
-4 to 13 times the values.
+averages are computed in the same dual numbers, so every output has its derivatives. All four
+together cost 4 to 8 times the values.
 
 ## Accuracy and cost
 
@@ -200,6 +200,8 @@ multiple of the larger of `rtol` and the error estimate ({doc}`/validation/accur
 
 The cost grows like $N^4$, with $N \approx x_{\max}$, and steeply for extreme aspect ratios,
 where refinement engages. At `rtol = 1e-8` on one core of an Apple M4 Pro, an oblate dust
-spheroid with $\varepsilon = 2$ takes 25 ms at $x = 5$ and 5 s at $x = 15$. Refined modes cost
-far more than double-precision ones, and extreme cases, such as $\varepsilon = 1/5$ at
-$x = 12$, take minutes.
+spheroid ($m = 1.53 + 0.008i$) with $\varepsilon = 2$ takes 22 ms at $x = 5$ and 2.1 s at
+$x = 15$, and with $\varepsilon = 5$ at $x = 12$, 3.6 s. Refined modes cost far more than
+double-precision ones: the prolate $\varepsilon = 1/5$ at $x = 12$, near the edge of the
+validated domain, takes 72 s. The quadrature runs in parallel, so on several cores these times
+fall several-fold; the results do not depend on the number of threads.

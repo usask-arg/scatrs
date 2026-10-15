@@ -9715,5 +9715,5 @@ index d54542a..f8861f5 100644
 
 ## Hand-off
 
-- **Performance targets not met** (spec section 13): refined modes cost about 15–20 times their f64 solve (target 4); the derivatives 4–13 times the values (target 3); against tmatd, scatrs is faster up to x = 6 but up to 3 times slower at x = 10. Closed-form differentiated integrands, and cheaper double-double rows (only the rows and columns whose error matters), are the follow-ups.
+- **Performance.** After the speed work of 2043466, e220d7e and b34f757 (row-selective refinement, parallel node blocks, n_θ = 2N, an amplitude-based mode cutoff, only the kept forms in double-double), scatrs is faster than tmatd on one thread for all 67 spheroids of the comparison. Targets still not met: the derivatives cost 4–8 times the values (target 3); a refined mode still costs several times its f64 solve (target 4×, not re-measured per mode). Closed-form differentiated integrands remain the follow-up for the derivatives.
 - **Phase 4b** (ensembles of spheroids) builds on `TMatrixSolution::greek_with_derivatives` and the aspect ratio as a real direction (spec section 4).

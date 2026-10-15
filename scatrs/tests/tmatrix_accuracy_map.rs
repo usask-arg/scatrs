@@ -8,8 +8,8 @@
 //! For each output it prints the worst ratio error/max(`rtol`, estimate), in the measures of
 //! `MieOutput` (Q_abs relative to Q_ext; g absolute; Q_back relative to max(Q_back, Q_sca); the
 //! Greek coefficients relative to the largest |α₁|; the phase matrix relative to max(F₁₁, 1),
-//! normalized), separately inside and outside the domain. The declared constants of
-//! `tmatrix::VALIDATED_DOMAIN` are at least 4 times the worst ratio inside.
+//! normalized), separately inside and outside the domain, and fails unless the declared constants
+//! of `tmatrix::VALIDATED_DOMAIN` are at least 4 times the worst ratio inside.
 //!
 //! Run with `cargo test --release -p scatrs --test tmatrix_accuracy_map -- --ignored --nocapture`
 //! (about an hour on an Apple M4 Pro). With `SCATRS_ACCURACY_MAP` set to a path it also writes
@@ -210,5 +210,15 @@ fn accuracy_map() {
         for (k, name) in OUTPUTS.iter().enumerate() {
             println!("  {name:7} {:.3e} at {}", worst[i][k].0, worst[i][k].1);
         }
+    }
+    // Inside the domain every output keeps a margin of 4 under its declared constant.
+    for (k, name) in OUTPUTS.iter().enumerate() {
+        let declared = VALIDATED_DOMAIN.tolerance(output_of(name), 1.0, 0.0);
+        assert!(
+            4.0 * worst[0][k].0 <= declared,
+            "{name}: worst ratio {:.3e} at {} leaves less than 4 times under C = {declared}",
+            worst[0][k].0,
+            worst[0][k].1
+        );
     }
 }

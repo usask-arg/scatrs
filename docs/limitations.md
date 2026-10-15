@@ -59,10 +59,11 @@ describes what the accuracy figures rest on.
   ({doc}`validation/accuracy`). The edge in $|m|\,x_{\max}$ is set by cost, not accuracy.
 - **Cost.** It grows like $x_{\max}^4$, and much faster where the modes need mixed-precision
   refinement, which is most often for prolate spheroids and at the largest $|m|\,x_{\max}$.
-  At `rtol = 1e-8` an oblate spheroid with $\varepsilon = 2$ takes about 25 ms at $x = 5$ and
-  5 s at $x = 15$; $\varepsilon = 1/5$ at $x = 12$ takes minutes. `precision="f64"` skips the
+  At `rtol = 1e-8` on one core an oblate spheroid with $\varepsilon = 2$ takes about 22 ms at
+  $x = 5$ and 2 s at $x = 15$; $\varepsilon = 1/5$ at $x = 12$ takes about a minute. The
+  quadrature runs in parallel on several cores. `precision="f64"` skips the
   refinement: it is fastest, and the error estimate still reports what it costs in accuracy.
-- **Derivatives** cost 4 to 13 times the values.
+- **Derivatives**, all four together, cost 4 to 8 times the values.
 
 ## Mie scattering
 

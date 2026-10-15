@@ -342,7 +342,7 @@ impl<T: Real> TMatrix<T> {
   - n_θ starts at 2N (it was N(1 + |ln ε|) + 8) and grows by a tenth (it was a quarter).
   - Modes above an NMAX1-style cutoff are not computed. The skipped tail is estimated from the decay of the last two modes and added to the error estimate; all modes are solved if it exceeds rtol/10. The cutoff compares amplitudes (largest |T| per order in mode 0, per mode for the tail), not shares of the cross sections as `tmatd` does. The accuracy map caught a first version on cross-section shares: the phase matrix is bilinear in T, so it errs by about √(share), and the Greek coefficients at ε = 1.25, x = 1 were 80 times their tolerance. `the_mode_cutoff_keeps_the_phase_matrix` now guards against it.
   - The double-double pass computes and accumulates only the form each element kept in the f64 pass, and takes P from the f64 pass where it is negligible.
-  - Result on one thread: scatrs is faster than `tmatd` for every spheroid `tmatd` computes at x ≤ 10.
+  - Result on one thread: scatrs is faster than `tmatd` for every one of the 67 spheroids `tmatd` computes in the comparison (x ≤ 10), by 1.2–4× at x = 10 and 1.6–11× below; ε = 1/5 at x = 12 takes 72 s (was 192 s). Derivatives now cost 4–8× the values (target 3×).
 - **Python.**
   - `scatrs.mie.PhaseBuffers` is not `non_exhaustive`, so it was not extended. `scatrs::tmatrix::PhaseBuffers` and `SpheroidPhaseMatrix` have six elements instead.
   - `scatrs.tmatrix.compute` returns a `TMatrix` with the mode blocks, the convergence information and `random_orientation`.

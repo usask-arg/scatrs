@@ -326,8 +326,8 @@ standard input, 16 printed digits, gfortran's names for its quad-precision intri
 compares it with scatrs at `rtol = 1e-10` for 72 spheroids: aspect ratios 1/5, 1/3, 1/2, 2, 3
 and 5, $x$ = 1, 3, 6 and 10, and indices 1.33, $1.53 + 0.008i$ and $1.5 + 0.5i$. One particle is
 computed as the code's notes describe, as a size distribution $10^{-7}$ wide. The results are in
-`benchmarks/results/2026-10-15-arm64-tmatd.json`. Apple M4 Pro, macOS; scatrs 0.3.0,
-GNU Fortran 14.2, 2026-10-15.
+`benchmarks/results/2026-10-15-arm64-tmatd.json`. Apple M4 Pro, macOS, both on one thread;
+scatrs 0.3.0, GNU Fortran 14.2, 2026-10-15.
 
 | output | at tmatd's tolerance $10^{-6}$: median, largest difference | at $10^{-9}$: median, largest |
 |---|---|---|
@@ -354,19 +354,18 @@ tolerances, scatrs at `rtol` $10^{-6}$ and $10^{-8}$, tmatd at $10^{-6}$ and $10
 
 | $x$ | scatrs, $10^{-6}$ (s) | scatrs, $10^{-8}$ (s) | tmatd, $10^{-6}$ (s) | tmatd, $10^{-9}$ (s) |
 |---|---|---|---|---|
-| 1 | 0.007 | 0.009 | 0.037 | 0.053 |
-| 3 | 0.023 | 0.025 | 0.091 | 0.20 |
-| 6 | 0.065 | 0.079 | 0.31 | 0.50 |
-| 10 | 0.85 | 1.4 | 1.1 | 1.8 |
+| 1 | 0.005 | 0.006 | 0.028 | 0.046 |
+| 3 | 0.017 | 0.023 | 0.086 | 0.19 |
+| 6 | 0.052 | 0.073 | 0.31 | 0.48 |
+| 10 | 0.60 | 1.0 | 1.1 | 1.8 |
 
-scatrs at `rtol` $10^{-8}$ is 4 to 7 times faster than tmatd at $10^{-9}$ up to $x = 6$ (slower
-for one spheroid, by 1.14 times). At $x = 10$ the modes that need refinement in double-double
-dominate its time: it is faster for 11 of the 15 spheroids tmatd computes, and up to 1.5 times
-slower for the other four (aspect ratios 1/3, 3 and 5 with the weakly absorbing indices). The
-slowest spheroid, $\varepsilon = 1/5$ with the absorbing index, which tmatd cannot compute,
-takes 48 s. scatrs also runs its quadrature in parallel, with results that do not depend on the
-number of threads: on the 12 cores of the same machine every spheroid at $x = 10$ took between
-0.03 and 8 s.
+scatrs at `rtol` $10^{-8}$ is faster than tmatd at $10^{-9}$ for every one of the 67 spheroids
+tmatd computes: by 5 to 11 times at $x = 1$, 4 to 10 times at $x = 3$, 1.6 to 10 times at
+$x = 6$ and 1.2 to 4 times at $x = 10$ (median 1.8). At $x = 10$ the modes that need refinement
+in double-double take most of its time; the closest cases are the aspect ratios 1/3, 3 and 5
+with the weakly absorbing indices. The slowest spheroid, $\varepsilon = 1/5$ with the absorbing
+index, which tmatd cannot compute, takes 25 s. scatrs also runs its quadrature in parallel,
+with results that do not depend on the number of threads.
 
 We thank M. I. Mishchenko, L. D. Travis and the NASA Goddard Institute for Space Studies for
 making the code publicly available; its references are listed in {doc}`/references`.

@@ -22,11 +22,12 @@ use num_complex::Complex;
 
 use super::functions::{Angular, Radial, Scales};
 use super::regular::{Series, angular_factors};
-use crate::complex::inv;
+use super::solve::{error_estimate, refine, solve_f64, solve_t};
+use crate::Result;
 use crate::mie::kernel::{int, real};
+use crate::scalar::DoubleDouble as Dd;
 use crate::scalar::Real;
 use crate::special::gauss_legendre;
-use crate::{Error, Result};
 
 /// A spheroid: semi-axes a (equatorial) and c (polar) in units of 1/k, from the equal-volume
 /// size parameter x and the aspect ratio ε = a/c.
@@ -66,6 +67,11 @@ impl<T: Real> Spheroid<T> {
 pub(crate) struct ModeMatrices<T> {
     pub(crate) q: [Vec<Complex<T>>; 2],
     pub(crate) p: [Vec<Complex<T>>; 2],
+    /// A bound on the rounding of each element of Q: the magnitudes it was summed from (Y's in the
+    /// kept form, and |P|), to be multiplied by the unit roundoff.
+    pub(crate) q_abs: [Vec<T>; 2],
+    /// The same for P.
+    pub(crate) p_abs: [Vec<T>; 2],
     /// (type, order) of each index of a class.
     pub(crate) index: [Vec<(usize, usize)>; 2],
 }
@@ -82,106 +88,6 @@ fn triple<T: Real>(nu: T, a: &Vec3<T>, b: &Vec3<T>) -> Complex<T> {
     a[1] * b[2] - a[2] * b[1] + (a[2] * b[0] - a[0] * b[2]).scale(nu)
 }
 
-/// Q and P of mode m with orders max(m, 1), …, n on n_theta nodes in 0 < θ < π/2.
-pub(crate) fn mode_matrices<T: Real>(
-    shape: &Spheroid<T>,
-    s: Complex<T>,
-    m: usize,
-    n: usize,
-    n_theta: usize,
-) -> Result<ModeMatrices<T>> {
-    let n0 = m.max(1);
-    if n < n0 {
-        return Err(Error::InvalidInput(format!(
-            "mode {m} needs at least {n0} orders, got {n}"
-        )));
-    }
-    // Index sets of the two classes: (type, order) with (order + type) % 2 == class.
-    let mut index: [Vec<(usize, usize)>; 2] = [Vec::new(), Vec::new()];
-    for t in 0..2 {
-        for k in n0..=n {
-            index[(k + t) % 2].push((t, k));
-        }
-    }
-    let size = [index[0].len(), index[1].len()];
-    let mut q: [Vec<Complex<T>>; 2] =
-        core::array::from_fn(|c| vec![real(T::zero()); size[c] * size[c]]);
-    let mut p: [Vec<Complex<T>>; 2] =
-        core::array::from_fn(|c| vec![real(T::zero()); size[c] * size[c]]);
-    let scales = Scales::new(shape.r_min(), s.scale(shape.r_max()), n);
-    let rule = gauss_legendre::<T>(2 * n_theta)?;
-    let mut radial = Radial::new();
-    let mut ang = Angular::new();
-    let gam: Vec<T> = (0..=n)
-        .map(|k| if k == 0 { T::zero() } else { gamma(k) })
-        .collect();
-    let i1 = Complex::new(T::zero(), T::one());
-    let zero3 = [real(T::zero()); 3];
-    // Field components per order: outgoing (h) and regular (j) M, N of the medium, and the
-    // particle's M, N; all without γ (applied per element).
-    let mut out_m = vec![zero3; n + 1];
-    let mut out_n = vec![zero3; n + 1];
-    let mut reg_m = vec![zero3; n + 1];
-    let mut reg_n = vec![zero3; n + 1];
-    let mut in_m = vec![zero3; n + 1];
-    let mut in_n = vec![zero3; n + 1];
-    for (&t, &w) in rule.nodes.iter().zip(&rule.weights) {
-        if t <= T::zero() {
-            continue;
-        }
-        let (ct, st) = (t, (T::one() - t * t).sqrt());
-        let (r, nu) = shape.at(ct, st);
-        radial.compute(r, s, n, &scales);
-        ang.compute(m, n, ct, st);
-        for k in n0..=n {
-            let (d, pi, tau) = (ang.d[k], ang.pi[k], ang.tau[k]);
-            let kk = int::<T>(k * (k + 1));
-            let po = real(-pi); // the outgoing waves' −π
-            let field = |h: Complex<T>, dh: Complex<T>, h_x: Complex<T>, p: Complex<T>| {
-                (
-                    [real(T::zero()), i1 * h * p, -(h.scale(tau))],
-                    [h_x.scale(kk * d), dh.scale(tau), i1 * dh * p],
-                )
-            };
-            (out_m[k], out_n[k]) = field(radial.h[k], radial.dh[k], radial.h_x[k], po);
-            (reg_m[k], reg_n[k]) = field(radial.j[k], radial.dj[k], radial.j_x[k], po);
-            (in_m[k], in_n[k]) = field(radial.jz[k], radial.djz[k], radial.jz_z[k], real(pi));
-        }
-        // 2 for the two halves of the range, 2π for φ, x² from dS (k = 1).
-        let fac = w * r * r * T::PI() * T::from_f64(4.0);
-        for c in 0..2 {
-            let idx = &index[c];
-            let kc = idx.len();
-            for (i, &(rt, nn)) in idx.iter().enumerate() {
-                let (o1, o2) = if rt == 0 {
-                    (&out_m[nn], &out_n[nn])
-                } else {
-                    (&out_n[nn], &out_m[nn])
-                };
-                let (g1, g2) = if rt == 0 {
-                    (&reg_m[nn], &reg_n[nn])
-                } else {
-                    (&reg_n[nn], &reg_m[nn])
-                };
-                for (j, &(ctp, kk_)) in idx.iter().enumerate() {
-                    let (b1, b2) = if ctp == 0 {
-                        (in_n[kk_].map(|v| v * s), &in_m[kk_])
-                    } else {
-                        (in_m[kk_].map(|v| v * s), &in_n[kk_])
-                    };
-                    let g = fac * gam[nn] * gam[kk_];
-                    let qv = triple(nu, o1, &b1) + triple(nu, o2, b2);
-                    let pv = triple(nu, g1, &b1) + triple(nu, g2, b2);
-                    // −i·(…)
-                    q[c][i * kc + j] = q[c][i * kc + j] + Complex::new(qv.im, -qv.re).scale(g);
-                    p[c][i * kc + j] = p[c][i * kc + j] + Complex::new(pv.im, -pv.re).scale(g);
-                }
-            }
-        }
-    }
-    Ok(ModeMatrices { q, p, index })
-}
-
 /// Q and P of every mode m = 0, …, n, on n_theta nodes in 0 < θ < π/2, nodes outside and modes
 /// inside so that each node's radial functions and regularized products serve every mode. With
 /// `regularize`, each element of Q keeps the cleanest of its three exact forms (`super::regular`).
@@ -191,7 +97,10 @@ pub(crate) fn all_modes<T: Real>(
     n: usize,
     n_theta: usize,
     regularize: bool,
+    rows: &[Option<usize>],
 ) -> Result<Vec<ModeMatrices<T>>> {
+    // The lowest row order integrated in any mode (rows below are left zero).
+    let low = rows.iter().flatten().copied().min().unwrap_or(n + 1);
     let zero = real(T::zero());
     let mut modes: Vec<ModeMatrices<T>> = Vec::with_capacity(n + 1);
     // Per mode and class: Y's three forms and their magnitude sums.
@@ -214,6 +123,8 @@ pub(crate) fn all_modes<T: Real>(
         modes.push(ModeMatrices {
             q: core::array::from_fn(mk),
             p: core::array::from_fn(mk),
+            q_abs: core::array::from_fn(|c| vec![T::zero(); size[c] * size[c]]),
+            p_abs: core::array::from_fn(|c| vec![T::zero(); size[c] * size[c]]),
             index,
         });
     }
@@ -281,7 +192,7 @@ pub(crate) fn all_modes<T: Real>(
             for ti in 0..8 {
                 for nn in 0..=n {
                     for kk in 0..=n {
-                        if nn == 0 || kk == 0 || nn == kk {
+                        if nn == 0 || kk == 0 || nn == kk || nn < low {
                             forms.push(None);
                             continue;
                         }
@@ -296,6 +207,7 @@ pub(crate) fn all_modes<T: Real>(
         let fac = g0 * r2;
         let nu_prime = -(beta * st * ct);
         for (m, mm) in modes.iter_mut().enumerate() {
+            let Some(from) = rows[m] else { continue };
             let n0 = m.max(1);
             ang.compute(m, n, ct, st);
             for k in n0..=n {
@@ -314,6 +226,9 @@ pub(crate) fn all_modes<T: Real>(
                 let idx = &mm.index[c];
                 let kc = idx.len();
                 for (i, &(rt, nn)) in idx.iter().enumerate() {
+                    if nn < from {
+                        continue;
+                    }
                     let (g1, g2) = if rt == 0 {
                         (&reg_m[nn], &reg_n[nn])
                     } else {
@@ -330,6 +245,7 @@ pub(crate) fn all_modes<T: Real>(
                         let pv = triple(nu, g1, &b1) + triple(nu, g2, b2);
                         let slot = i * kc + j;
                         mm.p[c][slot] = mm.p[c][slot] + Complex::new(pv.im, -pv.re).scale(fac * gg);
+                        mm.p_abs[c][slot] += pv.norm() * (fac * gg).abs();
                         // Y: Σ_t a_t R_t in its three forms.
                         let ak = (ang.d[kk_], ang.pi[kk_], ang.tau[kk_]);
                         let a = angular_factors(rt, ctp, s, nu_prime, nn, kk_, an, ak);
@@ -385,93 +301,12 @@ pub(crate) fn all_modes<T: Real>(
                         }
                     }
                     mm.q[c][slot] = mm.p[c][slot] + yv[m][c][best][slot];
+                    mm.q_abs[c][slot] = ya[m][c][best][slot] + mm.p_abs[c][slot];
                 }
             }
         }
     }
     Ok(modes)
-}
-
-/// LU factorization with partial pivoting of a row-major n × n matrix, in place; returns the
-/// pivots.
-pub(crate) fn lu<T: Real>(a: &mut [Complex<T>], n: usize) -> Result<Vec<usize>> {
-    let mut piv: Vec<usize> = (0..n).collect();
-    for k in 0..n {
-        let mut best = k;
-        let mut big = T::zero();
-        for i in k..n {
-            let v = a[i * n + k].norm();
-            if v > big {
-                big = v;
-                best = i;
-            }
-        }
-        if big == T::zero() || !big.is_finite() {
-            return Err(Error::InvalidInput(format!(
-                "the EBCM matrix is singular or not finite at column {k}"
-            )));
-        }
-        if best != k {
-            for j in 0..n {
-                a.swap(k * n + j, best * n + j);
-            }
-            piv.swap(k, best);
-        }
-        let inv_p = inv(a[k * n + k]);
-        for i in k + 1..n {
-            let f = a[i * n + k] * inv_p;
-            a[i * n + k] = f;
-            if f.re == T::zero() && f.im == T::zero() {
-                continue;
-            }
-            for j in k + 1..n {
-                let v = a[k * n + j];
-                a[i * n + j] = a[i * n + j] - f * v;
-            }
-        }
-    }
-    Ok(piv)
-}
-
-/// Solves A x = b in place with the factors of `lu`.
-pub(crate) fn lu_solve<T: Real>(a: &[Complex<T>], piv: &[usize], n: usize, b: &mut [Complex<T>]) {
-    let mut x: Vec<Complex<T>> = piv.iter().map(|&i| b[i]).collect();
-    for i in 0..n {
-        let mut v = x[i];
-        for j in 0..i {
-            v = v - a[i * n + j] * x[j];
-        }
-        x[i] = v;
-    }
-    for i in (0..n).rev() {
-        let mut v = x[i];
-        for j in i + 1..n {
-            v = v - a[i * n + j] * x[j];
-        }
-        x[i] = v * inv(a[i * n + i]);
-    }
-    b.copy_from_slice(&x);
-}
-
-/// T = −P Q⁻¹ of one class (scaled as P and Q are): solved as Qᵀ Tᵀ = −Pᵀ.
-pub(crate) fn solve_t<T: Real>(
-    q: &[Complex<T>],
-    p: &[Complex<T>],
-    n: usize,
-) -> Result<Vec<Complex<T>>> {
-    let mut qt: Vec<Complex<T>> = (0..n * n).map(|ij| q[(ij % n) * n + ij / n]).collect();
-    let piv = lu(&mut qt, n)?;
-    let mut t = vec![real(T::zero()); n * n];
-    let mut col = vec![real(T::zero()); n];
-    for i in 0..n {
-        // Row i of T is column i of Tᵀ: Qᵀ (row i of T)ᵀ = −(row i of P)ᵀ.
-        for j in 0..n {
-            col[j] = -p[i * n + j];
-        }
-        lu_solve(&qt, &piv, n, &mut col);
-        t[i * n..(i + 1) * n].copy_from_slice(&col);
-    }
-    Ok(t)
 }
 
 /// The unscaling factor of T's element (row order n, column order k): σ_k/σₙ =
@@ -509,7 +344,7 @@ pub(crate) fn tmatrix<T: Real>(
     let shape = Spheroid::new(x, eps);
     let scales = Scales::new(shape.r_min(), s.scale(shape.r_max()), n);
     let lh = log_h(&scales);
-    let all = all_modes(&shape, s, n, n_theta, regularize)?;
+    let all = all_modes(&shape, s, n, n_theta, regularize, &vec![Some(0); n + 1])?;
     let mut modes = Vec::with_capacity(n + 1);
     for mm in all {
         let mut ts: [Vec<Complex<T>>; 2] = [Vec::new(), Vec::new()];
@@ -519,18 +354,148 @@ pub(crate) fn tmatrix<T: Real>(
                 continue;
             }
             let mut t = solve_t(q, p, kc)?;
-            // Undo the scaling: T = Σ⁻¹ T' Σ, T_{nk} = T'_{nk} σ_k/σₙ = T' |hₙ|/|h_k| (x_min).
-            for (i, &(_, nn)) in index.iter().enumerate() {
-                for (j, &(_, kk_)) in index.iter().enumerate() {
-                    let f = T::from_f64((lh[nn] - lh[kk_]).exp());
-                    t[i * kc + j] = t[i * kc + j].scale(f);
-                }
-            }
+            unscale(&mut t, index, &lh);
             *slot = t;
         }
         modes.push((ts, mm.index));
     }
     Ok(TMatrixModes { n, modes })
+}
+
+/// Undoes the scaling of one class's T: T = Σ⁻¹ T' Σ, T_{nk} = T'_{nk} σ_k/σₙ =
+/// T' |hₙ|/|h_k| (x_min).
+fn unscale<T: Real>(t: &mut [Complex<T>], index: &[(usize, usize)], lh: &[f64]) {
+    let kc = index.len();
+    for (i, &(_, nn)) in index.iter().enumerate() {
+        for (j, &(_, kk_)) in index.iter().enumerate() {
+            let f = T::from_f64((lh[nn] - lh[kk_]).exp());
+            t[i * kc + j] = t[i * kc + j].scale(f);
+        }
+    }
+}
+
+/// How each mode's classes were solved: the estimated largest error of T (unscaled, absolute)
+/// and the refinement sweeps (0: plain f64).
+#[derive(Clone, Debug)]
+pub(crate) struct SolveReport {
+    pub(crate) error: Vec<[f64; 2]>,
+    pub(crate) sweeps: Vec<[usize; 2]>,
+}
+
+/// The lowest row order integrated in double-double for refinement in mode m: the upper three
+/// quarters of the orders (findings 5 and 7 of the study: the f64 floor lives there).
+fn refine_from(m: usize, n: usize) -> usize {
+    let n0 = m.max(1);
+    n0 + (n + 1 - n0) / 4
+}
+
+/// T of every mode in f64, refined (mixed precision) in the modes whose error estimate exceeds
+/// `tol` times the largest |T|: their rows of order ≥ [`refine_from`] are integrated in
+/// double-double, and T is corrected with double-double residuals.
+pub(crate) fn tmatrix_refined(
+    x: f64,
+    eps: f64,
+    s: Complex<f64>,
+    n: usize,
+    n_theta: usize,
+    tol: f64,
+) -> Result<(TMatrixModes<f64>, SolveReport)> {
+    // The elements' rounding: u Σ|terms| times 2N for the accuracy of the function values (the
+    // largest true error measured is about N u Σ|terms|).
+    let u = f64::EPSILON / 2.0 * (2 * n) as f64;
+    let u_dd = u * f64::EPSILON / 2.0;
+    let shape = Spheroid::new(x, eps);
+    let scales = Scales::new(shape.r_min(), s.scale(shape.r_max()), n);
+    let lh = log_h(&scales);
+    let all = all_modes(&shape, s, n, n_theta, true, &vec![Some(0); n + 1])?;
+    let mut report = SolveReport {
+        error: vec![[0.0; 2]; n + 1],
+        sweeps: vec![[0; 2]; n + 1],
+    };
+    let mut ts: Vec<[Vec<Complex<f64>>; 2]> = Vec::with_capacity(n + 1);
+    let mut big = 0.0f64;
+    for (m, mm) in all.iter().enumerate() {
+        let mut pair: [Vec<Complex<f64>>; 2] = [Vec::new(), Vec::new()];
+        for (c, slot) in pair.iter_mut().enumerate() {
+            let index = &mm.index[c];
+            let kc = index.len();
+            if kc == 0 {
+                continue;
+            }
+            let f = solve_f64(&mm.q[c], &mm.p[c], kc)?;
+            let lh_c: Vec<f64> = index.iter().map(|&(_, nn)| lh[nn]).collect();
+            let eq: Vec<f64> = mm.q_abs[c].iter().map(|&v| u * v).collect();
+            let ep: Vec<f64> = mm.p_abs[c].iter().map(|&v| u * v).collect();
+            report.error[m][c] = error_estimate(&f, &f.t, &eq, &ep, &lh_c, kc);
+            let mut t = f.t;
+            unscale(&mut t, index, &lh);
+            big = t.iter().fold(big, |a, v| a.max(v.norm()));
+            *slot = t;
+        }
+        ts.push(pair);
+    }
+    let rows: Vec<Option<usize>> = (0..=n)
+        .map(|m| {
+            let worst = report.error[m][0].max(report.error[m][1]);
+            (worst > tol * big).then(|| refine_from(m, n))
+        })
+        .collect();
+    if rows.iter().any(Option::is_some) {
+        let shape_dd = Spheroid::new(Dd::from(x), Dd::from(eps));
+        let s_dd = Complex::new(Dd::from(s.re), Dd::from(s.im));
+        let exact = all_modes(&shape_dd, s_dd, n, n_theta, true, &rows)?;
+        for (m, from) in rows.iter().enumerate() {
+            let Some(from) = *from else { continue };
+            let mm = &all[m];
+            for (c, slot) in ts[m].iter_mut().enumerate() {
+                let index = &mm.index[c];
+                let kc = index.len();
+                if kc == 0 {
+                    continue;
+                }
+                let flags: Vec<bool> = index.iter().map(|&(_, nn)| nn >= from).collect();
+                let lh_c: Vec<f64> = index.iter().map(|&(_, nn)| lh[nn]).collect();
+                let (mut t, solved, sweeps, last) = refine(
+                    &mm.q[c],
+                    &mm.p[c],
+                    &exact[m].q[c],
+                    &exact[m].p[c],
+                    &flags,
+                    &lh_c,
+                    kc,
+                    4,
+                )?;
+                // The f64 rows' rounding remains, beside the double-double rows' and the last
+                // correction.
+                let bound = |v: &[f64]| -> Vec<f64> {
+                    v.iter()
+                        .enumerate()
+                        .map(|(ij, &a)| a * if flags[ij / kc] { u_dd } else { u })
+                        .collect()
+                };
+                let est = error_estimate(
+                    &solved,
+                    &t,
+                    &bound(&mm.q_abs[c]),
+                    &bound(&mm.p_abs[c]),
+                    &lh_c,
+                    kc,
+                );
+                unscale(&mut t, index, &lh);
+                // T is returned in f64: its own rounding.
+                let rounding = t.iter().fold(0.0f64, |a, v| a.max(v.norm())) * f64::EPSILON;
+                report.sweeps[m][c] = sweeps;
+                report.error[m][c] = est + last + rounding;
+                *slot = t;
+            }
+        }
+    }
+    let modes = ts
+        .into_iter()
+        .zip(all)
+        .map(|(t, mm)| (t, mm.index))
+        .collect();
+    Ok((TMatrixModes { n, modes }, report))
 }
 
 impl<T: Real> TMatrixModes<T> {
@@ -558,6 +523,48 @@ impl<T: Real> TMatrixModes<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The refined path matches full double-double, its error estimate bounds its error, and the
+    /// f64 path's estimate bounds the f64 error.
+    #[test]
+    fn refinement_reaches_double_double() {
+        use crate::scalar::DoubleDouble as Dd;
+        let (x, eps, n, nth) = (7.0, 3.0, 20, 40);
+        let s = Complex::new(1.5, 0.01);
+        let (f, f_rep) = tmatrix_refined(x, eps, s, n, nth, 1.0).unwrap();
+        let (r, r_rep) = tmatrix_refined(x, eps, s, n, nth, 0.0).unwrap();
+        let sd = Complex::new(Dd::from(s.re), Dd::from(s.im));
+        let d = tmatrix(Dd::from(x), Dd::from(eps), sd, n, nth, true).unwrap();
+        for (u, rep) in [(&f, &f_rep), (&r, &r_rep)] {
+            for (m, (mu, md)) in u.modes.iter().zip(&d.modes).enumerate() {
+                for c in 0..2 {
+                    let err = mu.0[c]
+                        .iter()
+                        .zip(&md.0[c])
+                        .map(|(a, b)| (a - Complex::new(b.re.hi(), b.im.hi())).norm())
+                        .fold(0.0, f64::max);
+                    assert!(
+                        err <= rep.error[m][c].max(1e-300),
+                        "m {m} c {c}: {err:e} est {:e} sweeps {}",
+                        rep.error[m][c],
+                        rep.sweeps[m][c]
+                    );
+                }
+            }
+        }
+        assert!(f_rep.sweeps.iter().flatten().all(|&s| s == 0));
+        assert!(r_rep.sweeps.iter().flatten().all(|&s| s > 0));
+        let worst = r_rep.error.iter().flatten().fold(0.0f64, |a, &b| a.max(b));
+        assert!(worst < 1e-12, "{worst:e}");
+        let err = r
+            .modes
+            .iter()
+            .zip(&d.modes)
+            .flat_map(|(a, b)| a.0.iter().flatten().zip(b.0.iter().flatten()))
+            .map(|(a, b)| (a - Complex::new(b.re.hi(), b.im.hi())).norm())
+            .fold(0.0, f64::max);
+        assert!(err < 1e-13, "{err:e}");
+    }
     use crate::mie::{Mie, MieOptions};
     use crate::scalar::DoubleDouble as Dd;
 
@@ -631,6 +638,205 @@ mod diagnostics {
 
     fn dd(c: Complex<f64>) -> Complex<Dd> {
         Complex::new(Dd::from(c.re), Dd::from(c.im))
+    }
+
+    fn tref_big(
+        f: &[ModeMatrices<f64>],
+        d: &[ModeMatrices<Dd>],
+        m: usize,
+        c: usize,
+        lh: &[f64],
+    ) -> f64 {
+        let kc = f[m].index[c].len();
+        let mut t = solve_t(&d[m].q[c], &d[m].p[c], kc).unwrap();
+        unscale(&mut t, &f[m].index[c], lh);
+        t.iter().map(|v| v.norm().hi()).fold(0.0, f64::max)
+    }
+
+    /// Mode 1, prolate: f64 solve of the double-double elements rounded, against the f64
+    /// elements.
+    #[test]
+    #[ignore = "a diagnostic, not a check"]
+    fn rounded_elements() {
+        let s = Complex::new(1.5, 0.01);
+        let (x, eps, n, nth) = (15.0, 0.333_333_333_333, 42, 90);
+        let rows = vec![Some(0); n + 1];
+        let f = all_modes(&Spheroid::new(x, eps), s, n, nth, true, &rows).unwrap();
+        let d = all_modes(
+            &Spheroid::new(Dd::from(x), Dd::from(eps)),
+            dd(s),
+            n,
+            nth,
+            true,
+            &rows,
+        )
+        .unwrap();
+        let lh = log_h(&Scales::new(
+            Spheroid::new(x, eps).r_min(),
+            s.scale(Spheroid::new(x, eps).r_max()),
+            n,
+        ));
+        let hi = |v: &[Complex<Dd>]| {
+            v.iter()
+                .map(|c| Complex::new(c.re.hi(), c.im.hi()))
+                .collect::<Vec<_>>()
+        };
+        for m in [0usize, 1, 2, 8] {
+            for c in 0..2 {
+                let kc = f[m].index[c].len();
+                let tref = {
+                    let mut t = solve_t(&d[m].q[c], &d[m].p[c], kc).unwrap();
+                    unscale(&mut t, &f[m].index[c], &lh);
+                    hi(&t)
+                };
+                let run = |q: &[Complex<f64>], p: &[Complex<f64>]| {
+                    let sol = super::super::solve::solve_f64(q, p, kc).unwrap();
+                    let mut t = sol.t.clone();
+                    unscale(&mut t, &f[m].index[c], &lh);
+                    let big = tref.iter().map(|v| v.norm()).fold(0.0, f64::max);
+                    let e = t
+                        .iter()
+                        .zip(&tref)
+                        .map(|(a, b)| (a - b).norm())
+                        .fold(0.0, f64::max);
+                    e / big
+                };
+                let e_r = run(&hi(&d[m].q[c]), &hi(&d[m].p[c]));
+                let e_f = run(&f[m].q[c], &f[m].p[c]);
+                // The estimator fed with the true element errors, and with the bounds.
+                let lh_c: Vec<f64> = f[m].index[c].iter().map(|&(_, nn)| lh[nn]).collect();
+                let sol = super::super::solve::solve_f64(&f[m].q[c], &f[m].p[c], kc).unwrap();
+                let true_q: Vec<f64> = f[m].q[c]
+                    .iter()
+                    .zip(&hi(&d[m].q[c]))
+                    .map(|(a, b)| (a - b).norm())
+                    .collect();
+                let true_p: Vec<f64> = f[m].p[c]
+                    .iter()
+                    .zip(&hi(&d[m].p[c]))
+                    .map(|(a, b)| (a - b).norm())
+                    .collect();
+                let u = f64::EPSILON / 2.0;
+                let bq: Vec<f64> = f[m].q_abs[c].iter().map(|v| u * v).collect();
+                let bp: Vec<f64> = f[m].p_abs[c].iter().map(|v| u * v).collect();
+                let big = tref_big(&f, &d, m, c, &lh);
+                let est_true =
+                    super::super::solve::error_estimate(&sol, &sol.t, &true_q, &true_p, &lh_c, kc)
+                        / big;
+                let est_bound =
+                    super::super::solve::error_estimate(&sol, &sol.t, &bq, &bp, &lh_c, kc) / big;
+                let ratio = true_q
+                    .iter()
+                    .zip(&bq)
+                    .map(|(a, b)| a / b.max(1e-300))
+                    .fold(0.0, f64::max);
+                println!(
+                    "   est(true errors) {est_true:.1e}, est(bounds) {est_bound:.1e}, max true/bound {ratio:.1e}"
+                );
+                // Element errors of f64 relative to their row's largest element.
+                let mut row_err = 0.0f64;
+                let mut where_ = (0, 0);
+                for i in 0..kc {
+                    let rmax = (0..kc)
+                        .map(|j| d[m].q[c][i * kc + j].norm().hi())
+                        .fold(0.0, f64::max);
+                    for j in 0..kc {
+                        let v = d[m].q[c][i * kc + j];
+                        let e = (f[m].q[c][i * kc + j] - Complex::new(v.re.hi(), v.im.hi())).norm()
+                            / rmax;
+                        if e > row_err {
+                            row_err = e;
+                            where_ = (f[m].index[c][i].1, f[m].index[c][j].1);
+                        }
+                    }
+                }
+                println!(
+                    "m {m} c {c}: rounded dd {e_r:.1e}; f64 {e_f:.1e}; worst row-rel element err {row_err:.1e} at {where_:?}"
+                );
+            }
+        }
+    }
+
+    /// Per mode: Skeel estimate and errors of f64 and refined T against double-double.
+    #[test]
+    #[ignore = "a diagnostic, not a check"]
+    fn refined_per_mode() {
+        let s = Complex::new(1.5, 0.01);
+        let (x, eps, n, nth) = (15.0, 0.333_333_333_333, 42, 90);
+        let plain = tmatrix(x, eps, s, n, nth, true).unwrap();
+        let (refined, report) = tmatrix_refined(x, eps, s, n, nth, 0.0).unwrap();
+        let b = tmatrix(Dd::from(x), Dd::from(eps), dd(s), n, nth, true).unwrap();
+        for m in 0..=n {
+            for c in 0..2 {
+                let (mut big, mut ea, mut eb) = (0.0f64, 0.0f64, 0.0f64);
+                for ((u, r), v) in plain.modes[m].0[c]
+                    .iter()
+                    .zip(&refined.modes[m].0[c])
+                    .zip(&b.modes[m].0[c])
+                {
+                    let v = Complex::new(v.re.hi(), v.im.hi());
+                    big = big.max(v.norm());
+                    ea = ea.max((u - v).norm());
+                    eb = eb.max((r - v).norm());
+                }
+                println!(
+                    "m {m} c {c}: max|T| {big:.1e} est {:.1e} f64 {:.1e} refined {:.1e} sweeps {}",
+                    report.error[m][c], ea, eb, report.sweeps[m][c]
+                );
+            }
+        }
+    }
+
+    /// The refined path against full double-double: run with `--ignored --nocapture`.
+    #[test]
+    #[ignore = "a diagnostic, not a check"]
+    fn refined_against_double_double() {
+        let s = Complex::new(1.5, 0.01);
+        for &(x, eps, n, nth) in &[
+            (10.0, 2.0, 24, 50),
+            (15.0, 4.0, 40, 100),
+            (15.0, 0.333_333_333_333, 42, 90),
+            (25.0, 0.333_333_333_333, 60, 120),
+            (30.0, 2.0, 50, 90),
+        ] {
+            let t0 = std::time::Instant::now();
+            let plain = tmatrix(x, eps, s, n, nth, true).unwrap();
+            let t_plain = t0.elapsed();
+            let t0 = std::time::Instant::now();
+            let (refined, report) = tmatrix_refined(x, eps, s, n, nth, 1e-14).unwrap();
+            let t_ref = t0.elapsed();
+            let t0 = std::time::Instant::now();
+            let b = tmatrix(Dd::from(x), Dd::from(eps), dd(s), n, nth, true).unwrap();
+            let t_dd = t0.elapsed();
+            let err = |u: &TMatrixModes<f64>| {
+                let (mut big, mut diff) = (0.0f64, 0.0f64);
+                for (ma, mb) in u.modes.iter().zip(&b.modes) {
+                    for c in 0..2 {
+                        for (u, v) in ma.0[c].iter().zip(&mb.0[c]) {
+                            let v = Complex::new(v.re.hi(), v.im.hi());
+                            big = big.max(v.norm());
+                            diff = diff.max((u - v).norm());
+                        }
+                    }
+                }
+                diff / big
+            };
+            let skeel = report.error.iter().flatten().fold(0.0f64, |a, &b| a.max(b));
+            let sweeps = report.sweeps.iter().flatten().max().unwrap();
+            let n_ref = report.sweeps.iter().filter(|s| s[0] + s[1] > 0).count();
+            let big = refined
+                .modes
+                .iter()
+                .flat_map(|m| m.0.iter().flatten())
+                .fold(0.0f64, |a, v| a.max(v.norm()));
+            let skeel = skeel / big;
+            println!(
+                "x {x} eps {eps:.3} N {n}: f64 {:.1e} ({t_plain:.2?}), refined {:.1e} ({t_ref:.2?}, \
+                 ≤{sweeps} sweeps, {n_ref} modes), dd ({t_dd:.2?}); est {skeel:.1e}",
+                err(&plain),
+                err(&refined),
+            );
+        }
     }
 
     /// f64 against double-double, plain integrals: run with
@@ -710,10 +916,10 @@ mod element_diagnostics {
         ] {
             let sh = Spheroid::new(x, eps);
             let shd = Spheroid::new(Dd::from(x), Dd::from(eps));
-            let qp = all_modes(&sh, s, n, nth, false).unwrap();
-            let qr = all_modes(&sh, s, n, nth, true).unwrap();
-            let dp = all_modes(&shd, sd, n, nth, false).unwrap();
-            let dr = all_modes(&shd, sd, n, nth, true).unwrap();
+            let qp = all_modes(&sh, s, n, nth, false, &vec![Some(0); n + 1]).unwrap();
+            let qr = all_modes(&sh, s, n, nth, true, &vec![Some(0); n + 1]).unwrap();
+            let dp = all_modes(&shd, sd, n, nth, false, &vec![Some(0); n + 1]).unwrap();
+            let dr = all_modes(&shd, sd, n, nth, true, &vec![Some(0); n + 1]).unwrap();
             for m in [0usize, 1] {
                 for c in 0..2 {
                     let idx = &qp[m].index[c];

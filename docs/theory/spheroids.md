@@ -159,7 +159,10 @@ $h = 30$ and 691 at $h = 100$, where $2N$ nodes would leave the quadrature, not 
 unconverged.
 
 $N$ and $n_\theta$ have caps; reaching one raises `NotConverged` unless the unconverged result
-is asked for. The result's error estimate is the last change of the loop (with the modes left
+is asked for. The cap on $N$ is twice Wiscombe's estimate at $|m|\,x_{\max}$, plus 20: the
+internal field needs about $|m|\,x_{\max}$ orders on the surface, so a metal such as
+$m = \sqrt{-4 + 0.5i}$ at $x_{\max} = 20$ needs $N \approx 100$, beyond twice the external
+estimate. The result's error estimate is the last change of the loop (with the modes left
 out), or the solve's estimate if larger.
 
 ## Random orientation

@@ -168,11 +168,22 @@ pub(crate) fn x_max(x: f64, eps: f64) -> f64 {
     a.max(a / eps)
 }
 
-/// The starting N, Wiscombe's estimate at x_max, which the loop then grows:
-/// N₀ = ⌈x_max + 4 x_max^{1/3}⌉ + 2, at least 4.
-pub(crate) fn start_n(x: f64, eps: f64) -> usize {
-    let xm = x_max(x, eps);
+/// Wiscombe's estimate of the orders at size parameter `xm`: ⌈xm + 4 xm^{1/3}⌉ + 2, at least 4.
+fn wiscombe(xm: f64) -> usize {
     ((xm + 4.0 * xm.cbrt()).ceil() as usize + 2).max(4)
+}
+
+/// The starting N, Wiscombe's estimate at x_max, which the loop then grows.
+pub(crate) fn start_n(x: f64, eps: f64) -> usize {
+    wiscombe(x_max(x, eps))
+}
+
+/// The default cap on N: twice Wiscombe's estimate at |m|·x_max (x_max if |m| < 1), plus 20. The
+/// internal field needs about |m|·x_max orders on the surface, so high indices need more than
+/// the external estimate N₀: the metal m = √(−4 + 0.5i) at x_max = 20 needs N = 90 to 100 for
+/// 10⁻¹⁰, against 2N₀ + 20 = 86.
+pub(crate) fn cap_n(x: f64, eps: f64, m: Complex<f64>) -> usize {
+    2 * wiscombe(x_max(x, eps) * m.norm().max(1.0)) + 20
 }
 
 /// n_θ tied to N: 2N nodes in 0 < θ < π/2, as in Mishchenko's `tmatd`, and at least the nodes

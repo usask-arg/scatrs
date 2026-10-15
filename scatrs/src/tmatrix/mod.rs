@@ -91,9 +91,9 @@ pub struct TMatrixOptions {
     pub n_terms: Option<usize>,
     /// A fixed number of quadrature nodes in 0 < θ < π/2 instead of the loop's.
     pub n_theta: Option<usize>,
-    /// The cap on N (default: twice the starting estimate, plus 20).
+    /// The cap on N (default: twice Wiscombe's estimate at |m|·x_max, plus 20).
     pub n_terms_max: Option<usize>,
-    /// The cap on n_θ (default: 4 times N's starting estimate (1 + |ln ε|), plus 40).
+    /// The cap on n_θ (default: 4 times the starting n_θ, plus 40).
     pub n_theta_max: Option<usize>,
     /// The Greek order that must settle too (default: none, only the cross sections).
     pub greek_order: Option<usize>,
@@ -293,7 +293,7 @@ impl TMatrix {
         let start = driver::start_n(x, eps);
         let n_cap = opts
             .n_terms_max
-            .unwrap_or(2 * start + 20)
+            .unwrap_or_else(|| driver::cap_n(x, eps, m))
             .min(MAX_TMATRIX_ORDER);
         let theta_cap = opts
             .n_theta_max
@@ -1100,6 +1100,21 @@ mod tests {
             driver::theta_of(30, 0.05, 1e-8),
             driver::shape_theta(20.0, 1e-8)
         );
+    }
+
+    /// The cap on N grows with |m|·x_max: the external estimate alone for |m| ≤ 1, more for the
+    /// metal that needs N = 90 to 100 at x_max = 20.
+    #[test]
+    fn order_caps() {
+        let (eps, x) = (0.2, 20.0 * 0.2f64.powf(2.0 / 3.0));
+        let start = driver::start_n(x, eps);
+        assert_eq!(start, 33);
+        assert_eq!(
+            driver::cap_n(x, eps, Complex::new(0.9, 0.0)),
+            2 * start + 20
+        );
+        let metal = Complex::new(-4.0f64, 0.5).sqrt();
+        assert_eq!(driver::cap_n(x, eps, metal), 132);
     }
 
     /// A cap reached first raises `NotConverged`, unless an unconverged result is allowed.

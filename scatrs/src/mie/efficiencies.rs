@@ -2,7 +2,8 @@
 
 use num_complex::Complex;
 
-use super::{Coefficients, Group, MieSolution};
+use super::{CoefficientDerivatives, Coefficients, Group, MieSolution};
+use crate::complex::times_i;
 use crate::scalar::Real;
 
 /// Efficiencies (cross sections divided by the geometric cross section πr²) and the
@@ -82,36 +83,66 @@ fn value_sums<T: Real>(a: &[Complex<T>], b: &[Complex<T>]) -> Sums<T> {
     Sums { sca, back, g }
 }
 
-/// The derivatives of the sums of [`value_sums`], given the coefficients' derivatives.
+/// The derivatives of the sums of [`value_sums`] with respect to the size parameter, Re m and
+/// Im m (∂/∂(Im m) = i·d/dm), in one pass over the coefficients and their derivatives; the
+/// same operations, in the same order, as three separate passes would take.
 fn derivative_sums<T: Real>(
     a: &[Complex<T>],
     b: &[Complex<T>],
-    da: impl Fn(usize) -> Complex<T>,
-    db: impl Fn(usize) -> Complex<T>,
-) -> Sums<T> {
+    d: &CoefficientDerivatives<'_, T>,
+) -> [Sums<T>; 3] {
     let n = a.len();
+    let (b, da_dx, da_dm, db_dx, db_dm) = (
+        &b[..n],
+        &d.da_dx[..n],
+        &d.da_dm[..n],
+        &d.db_dx[..n],
+        &d.db_dm[..n],
+    );
     let two = T::from_f64(2.0);
-    let mut sca = T::zero();
-    let mut back = Complex::new(T::zero(), T::zero());
-    let mut g = T::zero();
+    let zero = Complex::new(T::zero(), T::zero());
+    let mut sca = [T::zero(); 3];
+    let mut back = [zero; 3];
+    let mut g = [T::zero(); 3];
+    // The derivatives at index i, with respect to x, Re m and Im m.
+    let derivs = |i: usize| {
+        (
+            [da_dx[i], da_dm[i], times_i(da_dm[i])],
+            [db_dx[i], db_dm[i], times_i(db_dm[i])],
+        )
+    };
+    let mut current = derivs(0);
     for k in 1..=n {
-        let (ak, bk, dak, dbk) = (a[k - 1], b[k - 1], da(k - 1), db(k - 1));
+        let (ak, bk) = (a[k - 1], b[k - 1]);
+        let (dak, dbk) = current;
         let w: T = int(2 * k + 1);
-        sca += w * two * (re_mul_conj(dak, ak) + re_mul_conj(dbk, bk));
-        let t = (dak - dbk).scale(w);
-        back = if k % 2 == 0 { back + t } else { back - t };
         let kf: T = int(k);
-        if k < n {
-            let (a1, b1, da1, db1) = (a[k], b[k], da(k), db(k));
-            g += kf * (kf + two) / (kf + T::one())
-                * (re_mul_conj(dak, a1)
-                    + re_mul_conj(ak, da1)
-                    + re_mul_conj(dbk, b1)
-                    + re_mul_conj(bk, db1));
+        let next = (k < n).then(|| derivs(k));
+        let pair = kf * (kf + two) / (kf + T::one());
+        let own = w / (kf * (kf + T::one()));
+        for p in 0..3 {
+            sca[p] += w * two * (re_mul_conj(dak[p], ak) + re_mul_conj(dbk[p], bk));
+            let t = (dak[p] - dbk[p]).scale(w);
+            back[p] = if k % 2 == 0 { back[p] + t } else { back[p] - t };
+            if let Some((da1, db1)) = next {
+                let (a1, b1) = (a[k], b[k]);
+                g[p] += pair
+                    * (re_mul_conj(dak[p], a1)
+                        + re_mul_conj(ak, da1[p])
+                        + re_mul_conj(dbk[p], b1)
+                        + re_mul_conj(bk, db1[p]));
+            }
+            g[p] += own * (re_mul_conj(dak[p], bk) + re_mul_conj(ak, dbk[p]));
         }
-        g += w / (kf * (kf + T::one())) * (re_mul_conj(dak, bk) + re_mul_conj(ak, dbk));
+        if let Some(nx) = next {
+            current = nx;
+        }
     }
-    Sums { sca, back, g }
+    [0, 1, 2].map(|p| Sums {
+        sca: sca[p],
+        back: back[p],
+        g: g[p],
+    })
 }
 
 impl<T: Real> MieSolution<'_, T> {
@@ -160,20 +191,15 @@ impl<T: Real> Coefficients<'_, T> {
     /// parameter's derivative has the term of 2/x²).
     pub(crate) fn efficiencies_jacobian(&self, group: &Group<'_, T>) -> EfficiencyJacobian<T> {
         let (a, b, d) = (self.a, self.b, &group.d);
-        let i1 = Complex::new(T::zero(), T::one());
         let two = T::from_f64(2.0);
         let inv_x = self.x.recip();
         let inv_x2 = inv_x * inv_x;
         let two_x2 = two * inv_x2;
         let values = value_sums(a, b);
         let q = self.efficiencies_from(&values);
+        let all = derivative_sums(a, b, d);
         let mut out = [q; 3];
-        for (p, o) in out.iter_mut().enumerate() {
-            let sums = match p {
-                0 => derivative_sums(a, b, |k| d.da_dx[k], |k| d.db_dx[k]),
-                1 => derivative_sums(a, b, |k| d.da_dm[k], |k| d.db_dm[k]),
-                _ => derivative_sums(a, b, |k| i1 * d.da_dm[k], |k| i1 * d.db_dm[k]),
-            };
+        for (p, (o, sums)) in out.iter_mut().zip(&all).enumerate() {
             // Q = (2/x²)·sum: ∂Q/∂x = (2/x²)·∂sum/∂x − (2/x)·Q.
             let x_term = |v: T| {
                 if p == 0 && group.outer {

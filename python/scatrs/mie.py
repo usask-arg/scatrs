@@ -10,7 +10,7 @@ Each function runs entirely in Rust, with the GIL released, over all elements in
 ``derivatives`` is ``True`` (all of ``"x"``, ``"m_real"``, ``"m_imag"``) or a sequence of those
 names; the result's ``d`` method (for example :meth:`MieEfficiencies.d`) then returns the
 derivative with respect to one of them, in the same structure. Derivatives cost less than
-finite differences would: all three together take 1.4 to 2.9 times as long as the values
+finite differences would: all three together take 1.2 to 2.3 times as long as the values
 alone.
 
 Results are frozen dataclasses of read-only arrays (copy an array to modify it); they compare

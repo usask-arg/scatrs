@@ -10,7 +10,7 @@
 
 use num_complex::Complex;
 
-use crate::complex::inv;
+use crate::complex::{inv, times_i};
 use crate::scalar::Real;
 
 /// One coefficient's effective log-derivative H at the outer surface of a layered sphere, at
@@ -111,6 +111,50 @@ fn start_index<T: Real>(n_top: usize, rho_abs: f64) -> usize {
     asymptotic.min(enclosed)
 }
 
+/// One step of the downward recurrence u_k = 1/(c_k − u_{k+1}), c_k = (2k + 1)/z, complex z.
+#[inline]
+fn step_complex<T: Real>(k: usize, inv_z: Complex<T>, u: Complex<T>) -> Complex<T> {
+    let c = inv_z.scale(int(2 * k + 1));
+    let mut den = c - u;
+    if den.re == T::zero() && den.im == T::zero() {
+        // Only at an exact zero of ψ_{k−1}: nudge by a rounding error, as Lentz's
+        // method does, so that the pole of D_{k−1} stays finite.
+        den = real(T::epsilon() * (c.norm() + u.norm()));
+    }
+    inv(den)
+}
+
+/// One step of the downward recurrence u_k = 1/(c_k − u_{k+1}), c_k = (2k + 1)/ρ, real ρ.
+#[inline]
+fn step_real<T: Real>(k: usize, inv_rho: T, u: T) -> T {
+    let c = inv_rho * int::<T>(2 * k + 1);
+    let mut den = c - u;
+    if den == T::zero() {
+        den = T::epsilon() * (c.abs() + u.abs());
+    }
+    den.recip()
+}
+
+/// Steps two downward recurrences in one loop, `a` over k = `a.1`, …, `a.0` and `b` over
+/// k = `b.1`, …, `b.0` (each from its start down): they are independent, so their chains of
+/// dependent divisions overlap, where one after the other they would not.
+#[inline]
+fn interleave(
+    a: (usize, usize),
+    b: (usize, usize),
+    mut step_a: impl FnMut(usize),
+    mut step_b: impl FnMut(usize),
+) {
+    for k in (a.1.min(b.1)..=a.0.max(b.0)).rev() {
+        if k <= a.0 && k >= a.1 {
+            step_a(k);
+        }
+        if k <= b.0 && k >= b.1 {
+            step_b(k);
+        }
+    }
+}
+
 /// u_k(z) for k = 1, …, n_top + 1 into `out` (index k), complex z.
 pub(crate) fn ratios_complex<T: Real>(out: &mut Vec<Complex<T>>, z: Complex<T>, n_top: usize) {
     let inv_z = inv(z);
@@ -119,14 +163,7 @@ pub(crate) fn ratios_complex<T: Real>(out: &mut Vec<Complex<T>>, z: Complex<T>, 
     out.resize(n_top + 2, real(T::zero()));
     let mut u = real(T::zero());
     for k in (1..=start).rev() {
-        let c = inv_z.scale(int(2 * k + 1));
-        let mut den = c - u;
-        if den.re == T::zero() && den.im == T::zero() {
-            // Only at an exact zero of ψ_{k−1}: nudge by a rounding error, as Lentz's
-            // method does, so that the pole of D_{k−1} stays finite.
-            den = real(T::epsilon() * (c.norm() + u.norm()));
-        }
-        u = inv(den);
+        u = step_complex(k, inv_z, u);
         if k <= n_top + 1 {
             out[k] = u;
         }
@@ -141,12 +178,7 @@ pub(crate) fn ratios_real<T: Real>(out: &mut Vec<T>, rho: T, from: usize, n_top:
     out.resize(n_top + 2, T::zero());
     let mut u = T::zero();
     for k in (from.max(1)..=start).rev() {
-        let c = inv_rho * int::<T>(2 * k + 1);
-        let mut den = c - u;
-        if den == T::zero() {
-            den = T::epsilon() * (c.abs() + u.abs());
-        }
-        u = den.recip();
+        u = step_real(k, inv_rho, u);
         if k <= n_top + 1 {
             out[k] = u;
         }
@@ -169,6 +201,16 @@ pub(crate) fn ratios<T: Real>(
         out.extend(scratch.iter().map(|&u| real(u)));
     } else {
         ratios_complex(out, z, n_top);
+    }
+}
+
+/// The last order of the upward ψ and χ recurrences: ⌊x⌋ (at most `n`) for x ≥ 1, else 0.
+fn upward_orders<T: Real>(x: T, n: usize) -> usize {
+    let xf = x.approx_f64();
+    if xf >= 1.0 {
+        (xf.floor() as usize).min(n)
+    } else {
+        0
     }
 }
 
@@ -201,11 +243,73 @@ impl<T: Real> State<T> {
     }
 
     /// The first step of [`solve`](Self::solve): u_k(mx) for k = 1, …, `n` + 1, which
-    /// [`u_z`](Self::u_z) then returns.
+    /// [`u_z`](Self::u_z) then returns, and u_k(x) for the orders above the upward
+    /// recurrences, which [`finish`](Self::finish) uses: as [`ratios`] and [`ratios_real`]
+    /// would give them, in one loop.
     pub(crate) fn prepare(&mut self, x: T, m: Complex<T>, n: usize) {
+        let n_s = upward_orders(x, n);
+        let top = n + 1;
+        let x_steps = if n_s < n {
+            (
+                start_index::<T>(top, x.approx_f64().abs()),
+                (n_s + 1).max(1),
+            )
+        } else {
+            (0, 1) // none: every order comes from the upward recurrences
+        };
+        let inv_x = x.recip();
+        self.u_x.clear();
+        self.u_x.resize(n + 2, T::zero());
+        let u_x = &mut self.u_x;
+        let mut ux = T::zero();
+        let step_x = |k: usize| {
+            ux = step_real(k, inv_x, ux);
+            if k <= top {
+                u_x[k] = ux;
+            }
+        };
+        let z = m.scale(x);
         // D_n(mx). For real m (with no derivative seeded in Im m) the real recurrence is used:
         // twice as fast, and for m = 1 exactly it reproduces u_k(x) bit for bit.
-        ratios(&mut self.u_z, &mut self.u_real, m, x, n);
+        if m.im.is_zero() {
+            let inv_rho = z.re.recip();
+            let scratch = &mut self.u_real;
+            scratch.clear();
+            scratch.resize(n + 2, T::zero());
+            let mut u = T::zero();
+            let start = start_index::<T>(top, z.re.approx_f64().abs());
+            interleave(
+                (start, 1),
+                x_steps,
+                |k| {
+                    u = step_real(k, inv_rho, u);
+                    if k <= top {
+                        scratch[k] = u;
+                    }
+                },
+                step_x,
+            );
+            self.u_z.clear();
+            self.u_z.extend(scratch.iter().map(|&u| real(u)));
+        } else {
+            let inv_z = inv(z);
+            let out = &mut self.u_z;
+            out.clear();
+            out.resize(n + 2, real(T::zero()));
+            let mut u = real(T::zero());
+            let start = start_index::<T>(top, z.norm().approx_f64());
+            interleave(
+                (start, 1),
+                x_steps,
+                |k| {
+                    u = step_complex(k, inv_z, u);
+                    if k <= top {
+                        out[k] = u;
+                    }
+                },
+                step_x,
+            );
+        }
     }
 
     /// u_k(mx) for k = 1, …, N + 1 (index k), after [`prepare`](Self::prepare).
@@ -235,16 +339,9 @@ impl<T: Real> State<T> {
         self.m = m;
         self.derivatives = derivatives;
         let z = m.scale(x);
-        let xf = x.approx_f64();
-        // Orders up to n_s use the upward ψ and χ recurrences; above, the ratios.
-        let n_s = if xf >= 1.0 {
-            (xf.floor() as usize).min(n)
-        } else {
-            0
-        };
-        if n_s < n {
-            ratios_real(&mut self.u_x, x, n_s + 1, n);
-        }
+        // Orders up to n_s use the upward ψ and χ recurrences; above, the ratios u_k(x) from
+        // `prepare`.
+        let n_s = upward_orders(x, n);
         for v in [
             &mut self.a,
             &mut self.b,
@@ -399,11 +496,12 @@ impl<T: Real> State<T> {
                 let kk1: T = int::<T>(k) * int::<T>(k + 1);
                 let ida2 = inv_da * inv_da;
                 let idb2 = inv_db * inv_db;
-                self.da_dm.push(i1 * d_minus * inv_m2 * ida2);
-                self.db_dm.push(-(i1 * d_plus * idb2));
-                self.da_dx
-                    .push(i1 * m2_minus_1 * (d * d + real(kk1 * inv_x * inv_x)) * inv_m2 * ida2);
-                self.db_dx.push(i1 * m2_minus_1 * idb2);
+                self.da_dm.push(times_i(d_minus) * inv_m2 * ida2);
+                self.db_dm.push(-(times_i(d_plus) * idb2));
+                self.da_dx.push(
+                    times_i(m2_minus_1) * (d * d + real(kk1 * inv_x * inv_x)) * inv_m2 * ida2,
+                );
+                self.db_dx.push(times_i(m2_minus_1) * idb2);
                 // Derivatives of −Im(f)/|Δ|² with f = D/m or m D: for a parameter p,
                 // −[Im(∂f/∂p) − 2 Im(f) Re(∂Δ/∂p / Δ)]/|Δ|².
                 let fa_m = -(d_minus * inv_m2); // d(D/m)/dm = dA/dm
@@ -419,7 +517,8 @@ impl<T: Real> State<T> {
                 jac[0] += weight * (term(d_m, dp, la_x, na) + term(md, m2 * dp, lb_x, nb));
                 jac[1] += weight * (term(d_m, fa_m, la_m, na) + term(md, fb_m, lb_m, nb));
                 jac[2] += weight
-                    * (term(d_m, i1 * fa_m, i1 * la_m, na) + term(md, i1 * fb_m, i1 * lb_m, nb));
+                    * (term(d_m, times_i(fa_m), times_i(la_m), na)
+                        + term(md, times_i(fb_m), times_i(lb_m), nb));
             }
             if let (true, Some(o)) = (derivatives, od) {
                 // A layered sphere: the sphere's formulas with Hₐ, H_b in place of D_n(mx)
@@ -433,12 +532,12 @@ impl<T: Real> State<T> {
                 let minus_a = hh_a.scale(two) - o.hplus[0]; // Hₐ − zHₐ′
                 let fa_m = -(minus_a * inv_m2) + o.extra_m[0] * inv_m; // dBₐ/dm
                 let fb_m = o.hplus[1] + m * o.extra_m[1]; // dB_b/dm
-                self.da_dm.push(-(i1 * fa_m * ida2));
-                self.db_dm.push(-(i1 * fb_m * idb2));
+                self.da_dm.push(-(times_i(fa_m) * ida2));
+                self.db_dm.push(-(times_i(fb_m) * idb2));
                 self.da_dx.push(
-                    i1 * m2_minus_1 * (hh_a * hh_a + real(kk1 * inv_x * inv_x)) * inv_m2 * ida2,
+                    times_i(m2_minus_1) * (hh_a * hh_a + real(kk1 * inv_x * inv_x)) * inv_m2 * ida2,
                 );
-                self.db_dx.push(i1 * m2_minus_1 * idb2);
+                self.db_dx.push(times_i(m2_minus_1) * idb2);
                 let k_x2 = k_x * inv_x;
                 let la_x = g_a * (dpa - real(k_x2) - big_a.scale(k_x) + real(one)) + h_a * d_m;
                 let lb_x = g_b * (m2 * dpb - real(k_x2) - big_b.scale(k_x) + real(one)) + h_b * md;
@@ -450,7 +549,8 @@ impl<T: Real> State<T> {
                 jac[0] += weight * (term(d_m, dpa, la_x, na) + term(md, m2 * dpb, lb_x, nb));
                 jac[1] += weight * (term(d_m, fa_m, la_m, na) + term(md, fb_m, lb_m, nb));
                 jac[2] += weight
-                    * (term(d_m, i1 * fa_m, i1 * la_m, na) + term(md, i1 * fb_m, i1 * lb_m, nb));
+                    * (term(d_m, times_i(fa_m), times_i(la_m), na)
+                        + term(md, times_i(fb_m), times_i(lb_m), nb));
                 self.stored.push([inv_da, inv_db, g_a, g_b, d_m, md]);
             }
         }

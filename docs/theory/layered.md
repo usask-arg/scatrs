@@ -252,9 +252,9 @@ references therefore check the recursion and its reformulations, not only their 
 
 Each layer adds downward recurrences for $D_n$ at its two arguments, and the upward
 recurrences of $\Pi_n$, $w_n$ and $P_n$. Measured on one thread of an Apple M4 Pro
-(`cargo bench -p scatrs --bench layered`), the efficiencies of a coated sphere cost about 2.8
-to 3.3 times those of a homogeneous sphere of the same outer size: 0.92 µs at $x_L = 1$, 9.6 µs
-at 100 and 73 µs at 1000. A three-layer particle costs 4.3 to 5.5 times a sphere, a ten-layer
-one 15 to 21 times. Every derivative ($3L$ of them) costs 2.3 to 3.3 times the values, for two,
-three or ten layers alike: 2.5 µs for a coated sphere at $x_L = 1$, 30 µs at 100 and 243 µs at
+(`cargo bench -p scatrs --bench layered`), the efficiencies of a coated sphere cost about 2.7
+to 3.3 times those of a homogeneous sphere of the same outer size: 0.84 µs at $x_L = 1$, 9.5 µs
+at 100 and 74 µs at 1000. A three-layer particle costs 4.3 to 5.5 times a sphere, a ten-layer
+one 16 to 22 times. Every derivative ($3L$ of them) costs 2.3 to 3.2 times the values, for two,
+three or ten layers alike: 2.4 µs for a coated sphere at $x_L = 1$, 29 µs at 100 and 235 µs at
 1000.

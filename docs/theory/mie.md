@@ -470,17 +470,17 @@ $\lvert m\rvert x$ (or $N$ if that is larger). Measured with
 `cargo bench -p scatrs --bench mie` on an Apple M4 Pro, timings varying by about 10% between
 runs:
 
-- the efficiencies at $m = 1.5 + 0.01i$: 0.21 µs at $x = 0.1$, 0.71 µs at $x = 10$, 22 µs at
+- the efficiencies at $m = 1.5 + 0.01i$: 0.19 µs at $x = 0.1$, 0.63 µs at $x = 10$, 22 µs at
   $x = 1000$ and 0.20 ms at $x = 10^4$, about 20 ns per term for large $x$; the cost per term
-  grows with $\lvert m\rvert$, to about 60 ns at $m = 10 + 0.01i$ and 80 ns at $m = 10 + 10i$;
+  grows with $\lvert m\rvert$, to about 65 ns at $m = 10 + 0.01i$ and 90 ns at $m = 10 + 10i$;
 - at real $m$, within 5% of that: the values take a real recurrence there, but it saves
   little;
-- with the full $(x, \mathrm{Re}\,m, \mathrm{Im}\,m)$ Jacobian, 1.7 to 2.3 times the values at
-  $m = 1.5 + 0.01i$ and 1.6 to 2.3 times at $m = 1.5$, more than twice the values from
-  $x \approx 100$. The derivative work per term is about the same at every $m$ while the values
-  cost less at smaller $\lvert m\rvert$, so the ratio is largest for non-absorbing spheres of
-  small $m$ (up to 2.9 times at $m = 0.75$, $x \ge 1000$) and smallest at large $\lvert m\rvert$
-  (1.4 to 1.5 times at $\lvert m\rvert = 10$);
+- with the full $(x, \mathrm{Re}\,m, \mathrm{Im}\,m)$ Jacobian, 1.6 to 2.1 times the values at
+  $m = 1.5 + 0.01i$ and at $m = 1.5$, about twice the values from $x \approx 1000$. The
+  derivative work per term is about the same at every $m$ while the values cost less at smaller
+  $\lvert m\rvert$, so the ratio is largest for non-absorbing spheres of small $m$ (2.2 times
+  at $m = 0.75$, $x \ge 1000$) and smallest at large $\lvert m\rvert$ (1.2 to 1.35 times at
+  $\lvert m\rvert = 10$);
 - amplitudes at 100 angles add about 4 ns per angle and term, most of it in the recurrences
   of $\pi_n$ and $\tau_n$; from an {rust}`AngularTable <scatrs::mie::AngularTable>`, which
   evaluates those once for every sphere at the same angles, about 0.75 ns.

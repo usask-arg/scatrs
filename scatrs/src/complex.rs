@@ -37,6 +37,13 @@ pub(crate) fn inv<T: Real>(z: Complex<T>) -> Complex<T> {
     }
 }
 
+/// i·u, exactly: the same value as the product with i = 0 + 1i (up to the sign of a zero
+/// part), without a complex multiplication.
+#[inline]
+pub(crate) fn times_i<T: Real>(u: Complex<T>) -> Complex<T> {
+    Complex::new(-u.im, u.re)
+}
+
 /// e^w − 1 for Re w ≤ 0, accurate to a few ulps of |e^w − 1| also where |w| is small:
 /// (e^a cos b − 1) + i e^a sin b for w = a + ib, with e^a cos b − 1 = expm1(a) cos b −
 /// 2 sin²(b/2), whose two terms have the same sign wherever they are small (a ≤ 0).

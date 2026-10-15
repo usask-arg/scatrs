@@ -19,13 +19,16 @@ tmatd's β₁ and β₂ are compared with their signs reversed: it expands in th
 spherical functions P⁰²ₗ = −d⁰²ₗ (Mishchenko, Travis & Lacis 2002, Appendix B), scatrs in the
 Wigner d-functions.
 
-Usage: uv run --directory benchmarks python compare_tmatd.py [--quick]
+Usage: uv run --directory benchmarks python compare_tmatd.py [--quick] [--threads N]
+
+scatrs runs on one thread by default, as tmatd does.
 """
 
 from __future__ import annotations
 
 import json
 import math
+import os
 import platform
 import re
 import shutil
@@ -38,8 +41,12 @@ from pathlib import Path
 
 import numpy as np
 
-import scatrs
-from scatrs import tmatrix
+# scatrs on one thread unless asked (`--threads N`), as tmatd runs: set before rayon starts.
+_THREADS = sys.argv[sys.argv.index("--threads") + 1] if "--threads" in sys.argv else "1"
+os.environ["RAYON_NUM_THREADS"] = _THREADS
+
+import scatrs  # noqa: E402
+from scatrs import tmatrix  # noqa: E402
 
 HERE = Path(__file__).parent
 SRC = HERE / "tmatd" / "src"
@@ -250,6 +257,7 @@ def main() -> None:
         "scatrs": scatrs.__version__,
         "tmatd": {k: v for k, v in FILES.items()},
         "machine": platform.machine(),
+        "scatrs_threads": int(_THREADS),
         "processor": platform.processor(),
         "gfortran": subprocess.run(
             ["gfortran", "--version"], capture_output=True, text=True

@@ -1150,6 +1150,36 @@ mod tests {
         }
     }
 
+    /// The results are bitwise the same on 1, 2 and 8 threads (the quadrature runs in fixed
+    /// blocks, added in order).
+    #[test]
+    fn thread_independent() {
+        let run = |threads: usize| {
+            let pool = rayon::ThreadPoolBuilder::new()
+                .num_threads(threads)
+                .build()
+                .unwrap();
+            pool.install(|| {
+                let mut tm = TMatrix::new();
+                let s = tm
+                    .compute_with_derivatives(
+                        spheroid(0.4),
+                        6.0,
+                        Complex::new(1.5, 0.02),
+                        &TMatrixOptions::new(),
+                    )
+                    .unwrap();
+                let g = s.greek(None, Normalization::Normalized).unwrap();
+                let j = s.efficiencies_jacobian().unwrap();
+                (s.efficiencies(), g, j, s.error_estimate())
+            })
+        };
+        let one = run(1);
+        for threads in [2, 8] {
+            assert_eq!(run(threads), one, "{threads} threads");
+        }
+    }
+
     #[test]
     fn invalid_inputs_and_domain() {
         let mut tm = TMatrix::new();

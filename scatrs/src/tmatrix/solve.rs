@@ -171,9 +171,32 @@ pub(crate) fn error_estimate(
     lh: &[f64],
     n: usize,
 ) -> f64 {
+    error_estimate_rows(solved, t, eq, ep, lh, n).0
+}
+
+/// As [`error_estimate`], with each row's share: the largest error (unscaled) that the
+/// rounding of row l of Q (through column l of T') and of P (in row l of T) would leave, times
+/// 4. The rows whose share is small can stay in f64 when the solve is refined.
+pub(crate) fn error_estimate_rows(
+    solved: &F64Solve,
+    t: &[Complex<f64>],
+    eq: &[f64],
+    ep: &[f64],
+    lh: &[f64],
+    n: usize,
+) -> (f64, Vec<f64>) {
     let mut signs = Signs(0x9e37_79b9_7f4a_7c15);
     let mut worst = 0.0f64;
+    let mut rows = vec![0.0f64; n];
     let mut y = vec![Complex::new(0.0, 0.0); n];
+    // max_i |T'_il| e^{lh_i}: how row l of Q reaches the unscaled T.
+    let reach: Vec<f64> = (0..n)
+        .map(|l| {
+            (0..n)
+                .map(|i| t[i * n + l].norm() * lh[i].exp())
+                .fold(0.0, f64::max)
+        })
+        .collect();
     for _ in 0..3 {
         // y = Q⁻¹ r', r'_k = ±e^{−lh_k}.
         for (k, v) in y.iter_mut().enumerate() {
@@ -185,15 +208,22 @@ pub(crate) fn error_estimate(
             .map(|l| (0..n).map(|k| y[k] * (signs.next() * eq[l * n + k])).sum())
             .collect();
         for i in 0..n {
+            let mut dp = Complex::new(0.0, 0.0);
             let mut v = Complex::new(0.0, 0.0);
             for k in 0..n {
-                v += y[k] * (signs.next() * ep[i * n + k]) + t[i * n + k] * w[k];
+                dp += y[k] * (signs.next() * ep[i * n + k]);
+                v += t[i * n + k] * w[k];
             }
+            v += dp;
             worst = worst.max(v.norm() * lh[i].exp());
+            rows[i] = rows[i].max(dp.norm() * lh[i].exp());
+        }
+        for (l, r) in rows.iter_mut().enumerate() {
+            *r = r.max(w[l].norm() * reach[l]);
         }
     }
     // The probes see a random combination of the errors: 4× covers the largest element.
-    4.0 * worst
+    (4.0 * worst, rows.into_iter().map(|r| 4.0 * r).collect())
 }
 
 /// The result of [`refine`].

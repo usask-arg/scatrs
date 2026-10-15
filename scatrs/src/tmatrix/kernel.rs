@@ -23,7 +23,8 @@ use num_complex::Complex;
 use super::functions::{Angular, Radial, Scales};
 use super::regular::{Series, angular_factors, l1};
 use super::solve::{
-    F64Solve, derivative_f64, error_estimate, refine, refine_derivative, solve_f64, solve_t,
+    F64Solve, derivative_f64, error_estimate, error_estimate_rows, refine, refine_derivative,
+    solve_f64, solve_t,
 };
 use crate::Result;
 use crate::mie::kernel::{int, real};
@@ -31,6 +32,7 @@ use crate::scalar::DoubleDouble as Dd;
 use crate::scalar::Dual;
 use crate::scalar::Real;
 use crate::special::gauss_legendre;
+use rayon::prelude::*;
 
 /// A spheroid: semi-axes a (equatorial) and c (polar) in units of 1/k, from the equal-volume
 /// size parameter x and the aspect ratio ε = a/c.
@@ -67,6 +69,7 @@ impl<T: Real> Spheroid<T> {
 
 /// One mode's matrices, scaled (row n by σₙ, column k by c_k; see `super::functions`), in the
 /// two parity classes: `q[c]`, `p[c]` are K_c × K_c, row-major, indexed by `index[c]`.
+#[derive(Clone)]
 pub(crate) struct ModeMatrices<T> {
     pub(crate) q: [Vec<Complex<T>>; 2],
     pub(crate) p: [Vec<Complex<T>>; 2],
@@ -75,6 +78,9 @@ pub(crate) struct ModeMatrices<T> {
     pub(crate) q_abs: [Vec<T>; 2],
     /// The same for P.
     pub(crate) p_abs: [Vec<T>; 2],
+    /// The form kept for each element of Q: 0 plain, 1 without the powers < 0, 2 without the
+    /// powers ≤ 0.
+    pub(crate) form: [Vec<u8>; 2],
     /// (type, order) of each index of a class.
     pub(crate) index: [Vec<(usize, usize)>; 2],
 }
@@ -102,13 +108,114 @@ pub(crate) fn all_modes<T: Real>(
     regularize: bool,
     rows: &[Option<usize>],
 ) -> Result<Vec<ModeMatrices<T>>> {
+    all_modes_masked(shape, s, n, n_theta, regularize, rows, None, usize::MAX)
+}
+
+/// The lowest order from which P is negligible next to Q in every row of every mode (each
+/// element's |P| magnitudes below 10⁻¹² of its Q magnitudes): refinement can take P from the
+/// `f64` pass there. P is the regular part, j_n against y_n, so it fades with the order.
+pub(crate) fn p_negligible_from(modes: &[ModeMatrices<f64>], n: usize) -> usize {
+    let mut from = 1;
+    for mm in modes {
+        for c in 0..2 {
+            let idx = &mm.index[c];
+            let kc = idx.len();
+            for (i, &(_, nn)) in idx.iter().enumerate() {
+                let row = i * kc..(i + 1) * kc;
+                let big = mm.p_abs[c][row.clone()]
+                    .iter()
+                    .zip(&mm.q_abs[c][row])
+                    .any(|(&p, &q)| p > 1e-12 * q);
+                if big {
+                    from = from.max(nn + 1);
+                }
+            }
+        }
+    }
+    from.min(n + 1)
+}
+
+/// The order pairs (n, k) whose elements kept a regularized form in some mode, as a mask
+/// indexed n·(N + 1) + k: in double-double the plain integrals of the others are accurate
+/// (their cancellation is far below 10³²), so only these need the forms.
+pub(crate) fn regularized_pairs<T: Real>(modes: &[ModeMatrices<T>], n: usize) -> Vec<bool> {
+    let n1 = n + 1;
+    let mut mask = vec![false; n1 * n1];
+    for mm in modes {
+        for c in 0..2 {
+            let idx = &mm.index[c];
+            let kc = idx.len();
+            for (i, &(_, nn)) in idx.iter().enumerate() {
+                for (j, &(_, kk)) in idx.iter().enumerate() {
+                    if mm.form[c].get(i * kc + j).is_some_and(|&f| f != 0) {
+                        mask[nn * n1 + kk] = true;
+                    }
+                }
+            }
+        }
+    }
+    mask
+}
+
+/// The quadrature nodes accumulated together: blocks are the unit of parallel work.
+const NODE_BLOCK: usize = 8;
+
+/// One mode's Y in its three forms, and their magnitude sums, per class.
+type YForms<T> = Vec<[[Vec<Complex<T>>; 3]; 2]>;
+type YMagnitudes<T> = Vec<[[Vec<T>; 3]; 2]>;
+
+/// Adds a block's partial integrals (P, |P| and Y's forms) to the totals.
+fn add_partial<T: Real>(
+    modes: &mut [ModeMatrices<T>],
+    yv: &mut YForms<T>,
+    ya: &mut YMagnitudes<T>,
+    part: Vec<ModeMatrices<T>>,
+    pyv: &YForms<T>,
+    pya: &YMagnitudes<T>,
+) {
+    for (m, pm) in part.into_iter().enumerate() {
+        for c in 0..2 {
+            for (a, b) in modes[m].p[c].iter_mut().zip(&pm.p[c]) {
+                *a = *a + *b;
+            }
+            for (a, b) in modes[m].p_abs[c].iter_mut().zip(&pm.p_abs[c]) {
+                *a += *b;
+            }
+            for f in 0..3 {
+                for (a, b) in yv[m][c][f].iter_mut().zip(&pyv[m][c][f]) {
+                    *a = *a + *b;
+                }
+                for (a, b) in ya[m][c][f].iter_mut().zip(&pya[m][c][f]) {
+                    *a += *b;
+                }
+            }
+        }
+    }
+}
+
+/// As [`all_modes`], regularizing only the order pairs of `mask` (all with `None`), and leaving
+/// P out (zero) in the rows of order ≥ `p_from`, whose Q is then its outgoing part Y alone:
+/// refinement takes P there from the `f64` pass, where it is negligible ([`p_negligible_from`]).
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn all_modes_masked<T: Real>(
+    shape: &Spheroid<T>,
+    s: Complex<T>,
+    n: usize,
+    n_theta: usize,
+    regularize: bool,
+    rows: &[Option<usize>],
+    mask: Option<&[bool]>,
+    p_from: usize,
+) -> Result<Vec<ModeMatrices<T>>> {
+    let n1_ = n + 1;
+    let regular_pair = |nn: usize, kk: usize| mask.is_none_or(|m| m[nn * n1_ + kk]);
     // The lowest row order integrated in any mode (rows below are left zero).
     let low = rows.iter().flatten().copied().min().unwrap_or(n + 1);
     let zero = real(T::zero());
     let mut modes: Vec<ModeMatrices<T>> = Vec::with_capacity(n + 1);
     // Per mode and class: Y's three forms and their magnitude sums.
-    let mut yv: Vec<[[Vec<Complex<T>>; 3]; 2]> = Vec::with_capacity(n + 1);
-    let mut ya: Vec<[[Vec<T>; 3]; 2]> = Vec::with_capacity(n + 1);
+    let mut yv: YForms<T> = Vec::with_capacity(n + 1);
+    let mut ya: YMagnitudes<T> = Vec::with_capacity(n + 1);
     for m in 0..=n {
         let n0 = m.max(1);
         let mut index: [Vec<(usize, usize)>; 2] = [Vec::new(), Vec::new()];
@@ -128,162 +235,193 @@ pub(crate) fn all_modes<T: Real>(
             p: core::array::from_fn(mk),
             q_abs: core::array::from_fn(|c| vec![T::zero(); size[c] * size[c]]),
             p_abs: core::array::from_fn(|c| vec![T::zero(); size[c] * size[c]]),
+            form: core::array::from_fn(|c| vec![0u8; size[c] * size[c]]),
             index,
         });
     }
     let scales = Scales::new(shape.r_min(), s.scale(shape.r_max()), n);
     let series = Series::new(shape.r_min(), shape.r_max(), s, n, &scales);
     let rule = gauss_legendre::<T>(2 * n_theta)?;
-    let mut radial = Radial::new();
-    let mut ang = Angular::new();
     let gam: Vec<T> = (0..=n)
         .map(|k| if k == 0 { T::zero() } else { gamma(k) })
         .collect();
     let i1 = Complex::new(T::zero(), T::one());
     let zero3 = [zero; 3];
-    let mut reg_m = vec![zero3; n + 1];
-    let mut reg_n = vec![zero3; n + 1];
-    let mut in_m = vec![zero3; n + 1];
-    let mut in_n = vec![zero3; n + 1];
-    let mut in_ms = vec![zero3; n + 1];
-    let mut in_ns = vec![zero3; n + 1];
     let n1 = n + 1;
     // forms[(t * n1 + n) * n1 + k] at the node.
-    let mut forms = Vec::new();
-    let mut full = vec![zero; 8 * n1 * n1];
     let (a2, c2) = (shape.a * shape.a, shape.c * shape.c);
     let beta = c2.recip() - a2.recip();
-    for (&t, &w) in rule.nodes.iter().zip(&rule.weights) {
-        if t <= T::zero() {
-            continue;
-        }
-        let (ct, st) = (t, (T::one() - t * t).sqrt());
-        let (r, nu) = shape.at(ct, st);
-        radial.compute(r, s, n, &scales);
-        let r2 = r * r;
-        let x_e = [r2, r2 * r2];
-        // The y-part radial factors (scaled yₙ = Im of the scaled hₙ for real x) and the
-        // particle's, per kind: plain, [x f]'/x, f/x.
-        let yk = |kind: usize, nn: usize| match kind {
-            0 => radial.h[nn].im,
-            1 => radial.dh[nn].im,
-            _ => radial.h_x[nn].im,
-        };
-        let jk = |kind: usize, kk: usize| match kind {
-            0 => radial.jz[kk],
-            1 => radial.djz[kk],
-            _ => radial.jz_z[kk],
-        };
-        const KINDS: [(usize, usize, usize); 8] = [
-            (0, 0, 0),
-            (0, 1, 0),
-            (1, 0, 0),
-            (1, 1, 0),
-            (0, 2, 1),
-            (1, 2, 1),
-            (2, 0, 1),
-            (2, 1, 1),
-        ];
-        for (ti, &(yki, jki, ei)) in KINDS.iter().enumerate() {
-            for nn in 1..=n {
-                for kk in 1..=n {
-                    full[(ti * n1 + nn) * n1 + kk] = jk(jki, kk).scale(yk(yki, nn) * x_e[ei]);
+    // The nodes in fixed blocks, accumulated separately (in parallel) and added in block order:
+    // the result does not depend on the number of threads.
+    let nodes: Vec<(T, T)> = rule
+        .nodes
+        .iter()
+        .zip(&rule.weights)
+        .filter(|(t, _)| **t > T::zero())
+        .map(|(&t, &w)| (t, w))
+        .collect();
+    let template = (modes.clone(), yv.clone(), ya.clone());
+    let run = |block: &[(T, T)]| {
+        let (mut modes, mut yv, mut ya) = template.clone();
+        let mut radial = Radial::new();
+        let mut ang = Angular::new();
+        let mut reg_m = vec![zero3; n + 1];
+        let mut reg_n = vec![zero3; n + 1];
+        let mut in_m = vec![zero3; n + 1];
+        let mut in_n = vec![zero3; n + 1];
+        let mut in_ms = vec![zero3; n + 1];
+        let mut in_ns = vec![zero3; n + 1];
+        let mut forms = Vec::new();
+        let mut full = vec![zero; 8 * n1 * n1];
+        for &(t, w) in block {
+            let (ct, st) = (t, (T::one() - t * t).sqrt());
+            let (r, nu) = shape.at(ct, st);
+            radial.compute(r, s, n, &scales);
+            let r2 = r * r;
+            let x_e = [r2, r2 * r2];
+            // The y-part radial factors (scaled yₙ = Im of the scaled hₙ for real x) and the
+            // particle's, per kind: plain, [x f]'/x, f/x.
+            let yk = |kind: usize, nn: usize| match kind {
+                0 => radial.h[nn].im,
+                1 => radial.dh[nn].im,
+                _ => radial.h_x[nn].im,
+            };
+            let jk = |kind: usize, kk: usize| match kind {
+                0 => radial.jz[kk],
+                1 => radial.djz[kk],
+                _ => radial.jz_z[kk],
+            };
+            const KINDS: [(usize, usize, usize); 8] = [
+                (0, 0, 0),
+                (0, 1, 0),
+                (1, 0, 0),
+                (1, 1, 0),
+                (0, 2, 1),
+                (1, 2, 1),
+                (2, 0, 1),
+                (2, 1, 1),
+            ];
+            for (ti, &(yki, jki, ei)) in KINDS.iter().enumerate() {
+                for nn in 1..=n {
+                    for kk in 1..=n {
+                        full[(ti * n1 + nn) * n1 + kk] = jk(jki, kk).scale(yk(yki, nn) * x_e[ei]);
+                    }
                 }
             }
-        }
-        if regularize {
-            let ns = series.at(r / shape.r_min());
-            forms.clear();
-            for ti in 0..8 {
-                for nn in 0..=n {
-                    for kk in 0..=n {
-                        if nn == 0 || kk == 0 || nn == kk || nn < low {
-                            forms.push(None);
+            if regularize {
+                let ns = series.at(r / shape.r_min());
+                forms.clear();
+                for ti in 0..8 {
+                    for nn in 0..=n {
+                        for kk in 0..=n {
+                            if nn == 0 || kk == 0 || nn == kk || nn < low || !regular_pair(nn, kk) {
+                                forms.push(None);
+                                continue;
+                            }
+                            let f = full[(ti * n1 + nn) * n1 + kk];
+                            forms.push(Some(ns.forms(ti, nn, kk, f, x_e)));
+                        }
+                    }
+                }
+            }
+            // 2 for the two halves of the range, 2π for φ.
+            let g0 = w * T::PI() * T::from_f64(4.0);
+            let fac = g0 * r2;
+            let nu_prime = -(beta * st * ct);
+            for (m, mm) in modes.iter_mut().enumerate() {
+                let Some(from) = rows[m] else { continue };
+                let n0 = m.max(1);
+                ang.compute(m, n, ct, st);
+                for k in n0..=n {
+                    let (d, pi, tau) = (ang.d[k], ang.pi[k], ang.tau[k]);
+                    let kk = int::<T>(k * (k + 1));
+                    let field = |h: Complex<T>, dh: Complex<T>, h_x: Complex<T>, p: Complex<T>| {
+                        (
+                            [real(T::zero()), i1 * h * p, -(h.scale(tau))],
+                            [h_x.scale(kk * d), dh.scale(tau), i1 * dh * p],
+                        )
+                    };
+                    (reg_m[k], reg_n[k]) =
+                        field(radial.j[k], radial.dj[k], radial.j_x[k], real(-pi));
+                    (in_m[k], in_n[k]) =
+                        field(radial.jz[k], radial.djz[k], radial.jz_z[k], real(pi));
+                    in_ms[k] = in_m[k].map(|v| v * s);
+                    in_ns[k] = in_n[k].map(|v| v * s);
+                }
+                for c in 0..2 {
+                    let idx = &mm.index[c];
+                    let kc = idx.len();
+                    for (i, &(rt, nn)) in idx.iter().enumerate() {
+                        if nn < from {
                             continue;
                         }
-                        let f = full[(ti * n1 + nn) * n1 + kk];
-                        forms.push(Some(ns.forms(ti, nn, kk, f, x_e)));
+                        let (g1, g2) = if rt == 0 {
+                            (&reg_m[nn], &reg_n[nn])
+                        } else {
+                            (&reg_n[nn], &reg_m[nn])
+                        };
+                        let an = (ang.d[nn], ang.pi[nn], ang.tau[nn]);
+                        for (j, &(ctp, kk_)) in idx.iter().enumerate() {
+                            let (b1, b2) = if ctp == 0 {
+                                (&in_ns[kk_], &in_m[kk_])
+                            } else {
+                                (&in_ms[kk_], &in_n[kk_])
+                            };
+                            let gg = gam[nn] * gam[kk_];
+                            let slot = i * kc + j;
+                            let pv = if nn >= p_from {
+                                zero
+                            } else {
+                                triple(nu, g1, b1) + triple(nu, g2, b2)
+                            };
+                            mm.p[c][slot] =
+                                mm.p[c][slot] + Complex::new(pv.im, -pv.re).scale(fac * gg);
+                            mm.p_abs[c][slot] += l1(pv) * (fac * gg).abs();
+                            // Y: Σ_t a_t R_t in its three forms.
+                            let ak = (ang.d[kk_], ang.pi[kk_], ang.tau[kk_]);
+                            let a = angular_factors(rt, ctp, s, nu_prime, nn, kk_, an, ak);
+                            let ge = g0 * gg;
+                            let (mut va, mut aa) = (zero, T::zero());
+                            let (mut vb, mut ab) = (zero, T::zero());
+                            let (mut vc, mut ac) = (zero, T::zero());
+                            for &(ti, at) in &a {
+                                let fi = (ti * n1 + nn) * n1 + kk_;
+                                let rf = full[fi];
+                                let mag = l1(at);
+                                va = va + at * rf;
+                                aa += mag * l1(rf);
+                                if let Some(Some(f)) = forms.get(fi) {
+                                    vc = vc + at * f.le0;
+                                    ac += mag * f.le0_abs;
+                                    vb = vb + at * f.lt0;
+                                    ab += mag * f.lt0_abs;
+                                }
+                            }
+                            let ys = &mut yv[m][c];
+                            let ys_abs = &mut ya[m][c];
+                            ys[0][slot] = ys[0][slot] + va.scale(ge);
+                            ys_abs[0][slot] += aa * ge.abs();
+                            ys[1][slot] = ys[1][slot] + vb.scale(ge);
+                            ys_abs[1][slot] += ab * ge.abs();
+                            ys[2][slot] = ys[2][slot] + vc.scale(ge);
+                            ys_abs[2][slot] += ac * ge.abs();
+                        }
                     }
                 }
             }
         }
-        // 2 for the two halves of the range, 2π for φ.
-        let g0 = w * T::PI() * T::from_f64(4.0);
-        let fac = g0 * r2;
-        let nu_prime = -(beta * st * ct);
-        for (m, mm) in modes.iter_mut().enumerate() {
-            let Some(from) = rows[m] else { continue };
-            let n0 = m.max(1);
-            ang.compute(m, n, ct, st);
-            for k in n0..=n {
-                let (d, pi, tau) = (ang.d[k], ang.pi[k], ang.tau[k]);
-                let kk = int::<T>(k * (k + 1));
-                let field = |h: Complex<T>, dh: Complex<T>, h_x: Complex<T>, p: Complex<T>| {
-                    (
-                        [real(T::zero()), i1 * h * p, -(h.scale(tau))],
-                        [h_x.scale(kk * d), dh.scale(tau), i1 * dh * p],
-                    )
-                };
-                (reg_m[k], reg_n[k]) = field(radial.j[k], radial.dj[k], radial.j_x[k], real(-pi));
-                (in_m[k], in_n[k]) = field(radial.jz[k], radial.djz[k], radial.jz_z[k], real(pi));
-                in_ms[k] = in_m[k].map(|v| v * s);
-                in_ns[k] = in_n[k].map(|v| v * s);
-            }
-            for c in 0..2 {
-                let idx = &mm.index[c];
-                let kc = idx.len();
-                for (i, &(rt, nn)) in idx.iter().enumerate() {
-                    if nn < from {
-                        continue;
-                    }
-                    let (g1, g2) = if rt == 0 {
-                        (&reg_m[nn], &reg_n[nn])
-                    } else {
-                        (&reg_n[nn], &reg_m[nn])
-                    };
-                    let an = (ang.d[nn], ang.pi[nn], ang.tau[nn]);
-                    for (j, &(ctp, kk_)) in idx.iter().enumerate() {
-                        let (b1, b2) = if ctp == 0 {
-                            (&in_ns[kk_], &in_m[kk_])
-                        } else {
-                            (&in_ms[kk_], &in_n[kk_])
-                        };
-                        let gg = gam[nn] * gam[kk_];
-                        let pv = triple(nu, g1, b1) + triple(nu, g2, b2);
-                        let slot = i * kc + j;
-                        mm.p[c][slot] = mm.p[c][slot] + Complex::new(pv.im, -pv.re).scale(fac * gg);
-                        mm.p_abs[c][slot] += l1(pv) * (fac * gg).abs();
-                        // Y: Σ_t a_t R_t in its three forms.
-                        let ak = (ang.d[kk_], ang.pi[kk_], ang.tau[kk_]);
-                        let a = angular_factors(rt, ctp, s, nu_prime, nn, kk_, an, ak);
-                        let ge = g0 * gg;
-                        let (mut va, mut aa) = (zero, T::zero());
-                        let (mut vb, mut ab) = (zero, T::zero());
-                        let (mut vc, mut ac) = (zero, T::zero());
-                        for &(ti, at) in &a {
-                            let fi = (ti * n1 + nn) * n1 + kk_;
-                            let rf = full[fi];
-                            let mag = l1(at);
-                            va = va + at * rf;
-                            aa += mag * l1(rf);
-                            if let Some(Some(f)) = forms.get(fi) {
-                                vc = vc + at * f.le0;
-                                ac += mag * f.le0_abs;
-                                vb = vb + at * f.lt0;
-                                ab += mag * f.lt0_abs;
-                            }
-                        }
-                        let ys = &mut yv[m][c];
-                        let ys_abs = &mut ya[m][c];
-                        ys[0][slot] = ys[0][slot] + va.scale(ge);
-                        ys_abs[0][slot] += aa * ge.abs();
-                        ys[1][slot] = ys[1][slot] + vb.scale(ge);
-                        ys_abs[1][slot] += ab * ge.abs();
-                        ys[2][slot] = ys[2][slot] + vc.scale(ge);
-                        ys_abs[2][slot] += ac * ge.abs();
-                    }
-                }
-            }
+        (modes, yv, ya)
+    };
+    let threads = rayon::current_num_threads().max(1);
+    let blocks: Vec<&[(T, T)]> = nodes.chunks(NODE_BLOCK).collect();
+    for wave in blocks.chunks(threads) {
+        let partials: Vec<_> = if wave.len() > 1 {
+            wave.par_iter().map(|b| run(b)).collect()
+        } else {
+            wave.iter().map(|b| run(b)).collect()
+        };
+        for (pm, pyv, pya) in partials {
+            add_partial(&mut modes, &mut yv, &mut ya, pm, &pyv, &pya);
         }
     }
     // Q = P + Y in the cleanest exact form of each element: the plain one, minus the powers < 0
@@ -296,7 +434,7 @@ pub(crate) fn all_modes<T: Real>(
                 for (j, &(_, kk_)) in idx.iter().enumerate() {
                     let slot = i * kc + j;
                     let mut best = 0;
-                    if regularize && nn != kk_ {
+                    if regularize && nn != kk_ && regular_pair(nn, kk_) {
                         if ya[m][c][2][slot] < ya[m][c][best][slot] {
                             best = 2;
                         }
@@ -306,6 +444,7 @@ pub(crate) fn all_modes<T: Real>(
                     }
                     mm.q[c][slot] = mm.p[c][slot] + yv[m][c][best][slot];
                     mm.q_abs[c][slot] = ya[m][c][best][slot] + mm.p_abs[c][slot];
+                    mm.form[c][slot] = best as u8;
                 }
             }
         }
@@ -408,6 +547,33 @@ fn refine_from(m: usize, n: usize) -> usize {
     n0 + (n + 1 - n0) / 4
 }
 
+/// The lowest row order to integrate in double-double in mode m: that of the lowest row whose
+/// share of the error estimate exceeds `limit`/K (so that the rows left in f64 add up to at
+/// most `limit`), or [`refine_from`]'s if no single row does. The errors live in the rows of
+/// high outgoing order, so this is usually a few rows below N.
+fn rows_from(
+    m: usize,
+    n: usize,
+    index: &[Vec<(usize, usize)>; 2],
+    shares: &[Vec<f64>; 2],
+    limit: f64,
+) -> usize {
+    let mut from = usize::MAX;
+    for (idx, sh) in index.iter().zip(shares) {
+        let kc = idx.len().max(1) as f64;
+        for (&(_, nn), &v) in idx.iter().zip(sh) {
+            if v > limit / (2.0 * kc) {
+                from = from.min(nn);
+            }
+        }
+    }
+    if from == usize::MAX {
+        refine_from(m, n)
+    } else {
+        from
+    }
+}
+
 /// T of the modes m ≤ `m_max` (the others are left empty) in f64, refined (mixed precision) in
 /// the modes whose error estimate exceeds
 /// `tol` times the largest |T|: their rows of order ≥ [`refine_from`] are integrated in
@@ -435,6 +601,7 @@ pub(crate) fn tmatrix_refined(
         sweeps: vec![[0; 2]; n + 1],
     };
     let mut ts: Vec<[Vec<Complex<f64>>; 2]> = Vec::with_capacity(n + 1);
+    let mut shares: Vec<[Vec<f64>; 2]> = vec![[Vec::new(), Vec::new()]; n + 1];
     let mut big = 0.0f64;
     for (m, mm) in all.iter().enumerate() {
         let mut pair: [Vec<Complex<f64>>; 2] = [Vec::new(), Vec::new()];
@@ -448,7 +615,9 @@ pub(crate) fn tmatrix_refined(
             let lh_c: Vec<f64> = index.iter().map(|&(_, nn)| lh[nn]).collect();
             let eq: Vec<f64> = mm.q_abs[c].iter().map(|&v| u * v).collect();
             let ep: Vec<f64> = mm.p_abs[c].iter().map(|&v| u * v).collect();
-            report.error[m][c] = error_estimate(&f, &f.t, &eq, &ep, &lh_c, kc);
+            let (est, sh) = error_estimate_rows(&f, &f.t, &eq, &ep, &lh_c, kc);
+            report.error[m][c] = est;
+            shares[m][c] = sh;
             let mut t = f.t;
             unscale(&mut t, index, &lh);
             big = t.iter().fold(big, |a, v| a.max(v.norm()));
@@ -459,13 +628,25 @@ pub(crate) fn tmatrix_refined(
     let rows: Vec<Option<usize>> = (0..=n)
         .map(|m| {
             let worst = report.error[m][0].max(report.error[m][1]);
-            (m <= m_max && worst > tol * big).then(|| refine_from(m, n))
+            (m <= m_max && worst > tol * big)
+                .then(|| rows_from(m, n, &all[m].index, &shares[m], tol * big))
         })
         .collect();
     if rows.iter().any(Option::is_some) {
         let shape_dd = Spheroid::new(Dd::from(x), Dd::from(eps));
         let s_dd = Complex::new(Dd::from(s.re), Dd::from(s.im));
-        let exact = all_modes(&shape_dd, s_dd, n, n_theta, true, &rows)?;
+        let mask = regularized_pairs(&all, n);
+        let p_from = p_negligible_from(&all, n);
+        let exact = all_modes_masked(
+            &shape_dd,
+            s_dd,
+            n,
+            n_theta,
+            true,
+            &rows,
+            Some(&mask),
+            p_from,
+        )?;
         for (m, from) in rows.iter().enumerate() {
             let Some(from) = *from else { continue };
             let mm = &all[m];
@@ -477,37 +658,52 @@ pub(crate) fn tmatrix_refined(
                 }
                 let flags: Vec<bool> = index.iter().map(|&(_, nn)| nn >= from).collect();
                 let lh_c: Vec<f64> = index.iter().map(|&(_, nn)| lh[nn]).collect();
-                let refined = refine(
-                    &mm.q[c],
-                    &mm.p[c],
-                    &exact[m].q[c],
-                    &exact[m].p[c],
-                    &flags,
-                    &lh_c,
-                    kc,
-                    4,
-                )?;
+                // The exact rows from p_from up: Y in double-double, P from the f64 pass.
+                let f64_p: Vec<bool> = index.iter().map(|&(_, nn)| nn >= p_from).collect();
+                let p_dd: Vec<Complex<Dd>> = (0..kc * kc)
+                    .map(|ij| {
+                        if f64_p[ij / kc] {
+                            let v = mm.p[c][ij];
+                            Complex::new(Dd::from(v.re), Dd::from(v.im))
+                        } else {
+                            exact[m].p[c][ij]
+                        }
+                    })
+                    .collect();
+                let q_dd: Vec<Complex<Dd>> = (0..kc * kc)
+                    .map(|ij| {
+                        if f64_p[ij / kc] {
+                            exact[m].q[c][ij] + p_dd[ij]
+                        } else {
+                            exact[m].q[c][ij]
+                        }
+                    })
+                    .collect();
+                let refined = refine(&mm.q[c], &mm.p[c], &q_dd, &p_dd, &flags, &lh_c, kc, 4)?;
                 let (mut t, solved, sweeps, last) =
                     (refined.t, &refined.solved, refined.sweeps, refined.last);
                 // The f64 rows' rounding remains, beside the double-double rows' and the last
-                // correction.
-                let bound = |v: &[f64]| -> Vec<f64> {
-                    v.iter()
-                        .enumerate()
-                        .map(|(ij, &a)| a * if flags[ij / kc] { u_dd } else { u })
-                        .collect()
-                };
-                let est = error_estimate(
-                    solved,
-                    &t,
-                    &bound(&mm.q_abs[c]),
-                    &bound(&mm.p_abs[c]),
-                    &lh_c,
-                    kc,
-                );
+                // correction; in the exact rows from p_from up, P's rounding is f64's.
+                let eq: Vec<f64> = (0..kc * kc)
+                    .map(|ij| {
+                        let (qa, pa) = (mm.q_abs[c][ij], mm.p_abs[c][ij]);
+                        match (flags[ij / kc], f64_p[ij / kc]) {
+                            (true, true) => u_dd * qa + u * pa,
+                            (true, false) => u_dd * qa,
+                            _ => u * qa,
+                        }
+                    })
+                    .collect();
+                let ep: Vec<f64> = (0..kc * kc)
+                    .map(|ij| {
+                        let exact_p = flags[ij / kc] && !f64_p[ij / kc];
+                        mm.p_abs[c][ij] * if exact_p { u_dd } else { u }
+                    })
+                    .collect();
+                let est = error_estimate(solved, &t, &eq, &ep, &lh_c, kc);
                 unscale(&mut t, index, &lh);
-                // T is returned in f64: its own rounding.
-                let rounding = t.iter().fold(0.0f64, |a, v| a.max(v.norm())) * f64::EPSILON;
+                // T is returned in f64: its own rounding, and the remainder of the last sweep.
+                let rounding = t.iter().fold(0.0f64, |a, v| a.max(v.norm())) * 4.0 * f64::EPSILON;
                 report.sweeps[m][c] = sweeps;
                 report.error[m][c] = est + last + rounding;
                 *slot = t;
@@ -576,6 +772,7 @@ pub(crate) fn tmatrix_derivatives(
     };
     // Per mode and class: T' and its four derivatives (scaled), and the factors.
     let mut ts: Vec<[Option<ClassParts>; 2]> = Vec::with_capacity(n + 1);
+    let mut shares: Vec<[Vec<f64>; 2]> = vec![[Vec::new(), Vec::new()]; n + 1];
     let mut big = 0.0f64;
     for (m, mm) in all.iter().enumerate() {
         let mut pair: [Option<ClassParts>; 2] = [None, None];
@@ -590,7 +787,9 @@ pub(crate) fn tmatrix_derivatives(
             let lh_c: Vec<f64> = index.iter().map(|&(_, nn)| lh[nn]).collect();
             let eq: Vec<f64> = mm.q_abs[c].iter().map(|v| u * v.re()).collect();
             let ep: Vec<f64> = mm.p_abs[c].iter().map(|v| u * v.re()).collect();
-            report.error[m][c] = error_estimate(&f, &f.t, &eq, &ep, &lh_c, kc);
+            let (est, sh) = error_estimate_rows(&f, &f.t, &eq, &ep, &lh_c, kc);
+            report.error[m][c] = est;
+            shares[m][c] = sh;
             for (i, &(_, a)) in index.iter().enumerate() {
                 for (j, &(_, b)) in index.iter().enumerate() {
                     big = big.max(f.t[i * kc + j].norm() * (lh[a] - lh[b]).exp());
@@ -607,20 +806,23 @@ pub(crate) fn tmatrix_derivatives(
     let rows: Vec<Option<usize>> = (0..=n)
         .map(|m| {
             let worst = report.error[m][0].max(report.error[m][1]);
-            (worst > tol * big).then(|| refine_from(m, n))
+            (worst > tol * big).then(|| rows_from(m, n, &all[m].index, &shares[m], tol * big))
         })
         .collect();
     if rows.iter().any(Option::is_some) {
         type Dd4 = Dual<Dd, 4>;
         let [xd, ed, sr, si] =
             Dd4::variables([Dd::from(x), Dd::from(eps), Dd::from(s.re), Dd::from(s.im)]);
-        let exact = all_modes(
+        let mask = regularized_pairs(&all, n);
+        let exact = all_modes_masked(
             &Spheroid::new(xd, ed),
             Complex::new(sr, si),
             n,
             n_theta,
             true,
             &rows,
+            Some(&mask),
+            usize::MAX,
         )?;
         let dd = |c: Complex<f64>| Complex::new(Dd::from(c.re), Dd::from(c.im));
         for (m, from) in rows.iter().enumerate() {
@@ -697,7 +899,7 @@ pub(crate) fn tmatrix_derivatives(
                         acc.max(v.norm() * (lh[a] - lh[b]).exp())
                     });
                 report.sweeps[m][c] = refined.sweeps;
-                report.error[m][c] = est + refined.last + largest * f64::EPSILON;
+                report.error[m][c] = est + refined.last + largest * 4.0 * f64::EPSILON;
                 parts[0] = refined.t;
             }
         }
@@ -1257,6 +1459,31 @@ mod element_diagnostics {
 #[cfg(test)]
 mod profile {
     use super::*;
+
+    /// Refined-like double-double passes, for a sampling profiler: run with `--ignored`.
+    #[test]
+    #[ignore = "a profile target"]
+    fn dd_refined_rows() {
+        let (x, eps, n, nth) = (10.0, 1.0 / 3.0, 42, 121);
+        let sh = Spheroid::new(Dd::from(x), Dd::from(eps));
+        let s = Complex::new(Dd::from(1.33), Dd::from(0.0));
+        let rows: Vec<Option<usize>> = (0..=n).map(|m| (m <= 8).then_some(14)).collect();
+        let t0 = std::time::Instant::now();
+        for _ in 0..5 {
+            all_modes_masked(
+                &sh,
+                s,
+                n,
+                nth,
+                true,
+                &rows,
+                Some(&vec![false; (n + 1) * (n + 1)]),
+                20,
+            )
+            .unwrap();
+        }
+        println!("5 passes: {:.2?}", t0.elapsed());
+    }
 
     /// One double-double `all_modes`, to profile: run with `--ignored`.
     #[test]

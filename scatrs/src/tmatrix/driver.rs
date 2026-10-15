@@ -97,7 +97,7 @@ pub(crate) fn solve(
             n_theta,
         };
         // The rounding to f64.
-        out.error = out.largest() * f64::EPSILON;
+        out.error = out.largest() * 4.0 * f64::EPSILON;
         Ok(out)
     };
     if precision == Precision::DoubleDouble {
@@ -180,6 +180,9 @@ pub(crate) fn theta_of(n: usize, eps: f64) -> usize {
     (n as f64 * (1.0 + eps.ln().abs())).ceil() as usize + 8
 }
 
+/// The relative change of ⟨C_ext⟩ and ⟨C_sca⟩ between two steps, plus both steps' error
+/// estimates (relative to the largest element of T): a bound on how far apart the exact values
+/// at the two steps may be.
 fn relative_change(a: &Solved, b: &Solved) -> f64 {
     let (ea, sa) = a.t.cross_sections();
     let (eb, sb) = b.t.cross_sections();
@@ -190,7 +193,11 @@ fn relative_change(a: &Solved, b: &Solved) -> f64 {
             (u - v).abs() / u.abs().max(v.abs())
         }
     };
-    rel(ea, eb).max(rel(sa, sb))
+    let est = |s: &Solved| {
+        let big = s.largest();
+        if big > 0.0 { s.error / big } else { 0.0 }
+    };
+    rel(ea, eb).max(rel(sa, sb)) + est(a) + est(b)
 }
 
 fn greek_change(a: &Solved, b: &Solved, order: usize) -> Result<f64> {
@@ -224,8 +231,13 @@ pub(crate) fn converge(x: f64, eps: f64, s: Complex<f64>, opts: &Loop) -> Result
         opts.n_theta_fixed
             .unwrap_or_else(|| theta_of(n, eps).min(opts.n_theta_cap))
     };
-    let solve_at =
-        |n: usize, nth: usize, m_max: usize| solve(x, eps, s, n, nth, opts.precision, rtol, m_max);
+    // The steps on mode 0 refine only if their estimate is a sizeable part of `rtol` (above
+    // rtol/2): the convergence test counts the estimates of both steps in the change. The final
+    // solve of every mode refines down to rtol/10.
+    let solve_at = |n: usize, nth: usize, m_max: usize| {
+        let target = if m_max == 0 { 5.0 * rtol } else { rtol };
+        solve(x, eps, s, n, nth, opts.precision, target, m_max)
+    };
     let not_converged = |change: f64| Error::NotConverged {
         achieved: change,
         requested: rtol,
@@ -364,7 +376,7 @@ pub(crate) fn solve_derivatives(
         Ok((
             t,
             vec![PrecisionPath::DoubleDouble; n + 1],
-            big * f64::EPSILON,
+            big * 4.0 * f64::EPSILON,
         ))
     };
     if precision == Precision::DoubleDouble {

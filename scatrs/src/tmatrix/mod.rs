@@ -7,3 +7,4 @@
 pub(crate) mod functions;
 pub(crate) mod kernel;
 pub(crate) mod random;
+pub(crate) mod regular;

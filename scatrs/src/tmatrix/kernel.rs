@@ -21,6 +21,7 @@
 use num_complex::Complex;
 
 use super::functions::{Angular, Radial, Scales};
+use super::regular::{Series, angular_factors};
 use crate::complex::inv;
 use crate::mie::kernel::{int, real};
 use crate::scalar::Real;
@@ -181,6 +182,216 @@ pub(crate) fn mode_matrices<T: Real>(
     Ok(ModeMatrices { q, p, index })
 }
 
+/// Q and P of every mode m = 0, …, n, on n_theta nodes in 0 < θ < π/2, nodes outside and modes
+/// inside so that each node's radial functions and regularized products serve every mode. With
+/// `regularize`, each element of Q keeps the cleanest of its three exact forms (`super::regular`).
+pub(crate) fn all_modes<T: Real>(
+    shape: &Spheroid<T>,
+    s: Complex<T>,
+    n: usize,
+    n_theta: usize,
+    regularize: bool,
+) -> Result<Vec<ModeMatrices<T>>> {
+    let zero = real(T::zero());
+    let mut modes: Vec<ModeMatrices<T>> = Vec::with_capacity(n + 1);
+    // Per mode and class: Y's three forms and their magnitude sums.
+    let mut yv: Vec<[[Vec<Complex<T>>; 3]; 2]> = Vec::with_capacity(n + 1);
+    let mut ya: Vec<[[Vec<T>; 3]; 2]> = Vec::with_capacity(n + 1);
+    for m in 0..=n {
+        let n0 = m.max(1);
+        let mut index: [Vec<(usize, usize)>; 2] = [Vec::new(), Vec::new()];
+        for t in 0..2 {
+            for k in n0..=n {
+                index[(k + t) % 2].push((t, k));
+            }
+        }
+        let size = [index[0].len(), index[1].len()];
+        let mk = |c: usize| vec![zero; size[c] * size[c]];
+        yv.push(core::array::from_fn(|c| core::array::from_fn(|_| mk(c))));
+        ya.push(core::array::from_fn(|c| {
+            core::array::from_fn(|_| vec![T::zero(); size[c] * size[c]])
+        }));
+        modes.push(ModeMatrices {
+            q: core::array::from_fn(mk),
+            p: core::array::from_fn(mk),
+            index,
+        });
+    }
+    let scales = Scales::new(shape.r_min(), s.scale(shape.r_max()), n);
+    let series = Series::new(shape.r_min(), shape.r_max(), s, n, &scales);
+    let rule = gauss_legendre::<T>(2 * n_theta)?;
+    let mut radial = Radial::new();
+    let mut ang = Angular::new();
+    let gam: Vec<T> = (0..=n)
+        .map(|k| if k == 0 { T::zero() } else { gamma(k) })
+        .collect();
+    let i1 = Complex::new(T::zero(), T::one());
+    let zero3 = [zero; 3];
+    let mut reg_m = vec![zero3; n + 1];
+    let mut reg_n = vec![zero3; n + 1];
+    let mut in_m = vec![zero3; n + 1];
+    let mut in_n = vec![zero3; n + 1];
+    let n1 = n + 1;
+    // forms[(t * n1 + n) * n1 + k] at the node.
+    let mut forms = Vec::new();
+    let mut full = vec![zero; 8 * n1 * n1];
+    let (a2, c2) = (shape.a * shape.a, shape.c * shape.c);
+    let beta = c2.recip() - a2.recip();
+    for (&t, &w) in rule.nodes.iter().zip(&rule.weights) {
+        if t <= T::zero() {
+            continue;
+        }
+        let (ct, st) = (t, (T::one() - t * t).sqrt());
+        let (r, nu) = shape.at(ct, st);
+        radial.compute(r, s, n, &scales);
+        let r2 = r * r;
+        let x_e = [r2, r2 * r2];
+        // The y-part radial factors (scaled yₙ = Im of the scaled hₙ for real x) and the
+        // particle's, per kind: plain, [x f]'/x, f/x.
+        let yk = |kind: usize, nn: usize| match kind {
+            0 => radial.h[nn].im,
+            1 => radial.dh[nn].im,
+            _ => radial.h_x[nn].im,
+        };
+        let jk = |kind: usize, kk: usize| match kind {
+            0 => radial.jz[kk],
+            1 => radial.djz[kk],
+            _ => radial.jz_z[kk],
+        };
+        const KINDS: [(usize, usize, usize); 8] = [
+            (0, 0, 0),
+            (0, 1, 0),
+            (1, 0, 0),
+            (1, 1, 0),
+            (0, 2, 1),
+            (1, 2, 1),
+            (2, 0, 1),
+            (2, 1, 1),
+        ];
+        for (ti, &(yki, jki, ei)) in KINDS.iter().enumerate() {
+            for nn in 1..=n {
+                for kk in 1..=n {
+                    full[(ti * n1 + nn) * n1 + kk] = jk(jki, kk).scale(yk(yki, nn) * x_e[ei]);
+                }
+            }
+        }
+        if regularize {
+            let ns = series.at(r / shape.r_min());
+            forms.clear();
+            for ti in 0..8 {
+                for nn in 0..=n {
+                    for kk in 0..=n {
+                        if nn == 0 || kk == 0 || nn == kk {
+                            forms.push(None);
+                            continue;
+                        }
+                        let f = full[(ti * n1 + nn) * n1 + kk];
+                        forms.push(Some(ns.forms(ti, nn, kk, f, x_e)));
+                    }
+                }
+            }
+        }
+        // 2 for the two halves of the range, 2π for φ.
+        let g0 = w * T::PI() * T::from_f64(4.0);
+        let fac = g0 * r2;
+        let nu_prime = -(beta * st * ct);
+        for (m, mm) in modes.iter_mut().enumerate() {
+            let n0 = m.max(1);
+            ang.compute(m, n, ct, st);
+            for k in n0..=n {
+                let (d, pi, tau) = (ang.d[k], ang.pi[k], ang.tau[k]);
+                let kk = int::<T>(k * (k + 1));
+                let field = |h: Complex<T>, dh: Complex<T>, h_x: Complex<T>, p: Complex<T>| {
+                    (
+                        [real(T::zero()), i1 * h * p, -(h.scale(tau))],
+                        [h_x.scale(kk * d), dh.scale(tau), i1 * dh * p],
+                    )
+                };
+                (reg_m[k], reg_n[k]) = field(radial.j[k], radial.dj[k], radial.j_x[k], real(-pi));
+                (in_m[k], in_n[k]) = field(radial.jz[k], radial.djz[k], radial.jz_z[k], real(pi));
+            }
+            for c in 0..2 {
+                let idx = &mm.index[c];
+                let kc = idx.len();
+                for (i, &(rt, nn)) in idx.iter().enumerate() {
+                    let (g1, g2) = if rt == 0 {
+                        (&reg_m[nn], &reg_n[nn])
+                    } else {
+                        (&reg_n[nn], &reg_m[nn])
+                    };
+                    let an = (ang.d[nn], ang.pi[nn], ang.tau[nn]);
+                    for (j, &(ctp, kk_)) in idx.iter().enumerate() {
+                        let (b1, b2) = if ctp == 0 {
+                            (in_n[kk_].map(|v| v * s), &in_m[kk_])
+                        } else {
+                            (in_m[kk_].map(|v| v * s), &in_n[kk_])
+                        };
+                        let gg = gam[nn] * gam[kk_];
+                        let pv = triple(nu, g1, &b1) + triple(nu, g2, b2);
+                        let slot = i * kc + j;
+                        mm.p[c][slot] = mm.p[c][slot] + Complex::new(pv.im, -pv.re).scale(fac * gg);
+                        // Y: Σ_t a_t R_t in its three forms.
+                        let ak = (ang.d[kk_], ang.pi[kk_], ang.tau[kk_]);
+                        let a = angular_factors(rt, ctp, s, nu_prime, nn, kk_, an, ak);
+                        let ge = g0 * gg;
+                        let (mut va, mut aa) = (zero, T::zero());
+                        let (mut vb, mut ab) = (zero, T::zero());
+                        let (mut vc, mut ac) = (zero, T::zero());
+                        for (ti, &at) in a.iter().enumerate() {
+                            if at == zero {
+                                continue;
+                            }
+                            let fi = (ti * n1 + nn) * n1 + kk_;
+                            let rf = full[fi];
+                            let mag = at.norm();
+                            va = va + at * rf;
+                            aa += mag * rf.norm();
+                            if let Some(Some(f)) = forms.get(fi) {
+                                vc = vc + at * f.le0;
+                                ac += mag * f.le0_abs;
+                                vb = vb + at * f.lt0;
+                                ab += mag * f.lt0_abs;
+                            }
+                        }
+                        let ys = &mut yv[m][c];
+                        let ys_abs = &mut ya[m][c];
+                        ys[0][slot] = ys[0][slot] + va.scale(ge);
+                        ys_abs[0][slot] += aa * ge.abs();
+                        ys[1][slot] = ys[1][slot] + vb.scale(ge);
+                        ys_abs[1][slot] += ab * ge.abs();
+                        ys[2][slot] = ys[2][slot] + vc.scale(ge);
+                        ys_abs[2][slot] += ac * ge.abs();
+                    }
+                }
+            }
+        }
+    }
+    // Q = P + Y in the cleanest exact form of each element: the plain one, minus the powers < 0
+    // (|n − k| ≥ 3), or minus the powers ≤ 0 (n ≠ k).
+    for (m, mm) in modes.iter_mut().enumerate() {
+        for c in 0..2 {
+            let idx = mm.index[c].clone();
+            let kc = idx.len();
+            for (i, &(_, nn)) in idx.iter().enumerate() {
+                for (j, &(_, kk_)) in idx.iter().enumerate() {
+                    let slot = i * kc + j;
+                    let mut best = 0;
+                    if regularize && nn != kk_ {
+                        if ya[m][c][2][slot] < ya[m][c][best][slot] {
+                            best = 2;
+                        }
+                        if nn.abs_diff(kk_) >= 3 && ya[m][c][1][slot] < ya[m][c][best][slot] {
+                            best = 1;
+                        }
+                    }
+                    mm.q[c][slot] = mm.p[c][slot] + yv[m][c][best][slot];
+                }
+            }
+        }
+    }
+    Ok(modes)
+}
+
 /// LU factorization with partial pivoting of a row-major n × n matrix, in place; returns the
 /// pivots.
 pub(crate) fn lu<T: Real>(a: &mut [Complex<T>], n: usize) -> Result<Vec<usize>> {
@@ -285,20 +496,22 @@ pub(crate) struct TMatrixModes<T> {
     pub(crate) modes: Vec<ModeT<T>>,
 }
 
-/// T of every mode for orders up to n and n_theta nodes in 0 < θ < π/2.
+/// T of every mode for orders up to n and n_theta nodes in 0 < θ < π/2, with or without the
+/// regularized integrals.
 pub(crate) fn tmatrix<T: Real>(
     x: T,
     eps: T,
     s: Complex<T>,
     n: usize,
     n_theta: usize,
+    regularize: bool,
 ) -> Result<TMatrixModes<T>> {
     let shape = Spheroid::new(x, eps);
     let scales = Scales::new(shape.r_min(), s.scale(shape.r_max()), n);
     let lh = log_h(&scales);
+    let all = all_modes(&shape, s, n, n_theta, regularize)?;
     let mut modes = Vec::with_capacity(n + 1);
-    for m in 0..=n {
-        let mm = mode_matrices(&shape, s, m, n, n_theta)?;
+    for mm in all {
         let mut ts: [Vec<Complex<T>>; 2] = [Vec::new(), Vec::new()];
         for ((slot, index), (q, p)) in ts.iter_mut().zip(&mm.index).zip(mm.q.iter().zip(&mm.p)) {
             let kc = index.len();
@@ -353,7 +566,7 @@ mod tests {
     fn a_sphere_gives_the_mie_coefficients() {
         let (x, m) = (3.0, Complex::new(1.5, 0.01));
         let n = 12;
-        let t = tmatrix(x, 1.0, m, n, 30).unwrap();
+        let t = tmatrix(x, 1.0, m, n, 30, true).unwrap();
         let mut mie = Mie::<f64>::new();
         let opts = MieOptions::new().with_n_max(n).with_allow_unvalidated(true);
         let s = mie.compute(x, m, &opts).unwrap();
@@ -380,7 +593,7 @@ mod tests {
     #[test]
     fn lossless_spheroids_conserve_energy() {
         for (x, eps) in [(3.0, 2.0), (3.0, 0.5), (5.0, 1.5)] {
-            let t = tmatrix(x, eps, Complex::new(1.5, 0.0), 16, 40).unwrap();
+            let t = tmatrix(x, eps, Complex::new(1.5, 0.0), 16, 40, true).unwrap();
             let (ext, sca) = t.cross_sections();
             assert!(
                 (ext - sca).abs() < 1e-11 * ext,
@@ -399,6 +612,7 @@ mod tests {
             Complex::new(Dd::from(1.5), Dd::from(0.0)),
             12,
             40,
+            true,
         )
         .unwrap();
         let (ext, _) = t.cross_sections();
@@ -434,28 +648,103 @@ mod diagnostics {
             (30.0, 2.0, 50, 90),
         ] {
             let t = std::time::Instant::now();
-            let a = tmatrix(x, eps, s, n, nth).unwrap();
+            let a = tmatrix(x, eps, s, n, nth, true).unwrap();
             let t64 = t.elapsed();
-            let b = tmatrix(Dd::from(x), Dd::from(eps), dd(s), n, nth).unwrap();
+            let plain = tmatrix(x, eps, s, n, nth, false).unwrap();
+            let b = tmatrix(Dd::from(x), Dd::from(eps), dd(s), n, nth, false).unwrap();
+            let b_reg = tmatrix(Dd::from(x), Dd::from(eps), dd(s), n, nth, true).unwrap();
+            let err = |u: &TMatrixModes<f64>| {
+                let (mut big, mut diff) = (0.0f64, 0.0f64);
+                for (ma, mb) in u.modes.iter().zip(&b.modes) {
+                    for c in 0..2 {
+                        for (u, v) in ma.0[c].iter().zip(&mb.0[c]) {
+                            let v = Complex::new(v.re.hi(), v.im.hi());
+                            big = big.max(v.norm());
+                            diff = diff.max((u - v).norm());
+                        }
+                    }
+                }
+                diff / big
+            };
             let (mut big, mut diff) = (0.0f64, 0.0f64);
-            for (ma, mb) in a.modes.iter().zip(&b.modes) {
+            for (ma, mb) in b_reg.modes.iter().zip(&b.modes) {
                 for c in 0..2 {
                     for (u, v) in ma.0[c].iter().zip(&mb.0[c]) {
-                        let v = Complex::new(v.re.hi(), v.im.hi());
-                        big = big.max(v.norm());
-                        diff = diff.max((u - v).norm());
+                        big = big.max(v.re.hi().abs() + v.im.hi().abs());
+                        diff = diff.max((u.re - v.re).hi().abs() + (u.im - v.im).hi().abs());
                     }
                 }
             }
             let (ea, sa) = a.cross_sections();
             let (eb, sb) = b.cross_sections();
             println!(
-                "x {x} eps {eps} N {n}: T {:.1e}, C_ext {:.1e}, C_sca {:.1e} (f64 {:?})",
+                "x {x} eps {eps} N {n}: T plain {:.1e}, regularized {:.1e} (dd forms agree {:.1e}); \
+                 C_ext {:.1e}, C_sca {:.1e} (f64 {:?})",
+                err(&plain),
+                err(&a),
                 diff / big,
                 ((ea - eb.hi()) / eb.hi()).abs(),
                 ((sa - sb.hi()) / sb.hi()).abs(),
                 t64
             );
+        }
+    }
+}
+
+#[cfg(test)]
+mod element_diagnostics {
+    use super::*;
+    use crate::scalar::DoubleDouble as Dd;
+
+    /// Q element errors, f64 (plain and regularized) against double-double (plain and
+    /// regularized), worst per mode-0/1: run with `--ignored --nocapture`.
+    #[test]
+    #[ignore = "a diagnostic, not a check"]
+    fn q_elements() {
+        let s = Complex::new(1.5, 0.01);
+        let sd = Complex::new(Dd::from(1.5), Dd::from(0.01));
+        for &(x, eps, n, nth) in &[
+            (10.0, 2.0, 24, 50),
+            (15.0, 0.333_333_333_333, 42, 90),
+            (15.0, 4.0, 40, 100),
+        ] {
+            let sh = Spheroid::new(x, eps);
+            let shd = Spheroid::new(Dd::from(x), Dd::from(eps));
+            let qp = all_modes(&sh, s, n, nth, false).unwrap();
+            let qr = all_modes(&sh, s, n, nth, true).unwrap();
+            let dp = all_modes(&shd, sd, n, nth, false).unwrap();
+            let dr = all_modes(&shd, sd, n, nth, true).unwrap();
+            for m in [0usize, 1] {
+                for c in 0..2 {
+                    let idx = &qp[m].index[c];
+                    let kc = idx.len();
+                    let mut worst: Vec<(f64, f64, f64, usize, usize, usize, usize)> = Vec::new();
+                    for (i, &(rt, nn)) in idx.iter().enumerate() {
+                        let row_max = (0..kc)
+                            .map(|j| dp[m].q[c][i * kc + j].norm().hi())
+                            .fold(0.0, f64::max);
+                        for (j, &(ctp, kk)) in idx.iter().enumerate() {
+                            let slot = i * kc + j;
+                            let refv =
+                                Complex::new(dr[m].q[c][slot].re.hi(), dr[m].q[c][slot].im.hi());
+                            let refp =
+                                Complex::new(dp[m].q[c][slot].re.hi(), dp[m].q[c][slot].im.hi());
+                            let scale = refv.norm().max(1e-30 * row_max);
+                            let ep = (qp[m].q[c][slot] - refv).norm() / scale;
+                            let er = (qr[m].q[c][slot] - refv).norm() / scale;
+                            let ed = (refp - refv).norm() / scale;
+                            worst.push((er, ep, ed, rt, nn, ctp, kk));
+                        }
+                    }
+                    worst.sort_by(|a, b| b.0.total_cmp(&a.0));
+                    for w in worst.iter().take(3) {
+                        println!(
+                            "x {x} eps {eps:.3} m {m} c {c}: ({},{})-({},{}): reg {:.1e} plain {:.1e} dd-forms {:.1e}",
+                            w.3, w.4, w.5, w.6, w.0, w.1, w.2
+                        );
+                    }
+                }
+            }
         }
     }
 }

@@ -317,7 +317,7 @@ mod tests {
     /// (15 here), at Θ = 0.4: F₁₁, F₁₂, F₂₂, F₃₃, F₃₄, F₄₄ (brute-force average, 10⁻¹⁵).
     #[test]
     fn matches_the_brute_force_average() {
-        let t = tmatrix(2.0, 1.8, Complex::new(1.5, 0.02), 6, 15).unwrap();
+        let t = tmatrix(2.0, 1.8, Complex::new(1.5, 0.02), 6, 15, true).unwrap();
         let mu = [0.4f64.cos()];
         let f = t.random_orientation(&mu);
         let got = [f.f11[0], f.f12[0], f.f22[0], f.f33[0], f.f34[0], f.f44[0]];
@@ -333,7 +333,7 @@ mod tests {
     fn a_sphere_gives_the_mie_phase_matrix() {
         use crate::mie::{Mie, MieOptions, Normalization, PhaseBuffers};
         let (x, m, n) = (3.0, Complex::new(1.5, 0.01), 14);
-        let t = tmatrix(x, 1.0, m, n, 30).unwrap();
+        let t = tmatrix(x, 1.0, m, n, 30, true).unwrap();
         let mu: Vec<f64> = (0..7).map(|k| -0.95 + 0.3 * f64::from(k)).collect();
         let f = t.random_orientation(&mu);
         let mut mie = Mie::<f64>::new();
@@ -376,7 +376,7 @@ mod tests {
     #[test]
     fn the_phase_function_integrates_to_the_scattering_cross_section() {
         let n = 10;
-        let t = tmatrix(3.0, 0.5, Complex::new(1.5, 0.02), n, 30).unwrap();
+        let t = tmatrix(3.0, 0.5, Complex::new(1.5, 0.02), n, 30, true).unwrap();
         let rule = crate::special::gauss_legendre::<f64>(2 * n + 2).unwrap();
         let f = t.random_orientation(&rule.nodes);
         let integral: f64 = f

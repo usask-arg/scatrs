@@ -349,17 +349,17 @@ index (at the tighter tolerance). There its number of orders grows to its limit 
 the cross sections settling: the loss of precision of the classical integrals, which scatrs
 removes ({doc}`/theory/spheroids`). scatrs computes them with about 45 orders.
 
-On one thread, the median time per spheroid, scatrs at `rtol` $10^{-6}$ and $10^{-8}$, tmatd at
-its tolerances $10^{-6}$ and $10^{-9}$ (the five failures excluded):
+On one thread, the median time per spheroid, over the spheroids tmatd computes at both of its
+tolerances, scatrs at `rtol` $10^{-6}$ and $10^{-8}$, tmatd at $10^{-6}$ and $10^{-9}$:
 
 | $x$ | scatrs, $10^{-6}$ (s) | scatrs, $10^{-8}$ (s) | tmatd, $10^{-6}$ (s) | tmatd, $10^{-9}$ (s) |
 |---|---|---|---|---|
-| 1 | 0.006 | 0.008 | 0.030 | 0.049 |
-| 3 | 0.021 | 0.025 | 0.090 | 0.19 |
-| 6 | 0.065 | 0.10 | 0.37 | 0.49 |
-| 10 | 1.6 | 2.6 | 1.2 | 1.8 |
+| 1 | 0.007 | 0.009 | 0.037 | 0.053 |
+| 3 | 0.023 | 0.025 | 0.091 | 0.20 |
+| 6 | 0.065 | 0.079 | 0.31 | 0.50 |
+| 10 | 0.85 | 1.4 | 1.1 | 1.8 |
 
-scatrs at `rtol` $10^{-8}$ is 4 to 6 times faster than tmatd at $10^{-9}$ up to $x = 6$ (slower
+scatrs at `rtol` $10^{-8}$ is 4 to 7 times faster than tmatd at $10^{-9}$ up to $x = 6$ (slower
 for one spheroid, by 1.14 times). At $x = 10$ the modes that need refinement in double-double
 dominate its time: it is faster for 11 of the 15 spheroids tmatd computes, and up to 1.5 times
 slower for the other four (aspect ratios 1/3, 3 and 5 with the weakly absorbing indices). The

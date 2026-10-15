@@ -22,10 +22,13 @@ use num_complex::Complex;
 
 use super::functions::{Angular, Radial, Scales};
 use super::regular::{Series, angular_factors, l1};
-use super::solve::{error_estimate, refine, solve_f64, solve_t};
+use super::solve::{
+    F64Solve, derivative_f64, error_estimate, refine, refine_derivative, solve_f64, solve_t,
+};
 use crate::Result;
 use crate::mie::kernel::{int, real};
 use crate::scalar::DoubleDouble as Dd;
+use crate::scalar::Dual;
 use crate::scalar::Real;
 use crate::special::gauss_legendre;
 
@@ -460,7 +463,7 @@ pub(crate) fn tmatrix_refined(
                 }
                 let flags: Vec<bool> = index.iter().map(|&(_, nn)| nn >= from).collect();
                 let lh_c: Vec<f64> = index.iter().map(|&(_, nn)| lh[nn]).collect();
-                let (mut t, solved, sweeps, last) = refine(
+                let refined = refine(
                     &mm.q[c],
                     &mm.p[c],
                     &exact[m].q[c],
@@ -470,6 +473,8 @@ pub(crate) fn tmatrix_refined(
                     kc,
                     4,
                 )?;
+                let (mut t, solved, sweeps, last) =
+                    (refined.t, &refined.solved, refined.sweeps, refined.last);
                 // The f64 rows' rounding remains, beside the double-double rows' and the last
                 // correction.
                 let bound = |v: &[f64]| -> Vec<f64> {
@@ -479,7 +484,7 @@ pub(crate) fn tmatrix_refined(
                         .collect()
                 };
                 let est = error_estimate(
-                    &solved,
+                    solved,
                     &t,
                     &bound(&mm.q_abs[c]),
                     &bound(&mm.p_abs[c]),
@@ -500,6 +505,220 @@ pub(crate) fn tmatrix_refined(
         .zip(all)
         .map(|(t, mm)| (t, mm.index))
         .collect();
+    Ok((TMatrixModes { n, modes }, report))
+}
+
+/// One class's T' and its four derivatives (scaled), with the factors of its solve.
+type ClassParts = ([Vec<Complex<f64>>; 5], F64Solve);
+
+/// One direction's dual numbers: x, ε, Re m, Im m.
+pub(crate) type D4 = Dual<f64, 4>;
+
+/// The cumulative logarithms of the scale ratios, as [`log_h`], in `T` (with derivatives).
+fn log_h_t<T: Real>(scales: &Scales<T>) -> Vec<T> {
+    let mut out = Vec::with_capacity(scales.h_ratio.len());
+    let mut acc = T::zero();
+    for &v in &scales.h_ratio {
+        acc += v.ln();
+        out.push(acc);
+    }
+    out
+}
+
+/// As [`tmatrix_refined`] for all modes, with the derivatives of T with respect to x, ε, Re m
+/// and Im m (the dual parts, in that order). The elements are computed in `Dual<f64, 4>`, whose
+/// values are bitwise those of `f64`; the derivatives follow from dT' = −(dP + T' dQ) Q⁻¹ with
+/// the same factors, and in the refined modes from double-double residuals as T' is refined.
+pub(crate) fn tmatrix_derivatives(
+    x: f64,
+    eps: f64,
+    s: Complex<f64>,
+    n: usize,
+    n_theta: usize,
+    tol: f64,
+) -> Result<(TMatrixModes<D4>, SolveReport)> {
+    let u = f64::EPSILON / 2.0 * (2 * n) as f64;
+    let u_dd = u * f64::EPSILON / 2.0;
+    let [xd, ed, sr, si] = D4::variables([x, eps, s.re, s.im]);
+    let sd = Complex::new(sr, si);
+    let shape = Spheroid::new(xd, ed);
+    let scales = Scales::new(shape.r_min(), sd.scale(shape.r_max()), n);
+    let lh_d = log_h_t(&scales);
+    let lh: Vec<f64> = lh_d.iter().map(|v| v.re()).collect();
+    let all = all_modes(&shape, sd, n, n_theta, true, &vec![Some(0); n + 1])?;
+    let value = |v: &[Complex<D4>]| -> Vec<Complex<f64>> {
+        v.iter()
+            .map(|c| Complex::new(c.re.re(), c.im.re()))
+            .collect()
+    };
+    let part = |v: &[Complex<D4>], p: usize| -> Vec<Complex<f64>> {
+        v.iter()
+            .map(|c| Complex::new(c.re.eps()[p], c.im.eps()[p]))
+            .collect()
+    };
+    let mut report = SolveReport {
+        error: vec![[0.0; 2]; n + 1],
+        sweeps: vec![[0; 2]; n + 1],
+    };
+    // Per mode and class: T' and its four derivatives (scaled), and the factors.
+    let mut ts: Vec<[Option<ClassParts>; 2]> = Vec::with_capacity(n + 1);
+    let mut big = 0.0f64;
+    for (m, mm) in all.iter().enumerate() {
+        let mut pair: [Option<ClassParts>; 2] = [None, None];
+        for (c, slot) in pair.iter_mut().enumerate() {
+            let index = &mm.index[c];
+            let kc = index.len();
+            if kc == 0 {
+                continue;
+            }
+            let (qv, pv) = (value(&mm.q[c]), value(&mm.p[c]));
+            let f = solve_f64(&qv, &pv, kc)?;
+            let lh_c: Vec<f64> = index.iter().map(|&(_, nn)| lh[nn]).collect();
+            let eq: Vec<f64> = mm.q_abs[c].iter().map(|v| u * v.re()).collect();
+            let ep: Vec<f64> = mm.p_abs[c].iter().map(|v| u * v.re()).collect();
+            report.error[m][c] = error_estimate(&f, &f.t, &eq, &ep, &lh_c, kc);
+            for (i, &(_, a)) in index.iter().enumerate() {
+                for (j, &(_, b)) in index.iter().enumerate() {
+                    big = big.max(f.t[i * kc + j].norm() * (lh[a] - lh[b]).exp());
+                }
+            }
+            let d: [Vec<Complex<f64>>; 4] = core::array::from_fn(|p| {
+                derivative_f64(&f, &f.t, &part(&mm.q[c], p), &part(&mm.p[c], p), kc)
+            });
+            let [d0, d1, d2, d3] = d;
+            *slot = Some(([f.t.clone(), d0, d1, d2, d3], f));
+        }
+        ts.push(pair);
+    }
+    let rows: Vec<Option<usize>> = (0..=n)
+        .map(|m| {
+            let worst = report.error[m][0].max(report.error[m][1]);
+            (worst > tol * big).then(|| refine_from(m, n))
+        })
+        .collect();
+    if rows.iter().any(Option::is_some) {
+        type Dd4 = Dual<Dd, 4>;
+        let [xd, ed, sr, si] =
+            Dd4::variables([Dd::from(x), Dd::from(eps), Dd::from(s.re), Dd::from(s.im)]);
+        let exact = all_modes(
+            &Spheroid::new(xd, ed),
+            Complex::new(sr, si),
+            n,
+            n_theta,
+            true,
+            &rows,
+        )?;
+        let dd = |c: Complex<f64>| Complex::new(Dd::from(c.re), Dd::from(c.im));
+        for (m, from) in rows.iter().enumerate() {
+            let Some(from) = *from else { continue };
+            let mm = &all[m];
+            for (c, slot) in ts[m].iter_mut().enumerate() {
+                let index = &mm.index[c];
+                let kc = index.len();
+                let Some((parts, _)) = slot else {
+                    continue;
+                };
+                let flags: Vec<bool> = index.iter().map(|&(_, nn)| nn >= from).collect();
+                let lh_c: Vec<f64> = index.iter().map(|&(_, nn)| lh[nn]).collect();
+                let ex_val = |v: &[Complex<Dd4>]| -> Vec<Complex<Dd>> {
+                    v.iter()
+                        .map(|c| Complex::new(c.re.re(), c.im.re()))
+                        .collect()
+                };
+                let ex_part = |v: &[Complex<Dd4>], p: usize| -> Vec<Complex<Dd>> {
+                    v.iter()
+                        .map(|c| Complex::new(c.re.eps()[p], c.im.eps()[p]))
+                        .collect()
+                };
+                let refined = refine(
+                    &value(&mm.q[c]),
+                    &value(&mm.p[c]),
+                    &ex_val(&exact[m].q[c]),
+                    &ex_val(&exact[m].p[c]),
+                    &flags,
+                    &lh_c,
+                    kc,
+                    4,
+                )?;
+                let mixed =
+                    |exact_v: Vec<Complex<Dd>>, f64_v: Vec<Complex<f64>>| -> Vec<Complex<Dd>> {
+                        (0..kc * kc)
+                            .map(|ij| {
+                                if flags[ij / kc] {
+                                    exact_v[ij]
+                                } else {
+                                    dd(f64_v[ij])
+                                }
+                            })
+                            .collect()
+                    };
+                for p in 0..4 {
+                    let dq = mixed(ex_part(&exact[m].q[c], p), part(&mm.q[c], p));
+                    let dp = mixed(ex_part(&exact[m].p[c], p), part(&mm.p[c], p));
+                    parts[p + 1] = refine_derivative(&refined, &dq, &dp, kc, 3);
+                }
+                let bound = |v: &[D4]| -> Vec<f64> {
+                    v.iter()
+                        .enumerate()
+                        .map(|(ij, a)| a.re() * if flags[ij / kc] { u_dd } else { u })
+                        .collect()
+                };
+                let est = error_estimate(
+                    &refined.solved,
+                    &refined.t,
+                    &bound(&mm.q_abs[c]),
+                    &bound(&mm.p_abs[c]),
+                    &lh_c,
+                    kc,
+                );
+                let largest = refined
+                    .t
+                    .iter()
+                    .zip(
+                        index
+                            .iter()
+                            .flat_map(|&(_, a)| index.iter().map(move |&(_, b)| (a, b))),
+                    )
+                    .fold(0.0f64, |acc, (v, (a, b))| {
+                        acc.max(v.norm() * (lh[a] - lh[b]).exp())
+                    });
+                report.sweeps[m][c] = refined.sweeps;
+                report.error[m][c] = est + refined.last + largest * f64::EPSILON;
+                parts[0] = refined.t;
+            }
+        }
+    }
+    // Assemble the dual T' and unscale it with the dual factors σ_k/σₙ.
+    let mut modes = Vec::with_capacity(n + 1);
+    for (pair, mm) in ts.into_iter().zip(all) {
+        let mut out: [Vec<Complex<D4>>; 2] = [Vec::new(), Vec::new()];
+        for (c, slot) in pair.into_iter().enumerate() {
+            let Some((parts, _)) = slot else { continue };
+            let index = &mm.index[c];
+            let kc = index.len();
+            let mut t: Vec<Complex<D4>> = (0..kc * kc)
+                .map(|ij| {
+                    let re = D4::new(
+                        parts[0][ij].re,
+                        core::array::from_fn(|p| parts[p + 1][ij].re),
+                    );
+                    let im = D4::new(
+                        parts[0][ij].im,
+                        core::array::from_fn(|p| parts[p + 1][ij].im),
+                    );
+                    Complex::new(re, im)
+                })
+                .collect();
+            for (i, &(_, a)) in index.iter().enumerate() {
+                for (j, &(_, b)) in index.iter().enumerate() {
+                    let f = num_traits::Float::exp(lh_d[a] - lh_d[b]);
+                    t[i * kc + j] = t[i * kc + j].scale(f);
+                }
+            }
+            out[c] = t;
+        }
+        modes.push((out, mm.index));
+    }
     Ok((TMatrixModes { n, modes }, report))
 }
 
@@ -531,6 +750,64 @@ impl<T: Real> TMatrixModes<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The dual derivatives of ⟨C_ext⟩, ⟨C_sca⟩ and the Greek coefficients match central
+    /// differences of the refined values, with and without refinement; the values are those of
+    /// [`tmatrix_refined`].
+    #[test]
+    fn derivatives_match_differences() {
+        let (x, eps, n, nth) = (6.0, 3.0, 20, 40);
+        let s = Complex::new(1.5, 0.02);
+        for tol in [1.0, 0.0] {
+            let (d, rep) = tmatrix_derivatives(x, eps, s, n, nth, tol).unwrap();
+            assert_eq!(rep.sweeps.iter().flatten().any(|&k| k > 0), tol == 0.0);
+            let (ext, sca) = d.cross_sections();
+            let g = d.greek_raw(12).unwrap();
+            let at = |x: f64, eps: f64, s: Complex<f64>| {
+                let (t, _) = tmatrix_refined(x, eps, s, n, nth, 0.0, n).unwrap();
+                let (e, c) = t.cross_sections();
+                (e, c, t.greek_raw(12).unwrap())
+            };
+            let (e0, c0, g0) = at(x, eps, s);
+            assert!((ext.re() - e0).abs() < 1e-13 * e0 && (sca.re() - c0).abs() < 1e-13 * c0);
+            let h = 1e-5;
+            let steps = [
+                (h * x, 0.0, Complex::new(0.0, 0.0)),
+                (0.0, h * eps, Complex::new(0.0, 0.0)),
+                (0.0, 0.0, Complex::new(h, 0.0)),
+                (0.0, 0.0, Complex::new(0.0, h)),
+            ];
+            for (p, &(dx, de, ds)) in steps.iter().enumerate() {
+                let (ep, cp, gp) = at(x + dx, eps + de, s + ds);
+                let (em, cm, gm) = at(x - dx, eps - de, s - ds);
+                let step = dx + de + ds.re + ds.im;
+                let fd = |a: f64, b: f64| (a - b) / (2.0 * step);
+                // Measured against the natural size of a derivative, value/|parameter|.
+                let param = [x, eps, s.norm(), s.norm()][p];
+                let close = |a: f64, b: f64, scale: f64| (a - b).abs() <= 1e-7 * scale / param;
+                assert!(
+                    close(ext.eps()[p], fd(ep, em), e0),
+                    "ext p {p}: {} vs {}",
+                    ext.eps()[p],
+                    fd(ep, em)
+                );
+                assert!(close(sca.eps()[p], fd(cp, cm), c0), "sca p {p}");
+                let big = g0.alpha1.iter().fold(0.0f64, |a, v| a.max(v.abs()));
+                for l in 0..g.alpha1.len() {
+                    for (u, a, b) in [
+                        (&g.alpha1, &gp.alpha1, &gm.alpha1),
+                        (&g.alpha2, &gp.alpha2, &gm.alpha2),
+                        (&g.beta2, &gp.beta2, &gm.beta2),
+                    ] {
+                        assert!(
+                            close(u[l].eps()[p], fd(a[l], b[l]), big),
+                            "greek l {l} p {p}"
+                        );
+                    }
+                }
+            }
+        }
+    }
 
     /// The refined path matches full double-double, its error estimate bounds its error, and the
     /// f64 path's estimate bounds the f64 error.
@@ -997,5 +1274,35 @@ mod profile {
         let t0 = std::time::Instant::now();
         all_modes(&shf, sf, n, nth, true, &one).unwrap();
         println!("f64 regularized mode 0 only: {:.2?}", t0.elapsed());
+    }
+}
+
+#[cfg(test)]
+mod derivative_cost {
+    use super::*;
+
+    /// The cost of the derivatives against the values: run with `--ignored --nocapture`.
+    #[test]
+    #[ignore = "a diagnostic, not a check"]
+    fn ratio() {
+        let s = Complex::new(1.53, 0.008);
+        for &(x, eps, n, nth, tol) in &[
+            (5.0, 2.0, 18, 48, 1e-9),
+            (10.0, 2.0, 30, 70, 1e-9),
+            (10.0, 2.0, 30, 70, f64::INFINITY),
+            (15.0, 2.0, 45, 106, 1e-9),
+        ] {
+            let t0 = std::time::Instant::now();
+            let (_, r) = tmatrix_refined(x, eps, s, n, nth, tol, n).unwrap();
+            let tv = t0.elapsed();
+            let t0 = std::time::Instant::now();
+            tmatrix_derivatives(x, eps, s, n, nth, tol).unwrap();
+            let td = t0.elapsed();
+            let refined = r.sweeps.iter().filter(|s| s[0] + s[1] > 0).count();
+            println!(
+                "x {x} eps {eps} N {n} tol {tol:e}: values {tv:.2?}, with derivatives {td:.2?} ({:.1}x), {refined} refined",
+                td.as_secs_f64() / tv.as_secs_f64()
+            );
+        }
     }
 }

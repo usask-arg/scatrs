@@ -14,8 +14,8 @@
 
 use num_complex::Complex;
 
-use super::kernel::{SolveReport, TMatrixModes, tmatrix, tmatrix_refined};
-use crate::scalar::DoubleDouble as Dd;
+use super::kernel::{D4, SolveReport, TMatrixModes, tmatrix, tmatrix_derivatives, tmatrix_refined};
+use crate::scalar::{DoubleDouble as Dd, Dual};
 use crate::{Error, Result};
 
 /// How the modes of a T-matrix were solved.
@@ -56,11 +56,7 @@ pub(crate) struct Solved {
 
 impl Solved {
     fn largest(&self) -> f64 {
-        self.t
-            .modes
-            .iter()
-            .flat_map(|(ts, _)| ts.iter().flatten())
-            .fold(0.0, |a, v| a.max(v.norm()))
+        self.t.largest()
     }
 }
 
@@ -330,4 +326,85 @@ pub(crate) fn converge(x: f64, eps: f64, s: Complex<f64>, opts: &Loop) -> Result
         change,
         converged,
     })
+}
+
+/// T with its derivatives at (N, n_θ) on the paths `precision` allows: the paths and the
+/// estimated largest error of an element of T (absolute).
+pub(crate) fn solve_derivatives(
+    x: f64,
+    eps: f64,
+    s: Complex<f64>,
+    n: usize,
+    n_theta: usize,
+    precision: Precision,
+    rtol: f64,
+) -> Result<(TMatrixModes<D4>, Vec<PrecisionPath>, f64)> {
+    let full_dd = || -> Result<(TMatrixModes<D4>, Vec<PrecisionPath>, f64)> {
+        type Dd4 = Dual<Dd, 4>;
+        let [xd, ed, sr, si] =
+            Dd4::variables([Dd::from(x), Dd::from(eps), Dd::from(s.re), Dd::from(s.im)]);
+        let t = tmatrix(xd, ed, Complex::new(sr, si), n, n_theta, true)?;
+        let round = |v: Dd4| D4::new(v.re().hi(), v.eps().map(|e| e.hi()));
+        let modes = t
+            .modes
+            .into_iter()
+            .map(|(ts, index)| {
+                let ts = ts.map(|v| {
+                    v.into_iter()
+                        .map(|c| Complex::new(round(c.re), round(c.im)))
+                        .collect()
+                });
+                (ts, index)
+            })
+            .collect();
+        let t = TMatrixModes { n, modes };
+        let big = t.values().largest();
+        Ok((
+            t,
+            vec![PrecisionPath::DoubleDouble; n + 1],
+            big * f64::EPSILON,
+        ))
+    };
+    if precision == Precision::DoubleDouble {
+        return full_dd();
+    }
+    let tol = if precision == Precision::F64 {
+        f64::INFINITY
+    } else {
+        rtol / 10.0
+    };
+    let (t, report) = tmatrix_derivatives(x, eps, s, n, n_theta, tol)?;
+    let solved = from_report(t.values(), &report, n_theta);
+    if precision == Precision::Auto && solved.error > tol * solved.largest() {
+        return full_dd();
+    }
+    Ok((t, solved.paths, solved.error))
+}
+
+impl TMatrixModes<D4> {
+    /// The values of a T with derivatives.
+    pub(crate) fn values(&self) -> TMatrixModes<f64> {
+        let modes = self
+            .modes
+            .iter()
+            .map(|(ts, index)| {
+                let ts = ts.clone().map(|v| {
+                    v.into_iter()
+                        .map(|c| Complex::new(c.re.re(), c.im.re()))
+                        .collect()
+                });
+                (ts, index.clone())
+            })
+            .collect();
+        TMatrixModes { n: self.n, modes }
+    }
+}
+
+impl TMatrixModes<f64> {
+    fn largest(&self) -> f64 {
+        self.modes
+            .iter()
+            .flat_map(|(ts, _)| ts.iter().flatten())
+            .fold(0.0, |a, v| a.max(v.norm()))
+    }
 }

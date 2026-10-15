@@ -196,11 +196,25 @@ pub(crate) fn error_estimate(
     4.0 * worst
 }
 
+/// The result of [`refine`].
+pub(crate) struct Refined {
+    /// T' (scaled), rounded to f64 and in double-double.
+    pub(crate) t: Vec<Complex<f64>>,
+    pub(crate) t_dd: Vec<Complex<Dd>>,
+    /// The mixed Q (double-double rows and f64 rows).
+    pub(crate) q: Vec<Complex<Dd>>,
+    /// The factors of the mixed Q rounded to f64.
+    pub(crate) solved: F64Solve,
+    /// The sweeps made.
+    pub(crate) sweeps: usize,
+    /// The last correction's largest element, unscaled (`lh` as in [`error_estimate`]).
+    pub(crate) last: f64,
+}
+
 /// Mixed-precision refinement of one class: Q and P are `q`, `p` (f64) except in the rows flagged
 /// by `exact`, where they are `qd`, `pd` (double-double). Factorizes the mixed matrix rounded to
 /// f64, then corrects X Q = −P with double-double residuals R = −P − X Q until the correction
-/// falls below 2⁻⁶⁰ of T or after `sweeps`. Returns T' (scaled), the factors used, the sweeps
-/// made, and the last correction's largest element unscaled (`lh` as in [`error_estimate`]).
+/// falls below 2⁻⁶⁰ of T or after `sweeps`.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn refine(
     q: &[Complex<f64>],
@@ -211,7 +225,7 @@ pub(crate) fn refine(
     lh: &[f64],
     n: usize,
     sweeps: usize,
-) -> Result<(Vec<Complex<f64>>, F64Solve, usize, f64)> {
+) -> Result<Refined> {
     let dd = |c: Complex<f64>| Complex::new(Dd::from(c.re), Dd::from(c.im));
     let hi = |c: Complex<Dd>| Complex::new(c.re.hi(), c.im.hi());
     let pick = |ij: usize, v: &[Complex<f64>], vd: &[Complex<Dd>]| {
@@ -249,5 +263,93 @@ pub(crate) fn refine(
             break;
         }
     }
-    Ok((x.iter().map(|&c| hi(c)).collect(), solved, done, last))
+    Ok(Refined {
+        t: x.iter().map(|&c| hi(c)).collect(),
+        t_dd: x,
+        q: qm,
+        solved,
+        sweeps: done,
+        last,
+    })
+}
+
+/// The derivative of T' = −P Q⁻¹ along one direction: dT' = −(dP + T' dQ) Q⁻¹, with the
+/// factors of Q.
+pub(crate) fn derivative_f64(
+    solved: &F64Solve,
+    t: &[Complex<f64>],
+    dq: &[Complex<f64>],
+    dp: &[Complex<f64>],
+    n: usize,
+) -> Vec<Complex<f64>> {
+    let mut out = vec![Complex::new(0.0, 0.0); n * n];
+    let mut row = vec![Complex::new(0.0, 0.0); n];
+    for i in 0..n {
+        for j in 0..n {
+            let mut v = dp[i * n + j];
+            for l in 0..n {
+                v += t[i * n + l] * dq[l * n + j];
+            }
+            row[j] = -v;
+        }
+        lu_solve(&solved.qt, &solved.piv, n, &mut row);
+        out[i * n..(i + 1) * n].copy_from_slice(&row);
+    }
+    out
+}
+
+/// Refines a derivative dT' of a refined class (`r`), with dQ and dP mixed as Q and P were
+/// (`dq`, `dp` in double-double, exact in the refined rows): residuals
+/// R = −dP − T' dQ − dT' Q in double-double, corrected by the f64 factors, for `sweeps` sweeps or
+/// until the correction falls below 2⁻⁶⁰ of dT'.
+pub(crate) fn refine_derivative(
+    r: &Refined,
+    dq: &[Complex<Dd>],
+    dp: &[Complex<Dd>],
+    n: usize,
+    sweeps: usize,
+) -> Vec<Complex<f64>> {
+    let dd = |c: Complex<f64>| Complex::new(Dd::from(c.re), Dd::from(c.im));
+    let hi = |c: Complex<Dd>| Complex::new(c.re.hi(), c.im.hi());
+    // The right-hand side −dP − T' dQ, fixed over the sweeps.
+    let mut rhs = vec![Complex::new(Dd::from(0.0), Dd::from(0.0)); n * n];
+    for i in 0..n {
+        for j in 0..n {
+            let mut v = -dp[i * n + j];
+            for l in 0..n {
+                v -= r.t_dd[i * n + l] * dq[l * n + j];
+            }
+            rhs[i * n + j] = v;
+        }
+    }
+    let first: Vec<Complex<f64>> = rhs.iter().map(|&c| hi(c)).collect();
+    let mut x: Vec<Complex<Dd>> = Vec::with_capacity(n * n);
+    let mut row = vec![Complex::new(0.0, 0.0); n];
+    for i in 0..n {
+        row.copy_from_slice(&first[i * n..(i + 1) * n]);
+        lu_solve(&r.solved.qt, &r.solved.piv, n, &mut row);
+        x.extend(row.iter().map(|&c| dd(c)));
+    }
+    let big = x.iter().map(|c| hi(*c).norm()).fold(0.0, f64::max);
+    for _ in 0..sweeps {
+        let mut worst = 0.0f64;
+        for i in 0..n {
+            for j in 0..n {
+                let mut v = rhs[i * n + j];
+                for l in 0..n {
+                    v -= x[i * n + l] * r.q[l * n + j];
+                }
+                row[j] = hi(v);
+            }
+            lu_solve(&r.solved.qt, &r.solved.piv, n, &mut row);
+            for j in 0..n {
+                worst = worst.max(row[j].norm());
+                x[i * n + j] += dd(row[j]);
+            }
+        }
+        if worst <= big * 2f64.powi(-60) {
+            break;
+        }
+    }
+    x.iter().map(|&c| hi(c)).collect()
 }

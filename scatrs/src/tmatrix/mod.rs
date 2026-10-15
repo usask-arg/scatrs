@@ -60,6 +60,9 @@ use num_complex::Complex;
 pub use domain::{VALIDATED_DOMAIN, ValidatedDomain};
 pub use driver::{Precision, PrecisionPath};
 
+use crate::scalar::Real;
+use kernel::{D4, TMatrixModes};
+
 use crate::mie::{Efficiencies, GreekCoefficients, MAX_GREEK_ORDER, Normalization};
 use crate::special::wigner_d;
 use crate::{Error, Result};
@@ -182,6 +185,9 @@ pub struct TMatrix {
     state: Option<State>,
 }
 
+/// T with its derivatives, and their Greek coefficients on first use.
+type WithDerivatives = (TMatrixModes<D4>, OnceLock<Result<GreekCoefficients<D4>>>);
+
 #[derive(Debug)]
 struct State {
     x: f64,
@@ -191,6 +197,8 @@ struct State {
     converged: driver::Converged,
     /// The Greek coefficients up to 2N (unnormalized, 1/k²), computed on first use.
     greek: OnceLock<Result<GreekCoefficients<f64>>>,
+    /// T with its derivatives, if asked for, and their Greek coefficients on first use.
+    derivatives: Option<WithDerivatives>,
 }
 
 impl TMatrix {
@@ -216,6 +224,35 @@ impl TMatrix {
         x: f64,
         m: Complex<f64>,
         opts: &TMatrixOptions,
+    ) -> Result<TMatrixSolution<'_>> {
+        self.run(shape, x, m, opts, false)
+    }
+
+    /// As [`compute`](Self::compute), also computing the derivatives of every output with
+    /// respect to x, the aspect ratio, Re m and Im m, at the N and n_θ the values converged at:
+    /// the elements in dual numbers (their values are those of `f64`), and
+    /// dT = −(dP + T dQ) Q⁻¹ with the factors of the solve, refined as T is.
+    ///
+    /// # Errors
+    ///
+    /// As [`compute`](Self::compute).
+    pub fn compute_with_derivatives(
+        &mut self,
+        shape: Shape,
+        x: f64,
+        m: Complex<f64>,
+        opts: &TMatrixOptions,
+    ) -> Result<TMatrixSolution<'_>> {
+        self.run(shape, x, m, opts, true)
+    }
+
+    fn run(
+        &mut self,
+        shape: Shape,
+        x: f64,
+        m: Complex<f64>,
+        opts: &TMatrixOptions,
+        with_derivatives: bool,
     ) -> Result<TMatrixSolution<'_>> {
         let Shape::Spheroid { aspect_ratio: eps } = shape;
         let invalid = |s: String| Err(Error::InvalidInput(s));
@@ -284,6 +321,19 @@ impl TMatrix {
                 allow_unconverged: opts.allow_unconverged,
             },
         )?;
+        let mut converged = converged;
+        let derivatives = if with_derivatives {
+            let solved = &mut converged.solved;
+            let (n, nth) = (solved.t.n, solved.n_theta);
+            let d = driver::solve_derivatives(x, eps, m, n, nth, opts.precision, opts.rtol)?;
+            // The values are the dual T's, so that they match the derivatives.
+            solved.t = d.0.values();
+            solved.paths = d.1;
+            solved.error = d.2;
+            Some((d.0, OnceLock::new()))
+        } else {
+            None
+        };
         self.state = Some(State {
             x,
             eps,
@@ -291,6 +341,7 @@ impl TMatrix {
             rtol: opts.rtol,
             converged,
             greek: OnceLock::new(),
+            derivatives,
         });
         Ok(TMatrixSolution {
             s: self.state.as_ref().expect("just set"),
@@ -341,6 +392,167 @@ pub struct TMatrixSolution<'a> {
     s: &'a State,
 }
 
+/// The derivatives of an output with respect to the spheroid's parameters.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct Derivatives<V> {
+    /// ∂/∂x (equal-volume size parameter).
+    pub x: V,
+    /// ∂/∂ε (aspect ratio).
+    pub aspect_ratio: V,
+    /// ∂/∂(Re m).
+    pub m_re: V,
+    /// ∂/∂(Im m).
+    pub m_im: V,
+}
+
+impl<V> Derivatives<V> {
+    fn from_fn(mut f: impl FnMut(usize) -> V) -> Self {
+        Self {
+            x: f(0),
+            aspect_ratio: f(1),
+            m_re: f(2),
+            m_im: f(3),
+        }
+    }
+}
+
+/// The efficiencies from T, its raw Greek coefficients and x (Q = C/(πx²) in 1/k² units).
+fn efficiencies_of<T: Real>(
+    t: &kernel::TMatrixModes<T>,
+    raw: &GreekCoefficients<T>,
+    x: T,
+) -> Efficiencies<T> {
+    let (ext, sca) = t.cross_sections();
+    let area = T::PI() * x * x;
+    let a0 = raw.alpha1[0];
+    let g = if a0 > T::zero() {
+        raw.alpha1.get(1).copied().unwrap_or(T::zero()) / (T::from_f64(3.0) * a0)
+    } else {
+        T::zero()
+    };
+    // F₁₁(−1) = Σ α₁ₗ (−1)ˡ.
+    let mut f11 = T::zero();
+    for (l, &v) in raw.alpha1.iter().enumerate() {
+        f11 = if l % 2 == 0 { f11 + v } else { f11 - v };
+    }
+    Efficiencies {
+        q_ext: ext / area,
+        q_sca: sca / area,
+        q_abs: (ext - sca) / area,
+        q_back: T::from_f64(4.0) * T::PI() * f11 / area,
+        g,
+    }
+}
+
+/// The Greek coefficients up to `order` from the raw ones, normalized or unnormalized.
+fn greek_of<T: Real>(
+    raw: &GreekCoefficients<T>,
+    x: T,
+    order: usize,
+    normalization: Normalization,
+) -> GreekCoefficients<T> {
+    let mut g = raw.clone();
+    let len = (order + 1).min(g.alpha1.len());
+    for v in [
+        &mut g.alpha1,
+        &mut g.alpha2,
+        &mut g.alpha3,
+        &mut g.alpha4,
+        &mut g.beta1,
+        &mut g.beta2,
+    ] {
+        v.truncate(len);
+    }
+    let scale = match normalization {
+        Normalization::Normalized => g.alpha1[0].recip(),
+        // α₁(0) = C_sca/(4π) in 1/k²: Q_sca/α₁(0) = 4π/(πx²).
+        Normalization::Unnormalized => T::from_f64(4.0) / (x * x),
+    };
+    g.map(|v| v * scale);
+    g.pad(order + 1);
+    g
+}
+
+/// F₁₁, F₁₂, F₂₂, F₃₃, F₃₄, F₄₄ at cosine `mu` from Greek coefficients.
+fn phase_of<T: Real>(g: &GreekCoefficients<T>, d: &[Vec<f64>; 4]) -> [T; 6] {
+    let [d00, d22, d2m2, d02] = d;
+    let dot = |a: &[T], b: &[f64]| {
+        a.iter()
+            .zip(b)
+            .fold(T::zero(), |acc, (&x, &y)| acc + x * T::from_f64(y))
+    };
+    let mut sum = T::zero();
+    let mut diff = T::zero();
+    for l in 0..g.alpha2.len() {
+        sum += (g.alpha2[l] + g.alpha3[l]) * T::from_f64(d22[l]);
+        diff += (g.alpha2[l] - g.alpha3[l]) * T::from_f64(d2m2[l]);
+    }
+    let half = T::from_f64(0.5);
+    [
+        dot(&g.alpha1, d00),
+        dot(&g.beta1, d02),
+        half * (sum + diff),
+        half * (sum - diff),
+        dot(&g.beta2, d02),
+        dot(&g.alpha4, d00),
+    ]
+}
+
+fn wigner_tables(mu: f64, len: usize, d: &mut [Vec<f64>; 4]) -> Result<()> {
+    for v in d.iter_mut() {
+        v.resize(len, 0.0);
+    }
+    let [d00, d22, d2m2, d02] = d;
+    wigner_d(0, 0, mu, d00)?;
+    wigner_d(2, 2, mu, d22)?;
+    wigner_d(2, -2, mu, d2m2)?;
+    wigner_d(0, 2, mu, d02)?;
+    Ok(())
+}
+
+fn check_buffers(mu: &[f64], out: &PhaseBuffers<'_>) -> Result<()> {
+    let lens = [
+        out.f11.len(),
+        out.f12.len(),
+        out.f22.len(),
+        out.f33.len(),
+        out.f34.len(),
+        out.f44.len(),
+    ];
+    if lens.iter().any(|&l| l != mu.len()) {
+        return Err(Error::InvalidInput(format!(
+            "phase-matrix buffers must have one value per cosine ({}), got {lens:?}",
+            mu.len()
+        )));
+    }
+    Ok(())
+}
+
+fn store(out: &mut PhaseBuffers<'_>, j: usize, v: [f64; 6]) {
+    out.f11[j] = v[0];
+    out.f12[j] = v[1];
+    out.f22[j] = v[2];
+    out.f33[j] = v[3];
+    out.f34[j] = v[4];
+    out.f44[j] = v[5];
+}
+
+fn no_derivatives() -> Error {
+    Error::InvalidInput(
+        "the solution was computed without derivatives (use compute_with_derivatives)".into(),
+    )
+}
+
+fn check_order(order: usize) -> Result<()> {
+    if order > MAX_GREEK_ORDER {
+        return Err(Error::InvalidInput(format!(
+            "the Greek order must be at most {MAX_GREEK_ORDER}"
+        )));
+    }
+    Ok(())
+}
+
 impl TMatrixSolution<'_> {
     fn solved(&self) -> &driver::Solved {
         &self.s.converged.solved
@@ -379,6 +591,11 @@ impl TMatrixSolution<'_> {
             .fold(0.0f64, |a, v| a.max(v.norm()));
         let solve = if big > 0.0 { solved.error / big } else { 0.0 };
         self.s.converged.change.max(solve)
+    }
+
+    /// The aspect ratio, size parameter, index and tolerance this solution was computed for.
+    pub fn inputs(&self) -> (f64, f64, Complex<f64>, f64) {
+        (self.s.eps, self.s.x, self.s.m, self.s.rtol)
     }
 
     /// The T-matrix blocks of mode `m` (`None` above N).
@@ -421,43 +638,50 @@ impl TMatrixSolution<'_> {
             .map_err(Clone::clone)
     }
 
-    /// πx², the geometric cross section of the equal-volume sphere in 1/k².
-    fn area(&self) -> f64 {
-        core::f64::consts::PI * self.s.x * self.s.x
+    /// The same with derivatives.
+    fn greek_raw_dual(&self) -> Result<&GreekCoefficients<D4>> {
+        let (t, cell) = self.s.derivatives.as_ref().ok_or_else(no_derivatives)?;
+        cell.get_or_init(|| t.greek_raw(2 * t.n))
+            .as_ref()
+            .map_err(Clone::clone)
+    }
+
+    fn x_dual(&self) -> D4 {
+        D4::new(self.s.x, [1.0, 0.0, 0.0, 0.0])
     }
 
     /// The orientation-averaged efficiencies, per unit geometric cross section of the
     /// equal-volume sphere: Q_ext and Q_sca from T (Mishchenko 1991), Q_abs = Q_ext − Q_sca,
     /// g = α₁(1)/3, and Q_back = 4π F₁₁(180°)/(πx²) from the Greek expansion.
     pub fn efficiencies(&self) -> Efficiencies<f64> {
-        let (ext, sca) = self.solved().t.cross_sections();
-        let area = self.area();
-        let (g, back) = match self.greek_raw() {
-            Ok(gr) => {
-                let a0 = gr.alpha1[0];
-                let g = if a0 > 0.0 {
-                    gr.alpha1.get(1).copied().unwrap_or(0.0) / (3.0 * a0)
-                } else {
-                    0.0
-                };
-                // F₁₁(−1) = Σ α₁ₗ (−1)ˡ.
-                let f11: f64 = gr
-                    .alpha1
-                    .iter()
-                    .enumerate()
-                    .map(|(l, &v)| if l % 2 == 0 { v } else { -v })
-                    .sum();
-                (g, 4.0 * core::f64::consts::PI * f11 / area)
+        match self.greek_raw() {
+            Ok(raw) => efficiencies_of(&self.solved().t, raw, self.s.x),
+            Err(_) => {
+                let (ext, sca) = self.solved().t.cross_sections();
+                let area = core::f64::consts::PI * self.s.x * self.s.x;
+                Efficiencies {
+                    q_ext: ext / area,
+                    q_sca: sca / area,
+                    q_abs: (ext - sca) / area,
+                    q_back: f64::NAN,
+                    g: f64::NAN,
+                }
             }
-            Err(_) => (f64::NAN, f64::NAN),
-        };
-        Efficiencies {
-            q_ext: ext / area,
-            q_sca: sca / area,
-            q_abs: (ext - sca) / area,
-            q_back: back,
-            g,
         }
+    }
+
+    /// The derivatives of the efficiencies (`None` without derivatives).
+    pub fn efficiencies_jacobian(&self) -> Option<Derivatives<Efficiencies<f64>>> {
+        let (t, _) = self.s.derivatives.as_ref()?;
+        let raw = self.greek_raw_dual().ok()?;
+        let q = efficiencies_of(t, raw, self.x_dual());
+        Some(Derivatives::from_fn(|p| Efficiencies {
+            q_ext: q.q_ext.eps()[p],
+            q_sca: q.q_sca.eps()[p],
+            q_abs: q.q_abs.eps()[p],
+            q_back: q.q_back.eps()[p],
+            g: q.g.eps()[p],
+        }))
     }
 
     /// The Greek coefficients up to `order` (default 2N; zero above 2N), normalized (α₁ at
@@ -471,37 +695,53 @@ impl TMatrixSolution<'_> {
         order: Option<usize>,
         normalization: Normalization,
     ) -> Result<GreekCoefficients<f64>> {
-        let n = self.n_terms();
-        let order = order.unwrap_or(2 * n);
-        if order > MAX_GREEK_ORDER {
-            return Err(Error::InvalidInput(format!(
-                "the Greek order must be at most {MAX_GREEK_ORDER}"
-            )));
-        }
-        let mut g = self.greek_raw()?.clone();
-        let len = (order + 1).min(g.alpha1.len());
-        for v in [
-            &mut g.alpha1,
-            &mut g.alpha2,
-            &mut g.alpha3,
-            &mut g.alpha4,
-            &mut g.beta1,
-            &mut g.beta2,
-        ] {
-            v.truncate(len);
-        }
-        let a0 = g.alpha1[0];
-        let scale = match normalization {
-            Normalization::Normalized => 1.0 / a0,
-            // α₁(0) = C_sca/(4π) in 1/k²: Q_sca/α₁(0) = 4π/(πx²).
-            Normalization::Unnormalized => 4.0 * core::f64::consts::PI / self.area(),
-        };
-        g.map(|v| v * scale);
+        let order = order.unwrap_or(2 * self.n_terms());
+        check_order(order)?;
+        let mut g = greek_of(self.greek_raw()?, self.s.x, order, normalization);
         if normalization == Normalization::Normalized {
             g.alpha1[0] = 1.0;
         }
-        g.pad(order + 1);
         Ok(g)
+    }
+
+    /// The Greek coefficients and their derivatives.
+    ///
+    /// # Errors
+    ///
+    /// As [`greek`](Self::greek), and [`Error::InvalidInput`] without derivatives.
+    pub fn greek_with_derivatives(
+        &self,
+        order: Option<usize>,
+        normalization: Normalization,
+    ) -> Result<(GreekCoefficients<f64>, Derivatives<GreekCoefficients<f64>>)> {
+        let order = order.unwrap_or(2 * self.n_terms());
+        check_order(order)?;
+        let g = greek_of(self.greek_raw_dual()?, self.x_dual(), order, normalization);
+        let split = |f: &dyn Fn(D4) -> f64| {
+            let mut out = GreekCoefficients::zeros(order + 1);
+            for (o, i) in [
+                (&mut out.alpha1, &g.alpha1),
+                (&mut out.alpha2, &g.alpha2),
+                (&mut out.alpha3, &g.alpha3),
+                (&mut out.alpha4, &g.alpha4),
+                (&mut out.beta1, &g.beta1),
+                (&mut out.beta2, &g.beta2),
+            ] {
+                for (a, &b) in o.iter_mut().zip(i) {
+                    *a = f(b);
+                }
+            }
+            out
+        };
+        let mut values = split(&|v| v.re());
+        let mut d = Derivatives::from_fn(|p| split(&|v| v.eps()[p]));
+        if normalization == Normalization::Normalized {
+            values.alpha1[0] = 1.0;
+            for v in [&mut d.x, &mut d.aspect_ratio, &mut d.m_re, &mut d.m_im] {
+                v.alpha1[0] = 0.0;
+            }
+        }
+        Ok((values, d))
     }
 
     /// The orientation-averaged phase matrix at the cosines `mu` of the scattering angle, from
@@ -516,48 +756,53 @@ impl TMatrixSolution<'_> {
         &self,
         mu: &[f64],
         normalization: Normalization,
-        out: PhaseBuffers<'_>,
+        mut out: PhaseBuffers<'_>,
     ) -> Result<()> {
-        let lens = [
-            out.f11.len(),
-            out.f12.len(),
-            out.f22.len(),
-            out.f33.len(),
-            out.f34.len(),
-            out.f44.len(),
-        ];
-        if lens.iter().any(|&l| l != mu.len()) {
-            return Err(Error::InvalidInput(format!(
-                "phase-matrix buffers must have one value per cosine ({}), got {lens:?}",
-                mu.len()
-            )));
-        }
+        check_buffers(mu, &out)?;
         let g = self.greek(None, normalization)?;
-        let len = g.alpha1.len();
-        let mut d: [Vec<f64>; 4] = core::array::from_fn(|_| vec![0.0; len]);
+        let mut d: [Vec<f64>; 4] = Default::default();
         for (j, &c) in mu.iter().enumerate() {
-            let [d00, d22, d2m2, d02] = &mut d;
-            wigner_d(0, 0, c, d00)?;
-            wigner_d(2, 2, c, d22)?;
-            wigner_d(2, -2, c, d2m2)?;
-            wigner_d(0, 2, c, d02)?;
-            let dot = |a: &[f64], b: &[f64]| a.iter().zip(b).map(|(x, y)| x * y).sum::<f64>();
-            let plus: Vec<f64> = g.alpha2.iter().zip(&g.alpha3).map(|(a, b)| a + b).collect();
-            let minus: Vec<f64> = g.alpha2.iter().zip(&g.alpha3).map(|(a, b)| a - b).collect();
-            let (sum, diff) = (dot(&plus, d22), dot(&minus, d2m2));
-            out.f11[j] = dot(&g.alpha1, d00);
-            out.f44[j] = dot(&g.alpha4, d00);
-            out.f22[j] = 0.5 * (sum + diff);
-            out.f33[j] = 0.5 * (sum - diff);
-            out.f12[j] = dot(&g.beta1, d02);
-            out.f34[j] = dot(&g.beta2, d02);
+            wigner_tables(c, g.alpha1.len(), &mut d)?;
+            store(&mut out, j, phase_of(&g, &d));
         }
         Ok(())
     }
 
-    /// The aspect ratio, size parameter, index and tolerance this solution was computed for.
-    pub fn inputs(&self) -> (f64, f64, Complex<f64>, f64) {
-        (self.s.eps, self.s.x, self.s.m, self.s.rtol)
+    /// The phase matrix and its derivatives, into `out` and `d`.
+    ///
+    /// # Errors
+    ///
+    /// As [`phase_matrix`](Self::phase_matrix), and [`Error::InvalidInput`] without
+    /// derivatives.
+    pub fn phase_matrix_with_derivatives(
+        &self,
+        mu: &[f64],
+        normalization: Normalization,
+        mut out: PhaseBuffers<'_>,
+        d: Derivatives<PhaseBuffers<'_>>,
+    ) -> Result<()> {
+        check_buffers(mu, &out)?;
+        let Derivatives {
+            x: mut dx,
+            aspect_ratio: mut de,
+            m_re: mut dr,
+            m_im: mut di,
+        } = d;
+        for b in [&dx, &de, &dr, &di] {
+            check_buffers(mu, b)?;
+        }
+        let n = self.n_terms();
+        let g = greek_of(self.greek_raw_dual()?, self.x_dual(), 2 * n, normalization);
+        let mut w: [Vec<f64>; 4] = Default::default();
+        for (j, &c) in mu.iter().enumerate() {
+            wigner_tables(c, g.alpha1.len(), &mut w)?;
+            let v = phase_of(&g, &w);
+            store(&mut out, j, v.map(|x| x.re()));
+            for (p, b) in [&mut dx, &mut de, &mut dr, &mut di].into_iter().enumerate() {
+                store(b, j, v.map(|x| x.eps()[p]));
+            }
+        }
+        Ok(())
     }
 }
 
@@ -693,6 +938,126 @@ mod tests {
                 .sum::<f64>();
         assert!((half - 1.0).abs() < 1e-12, "{half}");
         assert!(s.converged() && s.error_estimate() < 1e-8);
+    }
+
+    /// The derivatives of the efficiencies, Greek coefficients and phase matrix against central
+    /// differences at fixed N and n_θ; the values equal `compute`'s.
+    #[test]
+    fn derivatives_against_differences() {
+        let (eps, x, m) = (0.6, 3.0, Complex::new(1.45, 0.03));
+        let base = TMatrixOptions::new().with_rtol(1e-10);
+        let mut tm = TMatrix::new();
+        let s = tm.compute(spheroid(eps), x, m, &base).unwrap();
+        let (n, nth) = (s.n_terms(), s.n_theta());
+        let q0 = s.efficiencies();
+        let fixed = base.with_n_terms(n).with_n_theta(nth);
+        let mut td = TMatrix::new();
+        let d = td
+            .compute_with_derivatives(spheroid(eps), x, m, &fixed)
+            .unwrap();
+        let qd = d.efficiencies();
+        assert!((qd.q_ext - q0.q_ext).abs() <= 1e-14 * q0.q_ext);
+        let jac = d.efficiencies_jacobian().unwrap();
+        let (gv, gd) = d
+            .greek_with_derivatives(Some(8), Normalization::Unnormalized)
+            .unwrap();
+        let mu = [-1.0, -0.2, 0.7];
+        let mk = || -> [Vec<f64>; 6] { core::array::from_fn(|_| vec![0.0; mu.len()]) };
+        let (mut f, mut fx, mut fe, mut fr, mut fi) = (mk(), mk(), mk(), mk(), mk());
+        fn buf(b: &mut [Vec<f64>; 6]) -> PhaseBuffers<'_> {
+            let [f11, f12, f22, f33, f34, f44] = b;
+            PhaseBuffers {
+                f11,
+                f12,
+                f22,
+                f33,
+                f34,
+                f44,
+            }
+        }
+        d.phase_matrix_with_derivatives(
+            &mu,
+            Normalization::Normalized,
+            buf(&mut f),
+            Derivatives {
+                x: buf(&mut fx),
+                aspect_ratio: buf(&mut fe),
+                m_re: buf(&mut fr),
+                m_im: buf(&mut fi),
+            },
+        )
+        .unwrap();
+        let h = 1e-5;
+        let eval = |eps: f64, x: f64, m: Complex<f64>| {
+            let mut t = TMatrix::new();
+            let s = t.compute(spheroid(eps), x, m, &fixed).unwrap();
+            let mut p = mk();
+            s.phase_matrix(&mu, Normalization::Normalized, buf(&mut p))
+                .unwrap();
+            (
+                s.efficiencies(),
+                s.greek(Some(8), Normalization::Unnormalized).unwrap(),
+                p,
+            )
+        };
+        let dirs = [
+            (0.0, h * x, Complex::new(0.0, 0.0), &jac.x, &gd.x, &fx, x),
+            (
+                h * eps,
+                0.0,
+                Complex::new(0.0, 0.0),
+                &jac.aspect_ratio,
+                &gd.aspect_ratio,
+                &fe,
+                eps,
+            ),
+            (
+                0.0,
+                0.0,
+                Complex::new(h, 0.0),
+                &jac.m_re,
+                &gd.m_re,
+                &fr,
+                m.norm(),
+            ),
+            (
+                0.0,
+                0.0,
+                Complex::new(0.0, h),
+                &jac.m_im,
+                &gd.m_im,
+                &fi,
+                m.norm(),
+            ),
+        ];
+        for (de, dx, dm, jq, jg, jf, size) in dirs {
+            let step = de + dx + dm.re + dm.im;
+            let (qp, gp, pp) = eval(eps + de, x + dx, m + dm);
+            let (qm, gm, pm) = eval(eps - de, x - dx, m - dm);
+            let fd = |a: f64, b: f64| (a - b) / (2.0 * step);
+            let ok = |a: f64, b: f64, scale: f64| (a - b).abs() <= 1e-6 * scale / size;
+            for (a, p, mm, v) in [
+                (jq.q_ext, qp.q_ext, qm.q_ext, q0.q_ext),
+                (jq.q_sca, qp.q_sca, qm.q_sca, q0.q_sca),
+                (jq.q_abs, qp.q_abs, qm.q_abs, q0.q_abs),
+                (jq.q_back, qp.q_back, qm.q_back, q0.q_back),
+                (jq.g, qp.g, qm.g, q0.g),
+            ] {
+                assert!(ok(a, fd(p, mm), v.abs()), "{a} vs {}", fd(p, mm));
+            }
+            let big = gv.alpha1.iter().fold(0.0f64, |a, v| a.max(v.abs()));
+            for l in 0..=8 {
+                assert!(ok(jg.alpha1[l], fd(gp.alpha1[l], gm.alpha1[l]), big));
+                assert!(ok(jg.beta1[l], fd(gp.beta1[l], gm.beta1[l]), big));
+                assert!(ok(jg.alpha3[l], fd(gp.alpha3[l], gm.alpha3[l]), big));
+            }
+            let fbig = f[0].iter().fold(0.0f64, |a, v| a.max(v.abs()));
+            for k in 0..6 {
+                for j in 0..mu.len() {
+                    assert!(ok(jf[k][j], fd(pp[k][j], pm[k][j]), fbig), "phase {k} {j}");
+                }
+            }
+        }
     }
 
     #[test]

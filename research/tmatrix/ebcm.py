@@ -63,7 +63,15 @@ def spheroid(x, eps):
 
 
 def angular(m, nmax, ct, st):
-    """Normalized d_{mn}, π_{mn} = m d/sinθ and τ_{mn} = dd/dθ for n = 0..nmax."""
+    """Normalized d_{mn}, π_{mn} = m d/sinθ and τ_{mn} = dd/dθ for n = 0..nmax; for m < 0 from
+    d_{−m,n} = (−1)^m d_{mn} (and τ likewise), π from its definition."""
+    if m < 0:
+        d, _, tau = angular(-m, nmax, ct, st)
+        sign = (-1) ** (-m)
+        d = [sign * v for v in d]
+        tau = [sign * v for v in tau]
+        pi_ = [m * v / st for v in d]
+        return d, pi_, tau
     d = [mp.mpf(0)] * (nmax + 1)
     if m <= nmax:
         am = mp.mpf(1)
@@ -130,7 +138,7 @@ def qmatrices(x, eps, s, m, nmax, ntheta, perturb=None):
     s = mp.mpc(s)
     shape = spheroid(x, eps)
     nodes, weights = gauss_legendre(ntheta)
-    n0 = max(m, 1)
+    n0 = max(abs(m), 1)
     kk = nmax - n0 + 1
     # J[(a, b, outgoing)] accumulates K×K.
     acc = {}

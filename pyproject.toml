@@ -80,6 +80,8 @@ select = ["E", "F", "W", "I", "UP", "B", "NPY", "RUF"]
 allowed-confusables = ["−", "–", "ρ", "×", "′", "α", "γ", "σ"]
 
 [tool.ruff.lint.per-file-ignores]
+# The precision study writes its mathematics in its own notation (ν, Greek letters in docstrings).
+"research/**" = ["RUF002", "RUF003"]
 # l is the degree of d^l_{mn}, the notation of the papers the generator follows.
 "reference/scatrs_reference/generators/mie_greek.py" = ["E741"]
 "reference/scatrs_reference/generators/wigner_d.py" = ["E741"]

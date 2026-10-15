@@ -25,6 +25,11 @@ relative index, azimuthal mode, truncation and Gauss–Legendre points in cos θ
 | `sources.py` | null-field equations tested with distributed sources (NFM-DS) |
 | `mixed.py` | which rows or columns of P and Q carry the f64 floor |
 | `refine.py` | mixed-precision iterative refinement |
+| `terms.py`, `check_terms.py` | Q's integrands as scalar terms, generated from the vector components (reproduce Q to 10⁻¹⁸) |
+| `laurent.py`, `laurent_q.py`, `laurent_rule2.py` | the Laurent series of the y_n products, and which groups of their terms integrate to zero |
+| `regular.py`, `cancel_reg.py` | the regularized integrals at 53 bits, and the cancellation left per element; `cancel-reg-x15-eps4.txt` |
+| `amplitude.py`, `check_amplitude.py` | fixed-orientation amplitudes from T (a sphere gives Bohren & Huffman's i·S₁, i·S₂), the brute-force orientation average |
+| `ranks.py` | random orientation by the rank decomposition of T, against the brute-force average |
 
 ## Findings (mode m = 1, s = 1.5 + 0.01i unless stated)
 
@@ -84,3 +89,18 @@ relative index, azimuthal mode, truncation and Gauss–Legendre points in cos θ
       | x = 50, ε = 2 | 5.9·10⁻⁸ → 4·10⁻¹⁷ | 4·10⁻²⁴ |
 
     - The O(N³) factorization stays in f64. Double-double is needed only for the integrals of the upper three quarters of the rows, and for the residuals.
+
+11. **Which terms integrate to zero, exactly** (`laurent_q.py`, `laurent_rule2.py`).
+    - In every element with n ≠ k, in every block, the terms of power ≤ 0 of the y_n products' Laurent series integrate to exactly zero, as a group. Checked on 2192 elements (oblate and prolate, ε from 1/4 to 5, m = 0–3), to 10⁻³⁵.
+    - Those terms are the electrostatic limit: the outgoing and regular harmonic multipoles, whose pairing is surface-independent and vanishes for n ≠ k, as on a sphere.
+    - The negative powers alone vanish only for |n − k| ≥ 3. The positive powers do not vanish: the group p ≤ |n − k| − 2 is non-zero in about 15% of elements, by 10⁻⁵ to 10⁻².
+    - An earlier per-J analysis (since removed) used hand-derived integrands with sign errors; `terms.py` replaces it, generated from the verified vector components.
+12. **Three exact forms per element, the cleanest kept** (`cancel_reg.py`).
+    - The forms: plain; minus the negative powers (|n − k| ≥ 3); minus the powers ≤ 0 (n ≠ k).
+    - Subtracting can create large terms where the y_n product is small (the constant term at large x), so the form with the smallest Σ|terms| is chosen per element.
+    - Worst cancellation, plain → best: 9.6·10⁷ → 2.6·10⁶ (x = 10, ε = 2), and **6·10¹⁶ → 1.7·10⁵ (x = 15, ε = 4)**, where plain f64 fails completely.
+    - What remains is the positive powers: smooth functions with small integrals against high-degree angular factors, a loss no exact identity removes.
+13. **Random orientation in O(N⁴)** (`ranks.py`).
+    - For an axisymmetric particle the rank-s components of T rotate as D^s_{q0}(R). So A_{pσ}(Θ; R) = Σ_{s,q} D^s_{q0}(R) Φ_{sq}(Θ), and ⟨A A'*⟩ = Σ Φ Φ'*/(2s + 1).
+    - It matches the brute-force orientation average to 10⁻¹⁵ in all six elements (x = 2, ε = 1.8, s = 1.5 + 0.02i).
+    - T^{ij}_{−m} = ±T^{ij}_m (+ for 11 and 22, − for 12 and 21) exactly, and the plane wave's helicity coefficients are 2 i^{n−1} √(π(2n + 1)).

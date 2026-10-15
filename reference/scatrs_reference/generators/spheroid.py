@@ -29,6 +29,7 @@ from __future__ import annotations
 
 from flint import acb, acb_mat, arb, ctx
 
+from scatrs_reference.generators.mie import _map
 from scatrs_reference.records import PORTABLE_BITS, nearest_double, record
 
 GENERATOR = "spheroid"
@@ -246,8 +247,12 @@ def _relative_ok(vals: list[arb], scale: arb) -> bool:
     return all(v.rad() < bound for v in vals)
 
 
+def _name(x: float, eps: float, m_re: float, m_im: float) -> str:
+    return f"x={x!r},eps={eps!r},m=({m_re!r},{m_im!r})"
+
+
 def case_records(x: float, eps: float, m_re: float, m_im: float, nf: int, thf: int) -> list[dict]:
-    name = f"x={x!r},eps={eps!r},m=({m_re!r},{m_im!r})"
+    name = _name(x, eps, m_re, m_im)
     base = {"x": x, "aspect_ratio": eps, "m_re": m_re, "m_im": m_im}
     prec = PRECISION_BITS
     while True:
@@ -293,8 +298,17 @@ def case_records(x: float, eps: float, m_re: float, m_im: float, nf: int, thf: i
         prec *= 2
 
 
+def _records(case: tuple) -> list[dict]:
+    return case_records(*case)
+
+
 def generate() -> tuple[int, list[dict]]:
-    records: list[dict] = []
-    for case in CASES:
-        records.extend(case_records(*case))
-    return PRECISION_BITS, records
+    """Every case in worker processes (see ``mie._map``), the costliest first so that they
+    overlap; the records keep the order of ``CASES``."""
+    # The cost grows with the fixed truncation's N·n_θ (the largest takes about 10 minutes).
+    order = sorted(range(len(CASES)), key=lambda i: -CASES[i][4] * CASES[i][5])
+    results = _map(_records, [CASES[i] for i in order])
+    per_case = {}
+    for i in order:
+        per_case[i] = [r for r in results if r["case"].startswith(_name(*CASES[i][:4]) + ",")]
+    return PRECISION_BITS, [r for i in range(len(CASES)) for r in per_case[i]]

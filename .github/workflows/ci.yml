@@ -202,7 +202,7 @@ jobs:
   reference:
     name: Reference generator
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -210,8 +210,9 @@ jobs:
       - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
       - name: Run the generator's tests
         run: uv run --locked --directory reference python -m pytest -q
-      # About 3 minutes (the Mie files in parallel over the runner's cores). The scheduled
-      # workflow repeats this weekly on Linux and macOS.
+      # About 20 minutes: the Mie, layered and spheroid files in parallel over the runner's
+      # cores, the spheroids' longest case taking about 11 of them. The scheduled workflow
+      # repeats this weekly on Linux and macOS.
       - name: Regenerate every reference file
         run: uv run --locked --directory reference python -m scatrs_reference generate
       - name: Fail on any difference from the committed data

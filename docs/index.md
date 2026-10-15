@@ -1,7 +1,7 @@
 # scatrs
 
-Fast, linearized, rigorously validated single-scattering calculations for spherical
-particles, written in Rust with a Python interface.
+Fast, linearized, rigorously validated single-scattering calculations for spherical and
+spheroidal particles, written in Rust with a Python interface.
 
 scatrs is built out of the scattering core of the
 [sasktran2](https://github.com/usask-arg/sasktran2) radiative transfer model, as a standalone
@@ -14,6 +14,9 @@ library for the optical properties of particles. Install it with `pip install sc
 - **Layered spheres** ({mod}`scatrs.layered`): a core and any number of concentric shells,
   coated spheres among them, with the same outputs and derivatives with respect to every
   layer.
+- **Randomly oriented spheroids** ({mod}`scatrs.tmatrix`): efficiencies, Greek coefficients
+  and the six-element phase matrix of oblate and prolate spheroids, by the T-matrix method,
+  converged to a tolerance with an error estimate, and their derivatives.
 - **Ensembles** of spheres and layered spheres ({class}`scatrs.Ensemble`,
   {class}`scatrs.Mixture`): averages over seven kinds of size distribution and over external
   mixtures, at many wavelengths in parallel, with an error estimate for every output, and refractive indices that vary with
@@ -70,6 +73,7 @@ theory/conventions
 theory/refractive-index
 theory/mie
 theory/layered
+theory/spheroids
 theory/ensembles
 theory/special-functions
 theory/scalar-types

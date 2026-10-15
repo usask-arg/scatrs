@@ -59,6 +59,22 @@
   19.3. The error bound for Gauss quadrature of analytic functions, used in
   {doc}`utilities/legendre-moments`. The theorem is stated for rules with $n + 1$ points.
 
+**Spheroids and the T-matrix method**
+
+- P. C. Waterman, "Symmetry, unitarity, and geometry in electromagnetic scattering",
+  *Physical Review D* 3 (1971), 825–839. The extended boundary condition method.
+- M. I. Mishchenko, "Light scattering by randomly oriented axially symmetric particles",
+  *Journal of the Optical Society of America A* 8 (1991), 871–882. The orientation averages
+  from the T-matrix, by its rank decomposition.
+- M. I. Mishchenko and L. D. Travis, "T-matrix computations of light scattering by large
+  spheroidal particles", *Optics Communications* 109 (1994), 16–21. The loss of precision of
+  the EBCM for spheroids, and the extended-precision code `tmatd` of the comparison.
+- M. I. Mishchenko, L. D. Travis and A. A. Lacis, *Scattering, Absorption, and Emission of
+  Light by Small Particles*, Cambridge University Press (2002), Chapter 5. The T-matrix of an
+  axisymmetric particle (§5.8), its conventions and the convergence procedure.
+- N. J. Higham, *Accuracy and Stability of Numerical Algorithms*, 2nd edition, SIAM (2002),
+  Chapters 12 and 15. Iterative refinement in mixed precision, and condition estimation.
+
 **Wigner d-functions and polarized radiative transfer**
 
 - M. I. Mishchenko, L. D. Travis and A. A. Lacis, *Scattering, Absorption, and Emission of

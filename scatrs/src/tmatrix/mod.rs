@@ -1093,6 +1093,63 @@ mod tests {
         assert!(!s.converged() && s.error_estimate() > 1e-12);
     }
 
+    /// The Rayleigh limit: at x ≪ 1, ⟨C_abs⟩ = k Im ᾱ and ⟨C_sca⟩ = k⁴/(6π) mean |αⱼ|², with
+    /// αⱼ = V(m² − 1)/(1 + Lⱼ(m² − 1)) from the depolarization factors Lⱼ (Bohren & Huffman
+    /// 1983, §5.3), for oblate and prolate spheroids, to O(x²).
+    #[test]
+    fn the_rayleigh_limit() {
+        let (x, m) = (0.01, Complex::new(1.5, 0.1));
+        for eps in [0.25, 0.5, 2.0, 4.0] {
+            let a = x * f64::cbrt(eps);
+            let c = a / eps;
+            // Prolate: L along the (long) symmetry axis c; oblate: L along the two equal axes a.
+            let (l_a, l_c) = if c > a {
+                let e = (1.0 - a * a / (c * c)).sqrt();
+                let l_c =
+                    (1.0 - e * e) / (e * e) * (-1.0 + ((1.0 + e) / (1.0 - e)).ln() / (2.0 * e));
+                ((1.0 - l_c) / 2.0, l_c)
+            } else {
+                let e2 = 1.0 - c * c / (a * a);
+                let g = ((1.0 - e2) / e2).sqrt();
+                let l_a = g / (2.0 * e2) * (core::f64::consts::FRAC_PI_2 - g.atan()) - g * g / 2.0;
+                (l_a, 1.0 - 2.0 * l_a)
+            };
+            let v = 4.0 / 3.0 * core::f64::consts::PI * x * x * x;
+            let em1 = m * m - 1.0;
+            let alpha = |l: f64| em1 * v / (1.0 + em1 * l);
+            let al = [alpha(l_a), alpha(l_a), alpha(l_c)];
+            let mean: Complex<f64> = al.iter().sum::<Complex<f64>>() / 3.0;
+            let area = core::f64::consts::PI * x * x;
+            let q_abs = mean.im / area;
+            let q_sca = al.iter().map(|a| a.norm_sqr()).sum::<f64>()
+                / 3.0
+                / (6.0 * core::f64::consts::PI)
+                / area;
+            let mut tm = TMatrix::new();
+            let s = tm
+                .compute(
+                    spheroid(eps),
+                    x,
+                    m,
+                    &TMatrixOptions::new()
+                        .with_rtol(1e-12)
+                        .with_allow_unvalidated(true),
+                )
+                .unwrap();
+            let q = s.efficiencies();
+            assert!(
+                (q.q_abs - q_abs).abs() < 1e-3 * q_abs,
+                "eps {eps}: {} vs {q_abs}",
+                q.q_abs
+            );
+            assert!(
+                (q.q_sca - q_sca).abs() < 1e-3 * q_sca,
+                "eps {eps}: {} vs {q_sca}",
+                q.q_sca
+            );
+        }
+    }
+
     #[test]
     fn invalid_inputs_and_domain() {
         let mut tm = TMatrix::new();

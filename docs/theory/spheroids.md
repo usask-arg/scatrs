@@ -103,10 +103,14 @@ scatrs estimates the error of every mode and refines the modes that need it:
    it was summed from. To first order an error $\delta Q$, $\delta P$ moves $T$ by
    $-(\delta P + T\,\delta Q)\,Q^{-1}$. scatrs applies this to random-signed perturbations at
    the bounds and random-signed vectors, with the factors already computed, which costs
-   $O(K^2)$ for a mode of size $K$.
-2. **Refine.** If the estimate exceeds a tenth of the tolerance, the rows of order $n \ge N/4$
-   are integrated again in double-double arithmetic (about 32 digits;
-   {doc}`scalar-types`). The mixed matrix is factorized in double precision, and the solution
+   $O(K^2)$ for a mode of size $K$. The estimate is split by row: the share of the error that
+   each row's rounding causes.
+2. **Refine.** If the estimate exceeds a tenth of the tolerance, the rows whose share is not
+   negligible (from the lowest such row up, usually the upper three quarters of the orders) are
+   integrated again in double-double arithmetic (about 32 digits; {doc}`scalar-types`). Only
+   what needs the extra digits is recomputed: of the three forms of each element, the one the
+   double-precision pass kept, and of the regular part $P$, only the rows where it is not
+   negligible next to the outgoing part. The mixed matrix is factorized in double precision, and the solution
    of $X Q = -P$ is corrected with residuals $-P - XQ$ computed in double-double (iterative
    refinement in mixed precision; Higham 2002, §12). Each sweep gains the factor
    $\mathrm{cond}(Q)\cdot 2^{-53}$, and two sweeps usually reach double-double accuracy.
@@ -122,17 +126,25 @@ within $3\cdot10^{-14}$ of the double-double one after two sweeps.
 The number of orders $N$ and of nodes $n_\theta$ are chosen as in Mishchenko's `tmatd`:
 
 1. $N$ starts at $\lceil x_{\max} + 4x_{\max}^{1/3}\rceil + 2$ and grows by an eighth
-   (at least 2), with $n_\theta = N(1 + |\ln\varepsilon|) + 8$, until the contributions of
-   mode 0 to $\langle C_{\mathrm{ext}}\rangle$ and $\langle C_{\mathrm{sca}}\rangle$ change by
-   less than `rtol` (mode 0 involves every order, and the other modes converge faster).
-2. $n_\theta$ then grows by a quarter until they settle again.
-3. Every mode is solved at the final $N$ and $n_\theta$.
+   (at least 2), with $n_\theta = 2N$, until the contributions of mode 0 to
+   $\langle C_{\mathrm{ext}}\rangle$ and $\langle C_{\mathrm{sca}}\rangle$ change by less than
+   `rtol` (mode 0 involves every order, and the other modes converge faster). Each step's
+   error estimate counts in the change.
+2. $n_\theta$ then grows by a tenth (at least 2) until they settle again.
+3. The modes are solved at the final $N$ and $n_\theta$, up to a cutoff: mode $m$ involves only
+   the orders $n \ge m$, so the modes above the highest order whose elements in mode 0 reach
+   `rtol`/10 of the largest element of $T$ are left out (after Mishchenko's NMAX1). The cutoff
+   compares amplitudes, not contributions to the cross sections: the phase matrix is bilinear
+   in $T$, so a mode whose share of $\langle C_{\mathrm{sca}}\rangle$ is $\delta$ moves it by
+   about $\sqrt\delta$. The size of the modes left out is estimated from the decay of the last
+   two modes computed and added to the error estimate; if it exceeds `rtol`/10, every mode is
+   solved.
 4. If Greek coefficients up to an order must settle, one more step in $N$ and $n_\theta$ with
    every mode must leave them, and the cross sections, within `rtol`.
 
 $N$ and $n_\theta$ have caps; reaching one raises `NotConverged` unless the unconverged result
-is asked for. The result's error estimate is the last change of the loop, or the solve's
-estimate if larger.
+is asked for. The result's error estimate is the last change of the loop (with the modes left
+out), or the solve's estimate if larger.
 
 ## Random orientation
 

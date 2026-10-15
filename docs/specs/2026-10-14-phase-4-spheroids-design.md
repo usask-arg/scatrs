@@ -335,6 +335,14 @@ impl<T: Real> TMatrix<T> {
   - Double-double integrals cost about 25 times f64 per element. A mode refined with rows n ≥ N/4 in double-double costs about 15–20 times its f64 solve, against the target of 4 times.
   - Mitigations made: the series tail collapses into suffix sums; norms are replaced by |re| + |im| in the bookkeeping; the s-scaled column fields are hoisted; the angular factors are sparse; refinement covers only the modes whose estimate needs it.
   - Measured at `rtol` = 10⁻⁸: x = 15, ε = 2 takes 5 s. Extreme aspect ratios at the edge of the domain (ε = 1/5, x = 12) take minutes.
+- **Speed against `tmatd`** (user, 2026-10-15). After the first comparison, scatrs was slower than `tmatd` at x = 10 for 4 of 15 spheroids. Measuring the work explained it, not the arithmetic: at equal N and nodes a refined solve cost about what `tmatd`'s quad solve does. Six changes followed:
+  - The error estimate is split by row. Refinement integrates in double-double only from the lowest row whose share is not negligible.
+  - The mode-0 steps of the convergence loop refine only above rtol/2, and both steps' estimates count in the change.
+  - The quadrature runs in parallel in fixed blocks of 8 nodes, added in order, so results are bitwise independent of the thread count.
+  - n_θ starts at 2N (it was N(1 + |ln ε|) + 8) and grows by a tenth (it was a quarter).
+  - Modes above an NMAX1-style cutoff are not computed. The skipped tail is estimated from the decay of the last two modes and added to the error estimate; all modes are solved if it exceeds rtol/10. The cutoff compares amplitudes (largest |T| per order in mode 0, per mode for the tail), not shares of the cross sections as `tmatd` does. The accuracy map caught a first version on cross-section shares: the phase matrix is bilinear in T, so it errs by about √(share), and the Greek coefficients at ε = 1.25, x = 1 were 80 times their tolerance. `the_mode_cutoff_keeps_the_phase_matrix` now guards against it.
+  - The double-double pass computes and accumulates only the form each element kept in the f64 pass, and takes P from the f64 pass where it is negligible.
+  - Result on one thread: scatrs is faster than `tmatd` for every spheroid `tmatd` computes at x ≤ 10.
 - **Python.**
   - `scatrs.mie.PhaseBuffers` is not `non_exhaustive`, so it was not extended. `scatrs::tmatrix::PhaseBuffers` and `SpheroidPhaseMatrix` have six elements instead.
   - `scatrs.tmatrix.compute` returns a `TMatrix` with the mode blocks, the convergence information and `random_orientation`.

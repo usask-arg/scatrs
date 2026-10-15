@@ -186,69 +186,51 @@ fn next_theta(nth: usize) -> usize {
     nth + (nth / 10).max(2)
 }
 
-/// The highest mode to compute, from mode 0 of `solved` (Mishchenko's NMAX1): the lowest order
-/// n ≥ N/2 above which the orders' diagonal contributions to ⟨C_ext⟩ and ⟨C_sca⟩ in mode 0 add up
-/// to at most `tol` of the total. Mode m involves only the orders n ≥ m, so the modes above it
-/// contribute less still.
+/// The highest mode to compute, from mode 0 of `solved` (after Mishchenko's NMAX1): the highest
+/// order n ≥ N/2 whose elements in mode 0 reach `tol` of the largest. Mode m involves only the
+/// orders n ≥ m, whose amplitudes are smaller still. Amplitudes, not cross sections, decide: the
+/// phase matrix is bilinear in T, so a mode whose share of ⟨C_sca⟩ is δ moves it by about √δ.
 fn mode_cutoff(solved: &Solved, tol: f64) -> usize {
     let n = solved.t.n;
     let (ts, index) = &solved.t.modes[0];
-    let mut ext = vec![0.0f64; n + 1];
-    let mut sca = vec![0.0f64; n + 1];
+    let mut amp = vec![0.0f64; n + 1];
     for (t, idx) in ts.iter().zip(index) {
         let kc = idx.len();
         if t.is_empty() {
             continue;
         }
-        for (i, &(_, nn)) in idx.iter().enumerate() {
-            ext[nn] += t[i * kc + i].re.abs();
-            sca[nn] += t[i * kc..(i + 1) * kc]
-                .iter()
-                .map(|v| v.norm_sqr())
-                .sum::<f64>();
+        for (i, &(_, a)) in idx.iter().enumerate() {
+            for (j, &(_, b)) in idx.iter().enumerate() {
+                let v = t[i * kc + j].norm();
+                amp[a] = amp[a].max(v);
+                amp[b] = amp[b].max(v);
+            }
         }
     }
-    let (te, tsc): (f64, f64) = (ext.iter().sum(), sca.iter().sum());
-    let (mut tail_e, mut tail_s) = (0.0, 0.0);
-    let mut cut = n;
-    for nn in (1..=n).rev() {
-        tail_e += ext[nn];
-        tail_s += sca[nn];
-        if tail_e > tol * te || tail_s > tol * tsc || nn < n.div_ceil(2) {
-            break;
-        }
-        cut = nn - 1;
-    }
-    cut.max(1)
+    let big = amp.iter().fold(0.0f64, |a, &b| a.max(b));
+    let cut = (1..=n).rev().find(|&nn| amp[nn] > tol * big).unwrap_or(1);
+    cut.max(n.div_ceil(2)).min(n)
 }
 
-/// The contribution of mode m of `solved` to ⟨C_ext⟩ and ⟨C_sca⟩, relative to their totals
-/// (the larger of the two).
+/// The largest element of mode m of `solved`, relative to the largest element of T.
 fn mode_share(solved: &Solved, m: usize) -> f64 {
-    let w = if m == 0 { 1.0 } else { 2.0 };
-    let (mut e, mut sc) = (0.0f64, 0.0f64);
-    let (ts, index) = &solved.t.modes[m];
-    for (t, idx) in ts.iter().zip(index) {
-        let kc = idx.len();
-        if t.is_empty() {
-            continue;
-        }
-        for i in 0..kc {
-            e += w * t[i * kc + i].re.abs();
-            sc += w * t[i * kc..(i + 1) * kc]
-                .iter()
-                .map(|v| v.norm_sqr())
-                .sum::<f64>();
-        }
+    let largest =
+        |ts: &[Vec<Complex<f64>>; 2]| ts.iter().flatten().fold(0.0f64, |a, v| a.max(v.norm()));
+    let big = solved
+        .t
+        .modes
+        .iter()
+        .fold(0.0f64, |a, (ts, _)| a.max(largest(ts)));
+    if big > 0.0 {
+        largest(&solved.t.modes[m].0) / big
+    } else {
+        0.0
     }
-    let (te, tsc) = solved.t.cross_sections();
-    let two_pi = 2.0 * core::f64::consts::PI;
-    (two_pi * e / te.abs()).max(two_pi * sc / tsc.abs())
 }
 
-/// An estimate of the relative contribution of the modes above the highest computed one: the
-/// tail of a geometric decay at the ratio of the last two modes' shares (infinite if they do not
-/// decay by at least half).
+/// An estimate of the largest element of the modes above the highest computed one, relative to
+/// the largest of T: the tail of a geometric decay at the ratio of the last two modes' (infinite
+/// if they do not decay by at least half).
 fn skipped_share(solved: &Solved) -> f64 {
     let m = solved.t.modes.len() - 1;
     if m == solved.t.n {
@@ -310,8 +292,8 @@ fn greek_change(a: &Solved, b: &Solved, order: usize) -> Result<f64> {
     Ok(worst / big)
 }
 
-/// Every mode m ≤ `m_max` at (N, n_θ), the mode list truncated there, and the estimated share of
-/// the modes left out; all modes if that share exceeds `rtol`/10.
+/// Every mode m ≤ `m_max` at (N, n_θ), the mode list truncated there, and the estimated relative
+/// size of the modes left out; all modes if it exceeds `rtol`/10.
 fn solve_modes(
     solve_at: &impl Fn(usize, usize, usize) -> Result<Solved>,
     n: usize,

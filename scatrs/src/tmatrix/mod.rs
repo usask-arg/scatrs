@@ -1185,6 +1185,58 @@ mod tests {
         }
     }
 
+    /// The mode cutoff leaves the phase-matrix outputs within the tolerance: the default result
+    /// against every mode at the same N and n_θ (fixed N computes every mode), at sizes where few
+    /// modes matter. A cutoff on the cross sections alone missed modes whose amplitude still moves
+    /// the phase matrix by √(their share).
+    #[test]
+    fn the_mode_cutoff_keeps_the_phase_matrix() {
+        let rtol = 1e-8;
+        for &(eps, x, m) in &[
+            (1.25, 1.0, Complex::new(1.33, 0.0)),
+            (0.5, 2.0, Complex::new(1.53, 0.008)),
+            (3.0, 4.0, Complex::new(1.5, 0.5)),
+        ] {
+            let mut tm = TMatrix::new();
+            let s = tm
+                .compute(spheroid(eps), x, m, &TMatrixOptions::new().with_rtol(rtol))
+                .unwrap();
+            let (n, nth, modes) = (s.n_terms(), s.n_theta(), s.n_modes());
+            let g = s.greek(None, Normalization::Normalized).unwrap();
+            let back = s.efficiencies().q_back;
+            let mut ta = TMatrix::new();
+            let all = ta
+                .compute(
+                    spheroid(eps),
+                    x,
+                    m,
+                    &TMatrixOptions::new().with_n_terms(n).with_n_theta(nth),
+                )
+                .unwrap();
+            assert_eq!(all.n_modes(), n + 1);
+            let ga = all.greek(None, Normalization::Normalized).unwrap();
+            let big = ga.alpha1.iter().fold(0.0f64, |a, v| a.max(v.abs()));
+            for (u, v) in [
+                (&g.alpha1, &ga.alpha1),
+                (&g.alpha2, &ga.alpha2),
+                (&g.beta1, &ga.beta1),
+                (&g.beta2, &ga.beta2),
+            ] {
+                let err = u
+                    .iter()
+                    .zip(v)
+                    .fold(0.0f64, |a, (p, q)| a.max((p - q).abs()));
+                assert!(
+                    err <= rtol * big,
+                    "eps {eps} x {x}: Greek {err:e}, {modes} of {} modes",
+                    n + 1
+                );
+            }
+            let qa = all.efficiencies();
+            assert!((back - qa.q_back).abs() <= rtol * qa.q_back.max(qa.q_sca));
+        }
+    }
+
     #[test]
     fn invalid_inputs_and_domain() {
         let mut tm = TMatrix::new();

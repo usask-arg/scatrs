@@ -140,7 +140,7 @@ holds $Q_{\mathrm{ext}}$ and $Q_{\mathrm{sca}}$ at a given truncation and a samp
 three modes (the diagonals of $T^{11}$ and $T^{22}$ and the first column of each block),
 certified for that truncation; a `,converged` record holds $Q_{\mathrm{ext}}$,
 $Q_{\mathrm{sca}}$ and $Q_{\mathrm{abs}}$ with $N$ and the quadrature grown until they settle
-to $10^{-20}$, high-precision.
+to $10^{-17}$, high-precision.
 
 **`layered.jsonl`** holds two records per layered sphere, for 370 particles, computed without
 scatrs's algorithm: the generator evaluates $\psi_n$ and $\xi_n$ of every layer's arguments

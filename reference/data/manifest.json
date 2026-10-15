@@ -102,7 +102,7 @@
       "precision_bits": 480,
       "python_flint": "0.9.0",
       "records": 20,
-      "sha256": "a886e0d1aa2ed59fa1bf358e8b12e106139d66681aa2ddb0668d2f4e9e27b393"
+      "sha256": "eda7142afb469ad70f2725ca71b06a63d897781ba796cf6f6491d50608947c94"
     },
     "wigner_d.jsonl": {
       "flint": "3.6.0",

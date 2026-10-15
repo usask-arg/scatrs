@@ -253,7 +253,7 @@ impl<T: Real> TMatrix<T> {
 
 ## 7. References (`reference/scatrs_reference/generators/spheroid.py`)
 
-- **Independence.** The generator uses the study's EBCM built from the definition: the surface integrals of the vector spherical wave functions, with none of section 2.3's removals and no refinement. It runs at 50 or more digits, with N and n_θ grown until every stored output settles to 10⁻²⁰. It shares no code or algorithm with the kernel.
+- **Independence.** The generator uses the study's EBCM built from the definition: the surface integrals of the vector spherical wave functions, with none of section 2.3's removals and no refinement. It runs at 50 or more digits, with N and n_θ grown until every stored output settles to 10⁻¹⁷ (10⁻²⁰ at first; see section 13). It shares no code or algorithm with the kernel.
 - **Labels.** "High-precision", not certified, since the truncation in N is not rigorously bounded (main spec §8.4).
 - **Cases:**
   - x up to about 30 (mpmath cost);
@@ -348,7 +348,7 @@ impl<T: Real> TMatrix<T> {
   - `scatrs.tmatrix.compute` returns a `TMatrix` with the mode blocks, the convergence information and `random_orientation`.
 - **References.**
   - The generator ports the study's from-definition EBCM to python-flint (Arb), not mpmath: it is 30–100× faster, and the package's single pinned dependency stays.
-  - It stores `fixed` records (Q_ext, Q_sca and a sample of Tᵐ at a given N and n_θ, certified for that truncation), which test every precision path, and `converged` records (Q_ext, Q_sca, Q_abs settled to 10⁻²⁰, high-precision).
+  - It stores `fixed` records (Q_ext, Q_sca and a sample of Tᵐ at a given N and n_θ, certified for that truncation), which test every precision path, and `converged` records (Q_ext, Q_sca, Q_abs settled to 10⁻¹⁷, high-precision). The settle tolerance was 10⁻²⁰ at first; that made one case take about 27 minutes on the CI runner, and 10⁻¹⁷ gives the same Q_ext to 22 digits at 60% of the cost.
   - Greek coefficients are not in the references. They are covered by:
     - the sphere limit;
     - the brute-force orientation average (10⁻¹⁵);

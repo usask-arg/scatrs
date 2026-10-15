@@ -13,7 +13,7 @@ orientation averages are Mishchenko's (1991):
 Two kinds of records per case (x, ε, m):
 
 * ``converged``: Q_ext, Q_sca and Q_abs = Q_ext − Q_sca with N and the number of nodes grown
-  until both change by less than 10⁻²⁰ relative. Labelled "high-precision": the truncation in
+  until both change by less than 10⁻¹⁷ relative. Labelled "high-precision": the truncation in
   N is not rigorously bounded (the ball radii bound the rounding only).
 * ``fixed``: at a given N and 2n_θ nodes (the kernel's n_θ in a half range), Q_ext and Q_sca and
   a sample of Tᵐ for modes 0, 1 and N/2 (the diagonals of T¹¹ and T²², and the first column of
@@ -36,7 +36,7 @@ GENERATOR = "spheroid"
 PRECISION_BITS = 480
 REL_BITS = 120
 MAX_PRECISION_BITS = 1920
-SETTLE = arb("1e-20")
+SETTLE = arb("1e-17")
 
 #: (x, ε, Re m, Im m, fixed N, fixed n_θ in a half range).
 CASES = (

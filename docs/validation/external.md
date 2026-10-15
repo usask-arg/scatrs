@@ -303,6 +303,18 @@ core radius half the outer) 4.3 to 8.4 times faster:
   electrostatic polarizabilities $\alpha_j = V(m^2 - 1)/(1 + L_j(m^2 - 1))$ of their
   depolarization factors $L_j$ (Bohren & Huffman 1983, §5.3) to $10^{-3}$, the size of the
   first correction.
+- **The long-wavelength expansion.** Majić et al. (2019) derived the T-matrix elements of a
+  spheroid in closed form to $O(X^6)$, with $X = kc$: the 15 elements of the dipoles,
+  quadrupoles and octupoles of modes 0 to 2 that are not zero to that order, including the
+  couplings between electric and magnetic multipoles. Their errors are $O(X^7)$, so as the
+  size halves, the relative error of $|T|^2$ must fall 16-fold for the two dipolar elements and
+  4-fold for the others, and that of the averaged cross sections 16-fold. Between $	ilde X$ =
+  0.08 and 0.04 (equal-volume size parameter), for prolate ($c/a$ = 3) and oblate ($c/a$ = 1/2
+  and 1/4) spheroids, absorbing or not, scatrs's elements and cross sections approach them at
+  exactly these rates (measured exponents 4.00 and 2.00, within 0.03;
+  `scatrs/tests/tmatrix_long_wavelength.rs`). This checks every block of the low-order
+  T-matrix against an independent derivation, beyond the leading term the Rayleigh limit
+  checks.
 
 ### Comparison with Mishchenko's T-matrix code
 
@@ -354,6 +366,28 @@ absorbing index, took 154 s, a spheroid tmatd cannot compute).
 
 We thank M. I. Mishchenko, L. D. Travis and the NASA Goddard Institute for Space Studies for
 making the code publicly available; its references are listed in {doc}`/references`.
+
+### SMARTIES
+
+SMARTIES (Somerville, Auguié & Le Ru 2016) computes spheroids in double precision with an
+algorithm that avoids the cancellations of the classical integrals. Its code is not run here.
+Its paper does not tabulate cross sections, but it reports the largest maximum size parameter
+$x_{\max} = k\max(a, c)$ at which the orientation-averaged extinction still converged, for
+each index and aspect ratio. Its authors attribute the remaining limit to the matrix inversion
+in double precision, which extended precision would lift; scatrs's mixed-precision refinement
+does that. Where the two overlap:
+
+| relative index | SMARTIES, largest $x_{\max}$ (aspect ratio 2, 4) | scatrs, validated $x_{\max} = 60/\lvert m\rvert$ |
+|---|---|---|
+| 1.311 | 50 and 45 (oblate), 50 and 45 (prolate) | 46 |
+| 1.5 | 35 and 30 | 40 |
+| $1.5 + 0.02i$ | 40 and 30 | 40 |
+| 2.5 | 16 and 12 (oblate), 18 and 12 (prolate) | 24 |
+
+scatrs's validated domain ends where its cost, not its accuracy, grows: on its accuracy map the
+results stay within their tolerance up to $|m|\,x_{\max} = 70$ ({doc}`accuracy`). SMARTIES reaches
+aspect ratios up to 100 and metallic indices, which are outside scatrs's validated domain. The
+analytic expansion of its authors (above) checks the low-order T-matrix.
 
 ## Size distributions
 

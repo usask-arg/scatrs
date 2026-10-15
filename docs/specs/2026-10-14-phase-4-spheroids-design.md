@@ -352,4 +352,5 @@ impl<T: Real> TMatrix<T> {
   - β₁ and β₂ have opposite signs: tmatd expands in P⁰²ₗ = −d⁰²ₗ.
   - tmatd stops at its NPN1 = 140 limit for 5 extreme spheroids that scatrs computes.
   - Speed: scatrs is 4–7× faster up to x = 6, but tmatd is faster at x = 10, by up to 3× (the refined modes). The target of section 10 is met up to x = 6 only.
+  - SMARTIES (user's choice, 2026-10-15): not run (MATLAB; no Octave). Its papers tabulate no cross sections, so the comparison uses what they publish: the reach of the code (largest convergent x_max per index and aspect ratio, against our validated 60/|m|), and the closed-form long-wavelength T-matrix of Majić et al. (PRA 2019), which `tests/tmatrix_long_wavelength.rs` checks by rate of approach (4.00 for dipoles and the averaged cross sections, 2.00 for the 13 other elements). The theory chapter cites their prior work on the cancellations (2012, 2013, 2015).
   - pytmatrix 0.3.3 does not build: it needs `numpy.distutils`, and its sdist lacks the generated f2py source. It also wraps Mishchenko's own code, so it is left out.

@@ -64,9 +64,11 @@ orders of magnitude smaller. In double precision this cancellation destroys the 
 $x = 15$ and $\varepsilon = 4$ the classical integrals lose up to sixteen digits, and the
 T-matrix is wrong in its leading digit. This is the well-known loss of precision of the EBCM
 for elongated or flattened particles, usually addressed by computing in extended precision
-(Mishchenko & Travis 1994).
+(Mishchenko & Travis 1994). Somerville, Auguié & Le Ru (2012) traced it, for spheroids, to
+cancellations in these integrals, and gave an algorithm that avoids them (2013), implemented in
+their code SMARTIES (2016).
 
-scatrs removes the cancellation instead. Expand the radial factors of each integrand, the
+scatrs removes the cancellation in its own way. Expand the radial factors of each integrand, the
 products of $y_n$ (or its derivative) with $j_k(m k r)$, in powers of $kr$. For a spheroid
 $1/r^2 = \alpha + \beta\cos^2\theta$, so every term of non-positive power is a polynomial in
 $\cos\theta$ times an angular function. The terms of power at most 0 are the electrostatic

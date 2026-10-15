@@ -72,6 +72,25 @@
 - M. I. Mishchenko, L. D. Travis and A. A. Lacis, *Scattering, Absorption, and Emission of
   Light by Small Particles*, Cambridge University Press (2002), Chapter 5. The T-matrix of an
   axisymmetric particle (§5.8), its conventions and the convergence procedure.
+- W. R. C. Somerville, B. Auguié and E. C. Le Ru, "Severe loss of precision in calculations
+  of T-matrix integrals", *Journal of Quantitative Spectroscopy and Radiative Transfer* 113
+  (2012), 524–535; "A new numerically stable implementation of the T-matrix method for
+  electromagnetic scattering by spheroidal particles", 123 (2013), 153–168; and "Accurate and
+  convergent T-matrix calculations of light scattering by spheroids", 160 (2015), 29–35. The
+  cancellations in the integrals for spheroids, an algorithm that avoids them, and its
+  convergence.
+- W. R. C. Somerville, B. Auguié and E. C. Le Ru, "SMARTIES: User-friendly codes for fast and
+  accurate calculations of light scattering by spheroids", *Journal of Quantitative
+  Spectroscopy and Radiative Transfer* 174 (2016), 39–55. The code, and the range it reaches,
+  compared in {doc}`validation/external`.
+- M. R. A. Majić, L. Pratley, D. Schebarchov, W. R. C. Somerville, B. Auguié and E. C. Le Ru,
+  "Approximate T matrix and optical properties of spheroidal particles to third order with
+  respect to size parameter", *Physical Review A* 99 (2019), 013853. The long-wavelength
+  expansion of the T-matrix that the tests check.
+- M. R. A. Majić, F. Gray, B. Auguié and E. C. Le Ru, "Electrostatic limit of the T-matrix for
+  electromagnetic scattering: Exact results for spheroidal particles", *Journal of Quantitative
+  Spectroscopy and Radiative Transfer* 200 (2017), 50–58. The electrostatic limit of the
+  EBCM matrices.
 - N. J. Higham, *Accuracy and Stability of Numerical Algorithms*, 2nd edition, SIAM (2002),
   Chapters 12 and 15. Iterative refinement in mixed precision, and condition estimation.
 

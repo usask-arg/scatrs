@@ -1,7 +1,7 @@
 # scatrs
 
-Fast, linearized, rigorously validated single-scattering calculations for spherical
-particles, written in Rust with a Python interface. The name reads as both "scatterers" and
+Fast, linearized, rigorously validated single-scattering calculations for spherical and
+spheroidal particles, written in Rust with a Python interface. The name reads as both "scatterers" and
 "scat-rs".
 
 scatrs is built out of the scattering core of the
@@ -12,11 +12,14 @@ library for the optical properties of particles.
   amplitudes, phase matrix and Greek coefficients to every order.
 - **Layered spheres:** a core and any number of concentric shells (coated spheres among them),
   with the same outputs and derivatives with respect to every layer.
+- **Randomly oriented spheroids:** efficiencies, Greek coefficients and the six-element phase
+  matrix of oblate and prolate spheroids, by the T-matrix method, converged to a tolerance
+  with an error estimate, and their derivatives.
 - **Ensembles of spheres and layered spheres:** averages over seven kinds of size
   distribution, external mixtures and batches of distributions, at many wavelengths in
   parallel, with an error estimate for every output.
 - **Derivatives** of every output, in closed form: with respect to the size parameter and
-  every layer's refractive index, and for ensembles the distribution parameters, a layered
+  every layer's refractive index, a spheroid's aspect ratio, and for ensembles the distribution parameters, a layered
   sphere's radius fractions and the mixture weights.
 - **Validated accuracy:** every output has a declared accuracy, checked against independent
   arbitrary-precision reference values across the validated domain, and against published
@@ -37,11 +40,15 @@ cargo add scatrs
 ```python
 import numpy as np
 import scatrs
-from scatrs import mie
+from scatrs import mie, tmatrix
 
 # One water droplet: efficiencies, asymmetry parameter and the phase matrix.
 q = mie.efficiencies(10.0, 1.33 + 1e-8j)  # size parameter, refractive index n + ik
 f = mie.phase_matrix(10.0, 1.33 + 1e-8j, np.cos(np.radians([0, 90, 180])))
+
+# A randomly oriented dust spheroid twice as wide as it is tall (aspect ratio a/c = 2).
+s = tmatrix.efficiencies(5.0, 1.53 + 0.008j, aspect_ratio=2.0)
+print(s.q_ext, s.g, s.error)  # the error estimate of each converged T-matrix
 
 # A lognormal aerosol at three wavelengths (µm), with Greek coefficients to order 32.
 sulfate = scatrs.Ensemble(

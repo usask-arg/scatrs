@@ -44,6 +44,21 @@
   investigative review", *Aerosol Science and Technology* 40 (2006), 27–67. The refractive
   index of black carbon in {doc}`examples/coated`.
 
+**Size distributions and refractive indices**
+
+- J. E. Hansen and L. D. Travis, "Light scattering in planetary atmospheres", *Space Science
+  Reviews* 16 (1974), 527–610. The effective radius and effective variance, and the gamma
+  distribution of `Gamma`.
+- D. Deirmendjian, *Electromagnetic Scattering on Spherical Polydispersions*, Elsevier (1969).
+  The modified gamma distribution of `ModifiedGamma`.
+- I. H. Malitson, "Interspecimen comparison of the refractive index of fused silica",
+  *Journal of the Optical Society of America* 55 (1965), 1205–1209. The Sellmeier
+  coefficients of fused silica in {doc}`theory/refractive-index` and
+  {doc}`examples/distributions`.
+- C. F. Bohren and D. R. Huffman, *Absorption and Scattering of Light by Small Particles*,
+  Wiley (1983), Chapter 9. The Lorentz oscillator model of an absorption band in
+  {doc}`examples/distributions`.
+
 **Quadrature**
 
 - F. G. Tricomi, "Sugli zeri dei polinomi sferici ed ultrasferici", *Annali di Matematica Pura
@@ -57,7 +72,52 @@
   of the `f64` rules above 100 points.
 - L. N. Trefethen, *Approximation Theory and Approximation Practice*, SIAM (2013), Theorem
   19.3. The error bound for Gauss quadrature of analytic functions, used in
-  {doc}`utilities/legendre-moments`. The theorem is stated for rules with $n + 1$ points.
+  {doc}`utilities/legendre-moments` and for the nodes of spheroids ({doc}`theory/spheroids`).
+  The theorem is stated for rules with $n + 1$ points.
+
+**Spheroids and the T-matrix method**
+
+- P. C. Waterman, "Symmetry, unitarity, and geometry in electromagnetic scattering",
+  *Physical Review D* 3 (1971), 825–839. The extended boundary condition method.
+- M. I. Mishchenko, "Light scattering by randomly oriented axially symmetric particles",
+  *Journal of the Optical Society of America A* 8 (1991), 871–882. The orientation averages
+  from the T-matrix, by its rank decomposition.
+- M. I. Mishchenko and L. D. Travis, "T-matrix computations of light scattering by large
+  spheroidal particles", *Optics Communications* 109 (1994), 16–21. The loss of precision of
+  the EBCM for spheroids, and the extended-precision code `tmatd` of the comparison.
+- M. I. Mishchenko, L. D. Travis and A. A. Lacis, *Scattering, Absorption, and Emission of
+  Light by Small Particles*, Cambridge University Press (2002), Chapter 5. The T-matrix of an
+  axisymmetric particle (§5.8), its conventions and the convergence procedure.
+- W. R. C. Somerville, B. Auguié and E. C. Le Ru, "Severe loss of precision in calculations
+  of T-matrix integrals", *Journal of Quantitative Spectroscopy and Radiative Transfer* 113
+  (2012), 524–535; "A new numerically stable implementation of the T-matrix method for
+  electromagnetic scattering by spheroidal particles", 123 (2013), 153–168; and "Accurate and
+  convergent T-matrix calculations of light scattering by spheroids", 160 (2015), 29–35. The
+  cancellations in the integrals for spheroids, an algorithm that avoids them (with the
+  arbitrary-precision values {doc}`validation/external` compares), and its convergence.
+- F. Kuik, J. F. de Haan and J. W. Hovenier, "Benchmark results for single scattering by
+  spheroids", *Journal of Quantitative Spectroscopy and Radiative Transfer* 47 (1992),
+  477–489. The benchmark spheroid whose arbitrary-precision values {doc}`validation/external`
+  compares.
+- W. R. C. Somerville, B. Auguié and E. C. Le Ru, "SMARTIES: User-friendly codes for fast and
+  accurate calculations of light scattering by spheroids", *Journal of Quantitative
+  Spectroscopy and Radiative Transfer* 174 (2016), 39–55. The code, and the range it reaches,
+  compared in {doc}`validation/external`.
+- M. R. A. Majić, L. Pratley, D. Schebarchov, W. R. C. Somerville, B. Auguié and E. C. Le Ru,
+  "Approximate T matrix and optical properties of spheroidal particles to third order with
+  respect to size parameter", *Physical Review A* 99 (2019), 013853. The long-wavelength
+  expansion of the T-matrix that the tests check.
+- M. R. A. Majić, F. Gray, B. Auguié and E. C. Le Ru, "Electrostatic limit of the T-matrix for
+  electromagnetic scattering: Exact results for spheroidal particles", *Journal of Quantitative
+  Spectroscopy and Radiative Transfer* 200 (2017), 50–58. The electrostatic limit of the
+  EBCM matrices.
+- O. Dubovik, A. Sinyuk, T. Lapyonok, B. N. Holben, M. Mishchenko, P. Yang, T. F. Eck,
+  H. Volten, O. Muñoz, B. Veihelmann, W. J. van der Zande, J.-F. Leon, M. Sorokin and
+  I. Slutsker, "Application of spheroid models to account for aerosol particle nonsphericity
+  in remote sensing of desert dust", *Journal of Geophysical Research* 111 (2006), D11208.
+  Spheroids as the model of mineral dust in {doc}`examples/spheroids`.
+- N. J. Higham, *Accuracy and Stability of Numerical Algorithms*, 2nd edition, SIAM (2002),
+  Chapters 12 and 15. Iterative refinement in mixed precision, and condition estimation.
 
 **Wigner d-functions and polarized radiative transfer**
 

@@ -1,0 +1,13 @@
+x=10 eps=5 s=1.5+0.01i m=1 N=30 nθ=150: Skeel 3.1e+6 f64 floor 5.0e-13 (26s)
+x=20 eps=3 s=1.5+0.01i m=1 N=40 nθ=160: Skeel 7.9e+6 f64 floor 1.4e-11 (53s)
+x=15 eps=0.333333 s=1.5+0.01i m=1 N=42 nθ=160: Skeel 1.9e+7 f64 floor 4.1e-11 (60s)
+x=15 eps=2 s=3+0.1i m=1 N=36 nθ=120: Skeel 1.3e+6 f64 floor 1.4e-12 (35s)
+x=15 eps=5 s=1.5+0.01i m=1 N=40 nθ=200: Skeel 4.5e+8 f64 floor 3.7e-10 (62s)
+x=30 eps=2 s=1.33+0i m=1 N=50 nθ=160: Skeel 3.3e+5 f64 floor 1.2e-12 (81s)
+x=30 eps=2 s=1.5+0.01i m=0 N=50 nθ=160: Skeel 5.5e+6 f64 floor 1.0e-11 (59s)
+x=30 eps=3 s=1.5+0.01i m=1 N=55 nθ=200: Skeel 4.1e+9 f64 floor 9.3e-9 (124s)
+x=30 eps=0.5 s=1.5+0.01i m=1 N=58 nθ=180: Skeel 6.1e+7 f64 floor 2.2e-10 (133s)
+x=40 eps=2 s=1.5+0.01i m=1 N=62 nθ=190: Skeel 2.9e+8 f64 floor 1.1e-9 (156s)
+x=25 eps=0.333333 s=1.5+0.01i m=1 N=64 nθ=220: Skeel 5.3e+11 f64 floor 1.2e-6 (177s)
+x=50 eps=2 s=1.5+0.01i m=1 N=75 nθ=230: Skeel 1.9e+10 f64 floor 5.9e-8 (262s)
+done

@@ -24,6 +24,7 @@
 //! # Ok::<(), scatrs::Error>(())
 //! ```
 
+pub(crate) mod clebsch;
 mod gauss_legendre;
 mod gauss_legendre_asymptotic;
 mod wigner;

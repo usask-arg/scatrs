@@ -256,6 +256,68 @@ with respect to the shell's index would exceed its constant by 1.7 times at $x_L
 rounding errors of the recurrences at the shell's two surfaces are alike from one order to the
 next, so they add up in the forward sum, and the derivatives' domain ends at 1000.
 
+## Spheroids
+
+<!-- synced with scatrs/src/tmatrix/domain.rs rustdoc -->
+
+The outputs of {mod}`scatrs.tmatrix` are converged to a tolerance `rtol` and come with an
+error estimate $\hat\varepsilon$ ({doc}`/theory/spheroids`). Inside the validated domain
+(aspect ratios from 1/5 to 5, equal-volume $x \ge 0.3$, $|m|\,x_{\max} \le 60$ with $x_{\max}$
+the size parameter of the longest semi-axis, $1.3 \le \mathrm{Re}\,m \le 3$,
+$\mathrm{Im}\,m \le 0.5$), every output is within $C\cdot\max(\mathtt{rtol}, \hat\varepsilon)$
+of the exact value, in the measures of the sphere's outputs ($Q_{\mathrm{abs}}$ relative to
+$Q_{\mathrm{ext}}$, the Greek coefficients relative to the largest $|\alpha_1|$, the phase matrix
+relative to $\max(F_{11}, 1)$, normalized). Three tests enforce it:
+
+- `scatrs/tests/spheroid_reference.rs` compares with Arb reference values of an EBCM computed
+  from its definition, with no simplification of the integrands ({doc}`/theory/reference-suite`),
+  for 10 spheroids. At a fixed truncation, the efficiencies and the T-matrix elements must be
+  within 4 times the solution's own estimate on each of the three precision paths (`f64`,
+  refined and double-double); the converged efficiencies must be within the declared
+  tolerance.
+- `scatrs/tests/spheroid_published.rs` compares with the arbitrary-precision $Q_\text{sca}$ and
+  $Q_\text{ext}$ published by Somerville, Auguié & Le Ru (2013) for two spheroids inside the
+  domain, one of them the benchmark of Kuik, de Haan & Hovenier (1992) ({doc}`external`).
+- `scatrs/tests/tmatrix_accuracy_map.rs` compares the default results (`rtol = 1e-8`) with a
+  reference using more orders and nodes and every mode refined, for 221 spheroids: 8 aspect
+  ratios, $x$ from 0.3 to 14 and four indices, up to $|m|\,x_{\max} = 70$.
+
+The worst ratio of each error to $\max(\mathtt{rtol}, \hat\varepsilon)$ inside the domain, against
+the declared constant:
+
+```{code-cell} python
+data = json.loads(Path("data", "spheroid-accuracy-map.json").read_text())
+points = data["points"]
+ratios = np.array([p["ratios"] for p in points])
+inside = np.array([p["inside"] for p in points])
+print(f"{len(points)} spheroids, {inside.sum()} inside the domain")
+print(f"{'output':<10}{'worst inside':>14}{'worst outside':>15}{'declared C':>12}")
+for k, output in enumerate(data["outputs"]):
+    worst_in, worst_out = ratios[inside, k].max(), ratios[~inside, k].max()
+    print(f"{output:<10}{worst_in:14.3f}{worst_out:15.3f}{data['declared'][output]:12.0f}")
+    assert 4 * worst_in <= data["declared"][output], f"{output}: margin below 4"
+```
+
+```{code-cell} python
+fig, ax = plt.subplots(figsize=(7, 4), layout="constrained")
+phase = np.array([p["phase"] for p in points])
+for k, output in enumerate(data["outputs"]):
+    ax.semilogy(phase, np.maximum(ratios[:, k], 1e-12), ".", ms=4, label=output)
+ax.axvline(60, color="k", lw=0.8, ls="--")
+ax.set(
+    xlabel=r"$|m|\,x_{\max}$",
+    ylabel=r"error / max(rtol, estimate)",
+    ylim=(1e-8, 10),
+)
+ax.legend(fontsize=7, ncols=2)
+plt.show()
+```
+
+The estimates are conservative: the cross sections and $g$ stay below a twentieth of
+$\max(\mathtt{rtol}, \hat\varepsilon)$, and only $Q_{\mathrm{back}}$ reaches it (1.04 times, at
+$\varepsilon = 1/3$, $x = 4$), well within its constant. Past $|m|\,x_{\max} = 60$ the results are as accurate, but
+the modes that need refinement make one spheroid cost minutes, so the domain ends there.
+
 (ensemble-accuracy)=
 ## Ensembles
 

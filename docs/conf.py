@@ -50,6 +50,7 @@ extensions = [
 # rustdoc additions are not sources.
 exclude_patterns = [
     "_build",
+    "build",
     "_rustdoc",
     "jupyter_execute",
     "specs/**",

@@ -292,6 +292,164 @@ core radius half the outer) 4.3 to 8.4 times faster:
 | 100 | 10.9 | 83.7 | 58.3 |
 | 1000 | 104 | | 451 |
 
+## Spheroids
+
+### Limits
+
+- **A sphere.** An aspect ratio of 1 gives every output of {mod}`scatrs.mie`, to $10^{-9}$ or
+  better (`tests/test_tmatrix.py` and `scatrs/src/tmatrix/mod.rs`).
+- **The Rayleigh limit.** At $x = 0.01$ the orientation-averaged absorption and scattering of
+  oblate and prolate spheroids ($\varepsilon$ from 1/4 to 4, $m = 1.5 + 0.1i$) follow the
+  electrostatic polarizabilities $\alpha_j = V(m^2 - 1)/(1 + L_j(m^2 - 1))$ of their
+  depolarization factors $L_j$ (Bohren & Huffman 1983, §5.3) to $10^{-3}$, the size of the
+  first correction.
+- **The long-wavelength expansion.** Majić et al. (2019) derived the T-matrix elements of a
+  spheroid in closed form to $O(X^6)$, with $X = kc$: the 15 elements of the dipoles,
+  quadrupoles and octupoles of modes 0 to 2 that are not zero to that order, including the
+  couplings between electric and magnetic multipoles. Their errors are $O(X^7)$, so as the
+  size halves, the relative error of $|T|^2$ must fall 16-fold for the two dipolar elements and
+  4-fold for the others, and that of the averaged cross sections 16-fold. Between $\tilde X$ =
+  0.08 and 0.04 (equal-volume size parameter), for prolate ($c/a$ = 3) and oblate ($c/a$ = 1/2
+  and 1/4) spheroids, absorbing or not, scatrs's elements and cross sections approach them at
+  exactly these rates (measured exponents 4.00 and 2.00, within 0.03;
+  `scatrs/tests/tmatrix_long_wavelength.rs`). This checks every block of the low-order
+  T-matrix against an independent derivation, beyond the leading term the Rayleigh limit
+  checks.
+
+### Comparison with Mishchenko's T-matrix code
+
+Mishchenko's extended-precision code for randomly oriented particles (`tmq.lp.f`, Mishchenko &
+Travis 1994; the "tmatd" of the literature) is the standard reference for spheroids. The script
+`benchmarks/compare_tmatd.py` fetches it from its page at NASA GISS (it is not redistributed
+here), builds it with gfortran after patches that change no computation (the input read from
+standard input, 16 printed digits, gfortran's names for its quad-precision intrinsics), and
+compares it with scatrs at `rtol = 1e-10` for 72 spheroids: aspect ratios 1/5, 1/3, 1/2, 2, 3
+and 5, $x$ = 1, 3, 6 and 10, and indices 1.33, $1.53 + 0.008i$ and $1.5 + 0.5i$. One particle is
+computed as the code's notes describe, as a size distribution $10^{-7}$ wide. The results are in
+`benchmarks/results/2026-10-15-arm64-tmatd.json`. Apple M4 Pro, macOS, both on one thread;
+scatrs 0.3.0, GNU Fortran 14.2, 2026-10-15.
+
+| output | at tmatd's tolerance $10^{-6}$: median, largest difference | at $10^{-9}$: median, largest |
+|---|---|---|
+| $Q_\text{ext}$ | $1.6\cdot10^{-9}$, $6.4\cdot10^{-8}$ | $7.0\cdot10^{-13}$, $7.5\cdot10^{-11}$ |
+| $Q_\text{sca}$ | $2.1\cdot10^{-9}$, $8.6\cdot10^{-8}$ | $9.3\cdot10^{-13}$, $6.8\cdot10^{-11}$ |
+| $g$ | $1.2\cdot10^{-8}$, $4.1\cdot10^{-8}$ | $1.1\cdot10^{-8}$, $3.7\cdot10^{-8}$ |
+| Greek coefficients | $3.6\cdot10^{-7}$, $4.1\cdot10^{-6}$ | $4.0\cdot10^{-8}$, $2.9\cdot10^{-7}$ |
+
+The differences are relative ($g$ absolute, the Greek coefficients relative to the largest
+$\alpha_1$, normalized). They shrink with tmatd's tolerance to the floor of its narrow size
+distribution, about $10^{-8}$ in $g$ and the Greek coefficients; scatrs's own estimates are
+$10^{-11}$ or below. tmatd expands $F_{12}$ and $F_{34}$ in the generalized spherical functions
+$P^l_{02} = -d^l_{02}$, so its $\beta_1$ and $\beta_2$ have the opposite signs of scatrs's, which
+uses the Wigner d-functions; the phase matrices agree.
+
+tmatd stops ("convergence is not obtained") for five spheroids: $\varepsilon = 1/5$ at $x = 10$
+for every index, $\varepsilon = 1/5$ at $x = 6$ and $\varepsilon = 5$ at $x = 10$ for the absorbing
+index (at the tighter tolerance). There its number of orders grows to its limit of 140 without
+the cross sections settling: the loss of precision of the classical integrals, which scatrs
+removes ({doc}`/theory/spheroids`). scatrs computes them with about 45 orders.
+
+On one thread, the median time per spheroid, over the spheroids tmatd computes at both of its
+tolerances, scatrs at `rtol` $10^{-6}$ and $10^{-8}$, tmatd at $10^{-6}$ and $10^{-9}$:
+
+| $x$ | scatrs, $10^{-6}$ (s) | scatrs, $10^{-8}$ (s) | tmatd, $10^{-6}$ (s) | tmatd, $10^{-9}$ (s) |
+|---|---|---|---|---|
+| 1 | 0.005 | 0.006 | 0.028 | 0.046 |
+| 3 | 0.017 | 0.023 | 0.086 | 0.19 |
+| 6 | 0.052 | 0.073 | 0.31 | 0.48 |
+| 10 | 0.60 | 1.0 | 1.1 | 1.8 |
+
+scatrs at `rtol` $10^{-8}$ is faster than tmatd at $10^{-9}$ for every one of the 67 spheroids
+tmatd computes: by 5 to 11 times at $x = 1$, 4 to 10 times at $x = 3$, 1.6 to 10 times at
+$x = 6$ and 1.2 to 4 times at $x = 10$ (median 1.8). At $x = 10$ the modes that need refinement
+in double-double take most of its time; the closest cases are the aspect ratios 1/3, 3 and 5
+with the weakly absorbing indices. The slowest spheroid, $\varepsilon = 1/5$ with the absorbing
+index, which tmatd cannot compute, takes 25 s. scatrs also runs its quadrature in parallel,
+with results that do not depend on the number of threads.
+
+We thank M. I. Mishchenko, L. D. Travis and the NASA Goddard Institute for Space Studies for
+making the code publicly available; its references are listed in {doc}`/references`.
+
+### Published arbitrary-precision values
+
+Somerville, Auguié & Le Ru (2013) tabulate $Q_\text{sca}$ and $Q_\text{ext}$ of three randomly
+oriented prolate spheroids computed with the T-matrix and its inversion in arbitrary
+precision, to 15 digits. The values do not depend on any double-precision code. The three
+spheroids are model 1 of the benchmark of Kuik, de Haan & Hovenier (1992), a large spheroid,
+and a silver nanorod at its plasmon resonance, outside scatrs's validated domain. The paper's
+efficiencies are cross sections over the orientation-averaged projected area, $S/4$ for a
+convex particle, and its size parameter is $x_{\max} = kc$; scatrs's efficiencies are over the
+cross section of the sphere of equal volume, so the conversion below multiplies by the ratio
+of the two areas.
+
+```{code-cell} python
+from scatrs import tmatrix
+
+
+def published(h, x_max, m, q_sca, q_ext, **options):
+    """scatrs against the paper for a prolate spheroid of c/a = h: relative differences."""
+    eps = 1 / h
+    x = x_max * eps ** (2 / 3)
+    e = np.sqrt(1 - eps**2)
+    surface = 2 * np.pi * eps**2 * (1 + 1 / (eps * e) * np.arcsin(e))  # with c = 1
+    ratio = surface / 4 / (np.pi * eps ** (4 / 3))
+    q = tmatrix.efficiencies(x, m, eps, **options)
+    return abs(q.q_sca / ratio / q_sca - 1), abs(q.q_ext / ratio / q_ext - 1), float(q.error)
+
+
+k = 2 * np.pi * 1.33 / 2560  # the nanorod: a = 10 nm, c = 200 nm in a solvent of index 1.33
+cases = {
+    "Kuik et al. model 1": (4, 10.079368, 1.55 + 0.01j, 3.21290554203154, 3.36721292620919, {}),
+    "silver nanorod": (20, 200 * k, np.sqrt(-318 + 48.5j) / 1.33, 2.91644692910476,
+                       18.6590264036833, {"allow_unvalidated": True}),
+}
+for name, (h, x_max, m, q_sca, q_ext, options) in cases.items():
+    d_sca, d_ext, est = published(h, x_max, m, q_sca, q_ext, rtol=1e-12, **options)
+    print(f"{name:20} Q_sca {d_sca:.1e}  Q_ext {d_ext:.1e}  (estimate {est:.1e})")
+    assert max(d_sca, d_ext) < 1e-13
+```
+
+| spheroid | $c/a$ | $x_{\max}$ | $m$ | scatrs: $Q_\text{sca}$, $Q_\text{ext}$ | SMARTIES's double precision |
+|---|---|---|---|---|---|
+| Kuik et al. model 1 | 4 | 10.079368 | $1.55 + 0.01i$ | $1.5\cdot10^{-14}$, $9\cdot10^{-16}$ | $6\cdot10^{-15}$, $9\cdot10^{-15}$ |
+| large | 4 | 35 | $1.5 + 0.02i$ | $4.4\cdot10^{-14}$, $2\cdot10^{-15}$ | $7.1\cdot10^{-5}$, $2.6\cdot10^{-5}$ |
+| silver nanorod | 20 | 0.653 | $1.02 + 13.45i$ | $1\cdot10^{-15}$, $3\cdot10^{-15}$ | $2.4\cdot10^{-12}$, $1.2\cdot10^{-12}$ |
+
+The differences are relative to the published values, at `rtol` $10^{-12}$ (the large
+spheroid at $10^{-10}$). The large spheroid takes about 20 s, so it is checked by the test
+`large_prolate_spheroid` of `scatrs/tests/spheroid_published.rs` (ignored by default) rather
+than on this page; the other two are checked by that file's default tests as well. The last
+column is the same paper's double-precision code, SMARTIES's algorithm, against the same
+values. The paper's albedo for the large spheroid, 0.718371249381958, is not the ratio of
+its own $Q_\text{sca}$ and $Q_\text{ext}$, 0.7183712495692; scatrs's albedo agrees with the
+ratio to $2\cdot10^{-14}$. The nanorod's index and aspect ratio are far outside the validated
+domain, but with the default settings it converges as closely; at an aspect ratio of 20 the
+nodes are set by the shape rather than by $N$ ({doc}`/theory/spheroids`).
+
+### SMARTIES
+
+SMARTIES (Somerville, Auguié & Le Ru 2016) computes spheroids in double precision with the
+algorithm of their 2013 paper, which avoids the cancellations of the classical integrals. Its
+code is not run here. Its paper reports the largest maximum size parameter
+$x_{\max} = k\max(a, c)$ at which the orientation-averaged extinction still converged, for
+each index and aspect ratio. Its authors attribute the remaining limit to the matrix inversion
+in double precision, which extended precision would lift; scatrs's mixed-precision refinement
+does that. Where the two overlap:
+
+| relative index | SMARTIES, largest $x_{\max}$ (aspect ratio 2, 4) | scatrs, validated $x_{\max} = 60/\lvert m\rvert$ |
+|---|---|---|
+| 1.311 | 50 and 45 (oblate), 50 and 45 (prolate) | 46 |
+| 1.5 | 35 and 30 | 40 |
+| $1.5 + 0.02i$ | 40 and 30 | 40 |
+| 2.5 | 16 and 12 (oblate), 18 and 12 (prolate) | 24 |
+
+scatrs's validated domain ends where its cost, not its accuracy, grows: on its accuracy map the
+results stay within their tolerance up to $|m|\,x_{\max} = 70$ ({doc}`accuracy`). SMARTIES reaches
+aspect ratios up to 100 and metallic indices. They are outside scatrs's validated domain:
+scatrs computes them with `allow_unvalidated`, as it does the nanorod above, but declares no
+accuracy constants there. The analytic expansion of its authors (above) checks the low-order
+T-matrix.
+
 ## Size distributions
 
 For averages over size distributions, {doc}`sasktran2` compares scatrs with the Mie

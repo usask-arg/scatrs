@@ -3,7 +3,7 @@
 The GitHub release notes are the changelog (see "Releasing" in `CONTRIBUTING.md`). Paste this
 into the next release's notes, above GitHub's generated list, then delete this file.
 
-## 0.3.0: layered spheres
+## 0.3.0: layered spheres and spheroids
 
 ### Breaking changes
 
@@ -36,6 +36,31 @@ into the next release's notes, above GitHub's generated list, then delete this f
     layers, derivatives up to x = 1000. Compared with scattnlay.
   - Documentation: the theory chapter "Layered spheres", the validation pages, and the example
     "Coated black carbon".
+- Spheroids averaged over orientations, by the T-matrix method (EBCM):
+  - `scatrs.tmatrix` (`efficiencies`, `greek`, `phase_matrix`, `compute`) and, in Rust,
+    `scatrs::tmatrix::TMatrix`: the efficiencies, Greek coefficients and six-element phase
+    matrix (F₂₂ and F₄₄ independent) of oblate and prolate spheroids, the T-matrix blocks, and
+    derivatives with respect to x, the aspect ratio, Re m and Im m.
+  - Each T-matrix converges to `rtol` and carries an error estimate. The outgoing-wave
+    integrals are computed free of their electrostatic cancellation, and the modes that need it
+    are refined in mixed precision (double-double residuals), so double precision reaches
+    sizes for which the classical method needs extended precision. The quadrature runs in
+    parallel, with results independent of the number of threads.
+  - Validated against an independent EBCM computed from its definition in Arb, an accuracy map
+    of 221 spheroids, the long-wavelength expansion of Majić et al. (2019), the Rayleigh limit
+    and the sphere limit: aspect ratios 1/5 to 5, |m|·x_max ≤ 60. Compared with Mishchenko's
+    extended-precision `tmatd` (agreement to 7.5·10⁻¹¹ in the cross sections; faster on one
+    thread for every spheroid it computes), with the arbitrary-precision values of Somerville,
+    Auguié & Le Ru (2013) (agreement to 5·10⁻¹⁴, including the benchmark of Kuik et al. 1992),
+    and with the published reach of SMARTIES.
+  - Outside the validated domain the quadrature follows the aspect ratio, so needles, discs
+    (aspect ratios to 100) and metallic indices converge with `allow_unvalidated`, without
+    declared accuracy constants (a silver nanorod of aspect ratio 20 at its plasmon resonance
+    agrees with its published value to 3·10⁻¹⁵).
+  - Documentation: the theory chapter "Spheroids", the validation pages, and the example
+    "Mineral dust as spheroids".
+- Documentation: the example "Size distributions and refractive-index models", covering every
+  size distribution and refractive-index model, and spheroids in the quick start.
 
 ## 0.2.0 (the notes of v0.2.0: delete this section once they are on its GitHub release)
 

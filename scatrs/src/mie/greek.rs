@@ -29,7 +29,7 @@ pub struct GreekCoefficients<T> {
 }
 
 impl<T: Real> GreekCoefficients<T> {
-    fn zeros(len: usize) -> Self {
+    pub(crate) fn zeros(len: usize) -> Self {
         let z = || vec![T::zero(); len];
         Self {
             alpha1: z(),
@@ -70,14 +70,14 @@ impl<T: Real> GreekCoefficients<T> {
     }
 
     /// Extends every array with zeros to `len` values.
-    fn pad(&mut self, len: usize) {
+    pub(crate) fn pad(&mut self, len: usize) {
         for v in self.arrays_mut() {
             v.resize(len, T::zero());
         }
     }
 
     /// Applies `f` to every coefficient.
-    fn map(&mut self, f: impl Fn(T) -> T) {
+    pub(crate) fn map(&mut self, f: impl Fn(T) -> T) {
         for v in self.arrays_mut() {
             for c in v.iter_mut() {
                 *c = f(*c);
@@ -217,6 +217,52 @@ impl<T: Real> GreekProjector<T> {
             }
         }
         Ok(out)
+    }
+}
+
+impl<T: Real> GreekProjector<T> {
+    /// The Greek coefficients of a phase matrix with six independent elements at the nodes,
+    /// [F₁₁, F₁₂, F₂₂, F₃₃, F₃₄, F₄₄] (a sphere's projection, [`project`](Self::project), takes
+    /// F₂₂ = F₁₁ and F₄₄ = F₃₃).
+    pub(crate) fn project_six(&self, f: [&[T]; 6]) -> Result<GreekCoefficients<T>> {
+        let n = self.rule.nodes.len();
+        if f.iter().any(|v| v.len() != n) {
+            return Err(Error::InvalidInput(format!(
+                "phase-matrix tables must have one value per node ({n})"
+            )));
+        }
+        let len = self.order + 1;
+        let mut c = GreekCoefficients::zeros(len);
+        let mut d: [Vec<T>; 4] = core::array::from_fn(|_| vec![T::zero(); len]);
+        for (k, (&mu, &w)) in self.rule.nodes.iter().zip(&self.rule.weights).enumerate() {
+            let [d00, d22, d2m2, d02] = &mut d;
+            wigner_d(0, 0, mu, d00)?;
+            wigner_d(2, 2, mu, d22)?;
+            wigner_d(2, -2, mu, d2m2)?;
+            wigner_d(0, 2, mu, d02)?;
+            let [f11, f12, f22, f33, f34, f44] = f.map(|v| w * v[k]);
+            let (sum, diff) = (f22 + f33, f22 - f33);
+            for l in 0..len {
+                c.alpha1[l] += f11 * d00[l];
+                c.alpha4[l] += f44 * d00[l];
+                c.alpha2[l] += sum * d22[l]; // α₂ + α₃ for now
+                c.alpha3[l] += diff * d2m2[l]; // α₂ − α₃ for now
+                c.beta1[l] += f12 * d02[l];
+                c.beta2[l] += f34 * d02[l];
+            }
+        }
+        let half = T::from_f64(0.5);
+        for l in 0..len {
+            let s = T::from_f64((2 * l + 1) as f64) * half;
+            let (plus, minus) = (c.alpha2[l], c.alpha3[l]);
+            c.alpha1[l] *= s;
+            c.alpha4[l] *= s;
+            c.alpha2[l] = s * half * (plus + minus);
+            c.alpha3[l] = s * half * (plus - minus);
+            c.beta1[l] *= s;
+            c.beta2[l] *= s;
+        }
+        Ok(c)
     }
 }
 

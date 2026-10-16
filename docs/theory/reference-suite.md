@@ -83,6 +83,7 @@ coefficient records are all certified. {doc}`/theory/mie` derives the bound.
 | `mie.jsonl` | 612 | see below |
 | `mie_derivatives.jsonl` | 160 | see below |
 | `mie_greek.jsonl` | 36 | see below |
+| `spheroid.jsonl` | 20 | see below |
 | `wigner_d.jsonl` | 212 | see below |
 
 The edge cases sit at the edges of each function's domain and of its algorithm's branches:
@@ -129,6 +130,18 @@ coefficients come from Gauss–Legendre quadrature on Arb's own Legendre roots, 
 polynomial integrands, and the Wigner d-functions from their three-term recurrence in ball
 arithmetic, so every value is certified.
 
+**`spheroid.jsonl`** holds two records per spheroid, for 10 spheroids with aspect ratios from
+1/5 to 5 (a sphere among them), equal-volume size parameters from 0.5 to 6, and indices from
+water to 3 + 0.1i, computed without scatrs's algorithm: the generator evaluates the EBCM from
+its definition, the surface integrals of the cross products of the vector spherical wave
+functions with no simplification of the integrands, on Arb's own Gauss–Legendre rule over the
+whole range of $\cos\theta$, and solves for $T^m$ in ball arithmetic. A `,N=…,n_theta=…` record
+holds $Q_{\mathrm{ext}}$ and $Q_{\mathrm{sca}}$ at a given truncation and a sample of $T^m$ for
+three modes (the diagonals of $T^{11}$ and $T^{22}$ and the first column of each block),
+certified for that truncation; a `,converged` record holds $Q_{\mathrm{ext}}$,
+$Q_{\mathrm{sca}}$ and $Q_{\mathrm{abs}}$ with $N$ and the quadrature grown until they settle
+to $10^{-17}$, high-precision.
+
 **`layered.jsonl`** holds two records per layered sphere, for 370 particles, computed without
 scatrs's algorithm: the generator evaluates $\psi_n$ and $\xi_n$ of every layer's arguments
 and matches the fields at each interface directly, all in ball arithmetic. The particles are
@@ -144,7 +157,7 @@ of the coefficients and the efficiencies with respect to every layer's $x_l$, $\
 and $\mathrm{Im}\,m_l$, from five-point central differences in ball arithmetic
 (high-precision).
 
-The committed data take about 17.5 MB, within the 20 MB budget, which a test enforces.
+The committed data take about 18 MB, within the 20 MB budget, which a test enforces.
 
 ## How the tests use it
 

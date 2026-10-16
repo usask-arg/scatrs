@@ -619,9 +619,10 @@ impl TMatrixSolution<'_> {
         (self.s.eps, self.s.x, self.s.m, self.s.rtol)
     }
 
-    /// The T-matrix blocks of mode `m`: `None` above the highest mode computed. Modes whose
-    /// contribution to the cross sections falls below `rtol`/10 are not computed (as in
-    /// Mishchenko's `tmatd`); [`n_modes`](Self::n_modes) gives how many were.
+    /// The T-matrix blocks of mode `m`: `None` above the highest mode computed. The modes above
+    /// a cutoff, whose elements fall below `rtol`/10 of the largest element of T, are
+    /// negligible and not computed (after Mishchenko's `tmatd`); [`n_modes`](Self::n_modes)
+    /// gives how many were.
     pub fn block(&self, m: usize) -> Option<ModeBlocks> {
         let t = &self.solved().t;
         let (ts, index) = t.modes.get(m)?;
@@ -1099,6 +1100,36 @@ mod tests {
         assert_eq!(
             driver::theta_of(30, 0.05, 1e-8),
             driver::shape_theta(20.0, 1e-8)
+        );
+    }
+
+    /// The precision paths and the blocks cover exactly the computed modes, with or without
+    /// derivatives, on every precision setting (x = 3, ε = 2 leaves its highest modes out on
+    /// some).
+    #[test]
+    fn paths_cover_the_computed_modes() {
+        let m = Complex::new(1.33, 0.0);
+        let mut left_out = 0;
+        for precision in [Precision::Auto, Precision::F64, Precision::DoubleDouble] {
+            let o = TMatrixOptions::new().with_precision(precision);
+            for derivatives in [false, true] {
+                let mut tm = TMatrix::new();
+                let s = if derivatives {
+                    tm.compute_with_derivatives(spheroid(2.0), 3.0, m, &o)
+                } else {
+                    tm.compute(spheroid(2.0), 3.0, m, &o)
+                }
+                .unwrap();
+                let what = format!("{precision:?}, derivatives {derivatives}");
+                assert_eq!(s.precision_paths().len(), s.n_modes(), "{what}");
+                assert!(s.block(s.n_modes() - 1).is_some(), "{what}");
+                assert!(s.block(s.n_modes()).is_none(), "{what}");
+                left_out += usize::from(s.n_modes() <= s.n_terms());
+            }
+        }
+        assert!(
+            left_out >= 2,
+            "the cutoff is exercised with and without derivatives"
         );
     }
 

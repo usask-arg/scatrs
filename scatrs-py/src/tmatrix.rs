@@ -380,6 +380,11 @@ impl TMatrixObject {
     }
 
     #[getter]
+    fn n_modes(&self) -> usize {
+        self.sol().n_modes()
+    }
+
+    #[getter]
     fn error_estimate(&self) -> f64 {
         self.sol().error_estimate()
     }
@@ -398,7 +403,7 @@ impl TMatrixObject {
             .collect()
     }
 
-    /// (orders, T11, T12, T21, T22) of mode `m`, or None above N.
+    /// (orders, T11, T12, T21, T22) of mode `m`, or None above the highest mode computed.
     #[allow(clippy::type_complexity)]
     fn block<'py>(
         &self,

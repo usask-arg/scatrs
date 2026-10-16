@@ -487,9 +487,12 @@ pub(crate) fn solve_derivatives(
             Dd4::variables([Dd::from(x), Dd::from(eps), Dd::from(s.re), Dd::from(s.im)]);
         let t = tmatrix_upto(xd, ed, Complex::new(sr, si), n, n_theta, true, m_max)?;
         let round = |v: Dd4| D4::new(v.re().hi(), v.eps().map(|e| e.hi()));
+        // Only the modes up to the cutoff are solved; those above are left out, as on the
+        // other paths.
         let modes = t
             .modes
             .into_iter()
+            .take(m_max + 1)
             .map(|(ts, index)| {
                 let ts = ts.map(|v| {
                     v.into_iter()
@@ -501,11 +504,8 @@ pub(crate) fn solve_derivatives(
             .collect();
         let t = TMatrixModes { n, modes };
         let big = t.values().largest();
-        Ok((
-            t,
-            vec![PrecisionPath::DoubleDouble; n + 1],
-            big * 4.0 * f64::EPSILON,
-        ))
+        let paths = vec![PrecisionPath::DoubleDouble; t.modes.len()];
+        Ok((t, paths, big * 4.0 * f64::EPSILON))
     };
     if precision == Precision::DoubleDouble {
         return full_dd();
@@ -516,10 +516,12 @@ pub(crate) fn solve_derivatives(
         rtol / 10.0
     };
     let (t, report) = tmatrix_derivatives(x, eps, s, n, n_theta, tol, m_max)?;
-    let solved = from_report(t.values(), &report, n_theta);
+    let mut solved = from_report(t.values(), &report, n_theta);
     if precision == Precision::Auto && solved.error > tol * solved.largest() {
         return full_dd();
     }
+    // The report covers every mode; only those up to the cutoff were solved.
+    solved.paths.truncate(t.modes.len());
     Ok((t, solved.paths, solved.error))
 }
 

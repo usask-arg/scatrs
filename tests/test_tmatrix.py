@@ -66,9 +66,19 @@ def test_derivative_matches_a_difference():
     assert q.d("aspect_ratio").q_sca == pytest.approx(fd, rel=1e-6)
 
 
+def test_the_modes_above_the_cutoff_are_not_computed():
+    for derivatives in (False, True):
+        t = tmatrix.compute(3.0, 1.33, 2.0, derivatives=derivatives)
+        assert t.n_modes < t.n_terms + 1 and len(t.precision_paths) == t.n_modes
+    assert t.block(t.n_modes - 1).orders[0] == t.n_modes - 1
+    with pytest.raises(IndexError, match="computed modes"):
+        t.block(t.n_modes)
+    assert f"n_modes={t.n_modes}" in repr(t)
+
+
 def test_the_tmatrix_object():
     t = tmatrix.compute(3.0, 1.33, 2.0, derivatives=True)
-    assert t.converged and t.error_estimate < 1e-8 and len(t.precision_paths) == t.n_terms + 1
+    assert t.converged and t.error_estimate < 1e-8 and len(t.precision_paths) == t.n_modes
     b = t.block(2)
     assert b.t11.shape == (t.n_terms - 1, t.n_terms - 1) and b.orders[0] == 2
     with pytest.raises(IndexError):

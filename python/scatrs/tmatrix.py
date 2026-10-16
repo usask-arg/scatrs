@@ -434,13 +434,17 @@ class TMatrix:
     ----------
     n_terms, n_theta : int
         The number of orders and of quadrature nodes.
+    n_modes : int
+        The number of azimuthal modes computed, ``m = 0, ..., n_modes - 1`` (at most
+        ``n_terms + 1``): the modes above, whose elements fall below ``rtol / 10`` of the
+        largest element of T, are negligible and not computed.
     error_estimate : float
         The estimated relative error of the outputs.
     converged : bool
         False only for a result returned at a cap with ``allow_unconverged``.
     precision_paths : tuple of str
-        How each mode ``m = 0, ..., N`` was solved: ``"f64"``, ``"refined"`` or
-        ``"double-double"``.
+        How each computed mode ``m = 0, ..., n_modes - 1`` was solved: ``"f64"``,
+        ``"refined"`` or ``"double-double"``.
     params : tuple of str
         The parameters of the derivatives, if computed.
     """
@@ -460,6 +464,10 @@ class TMatrix:
         return int(self._obj.n_theta)
 
     @property
+    def n_modes(self) -> int:
+        return int(self._obj.n_modes)
+
+    @property
     def error_estimate(self) -> float:
         return float(self._obj.error_estimate)
 
@@ -472,17 +480,20 @@ class TMatrix:
         return tuple(self._obj.precision_paths)
 
     def block(self, m: SupportsIndex) -> TMatrixBlock:
-        """The blocks of mode ``m`` (0 to ``n_terms``).
+        """The blocks of mode ``m``, one of the computed modes 0 to ``n_modes - 1``.
 
         Raises
         ------
         IndexError
-            For ``m`` outside 0 to ``n_terms``.
+            For ``m`` outside 0 to ``n_modes - 1``.
         """
         mm = _args.integer(m, "m")
         b = None if mm < 0 else self._obj.block(mm)
         if b is None:
-            raise IndexError(f"mode {mm} is outside 0..={self.n_terms}")
+            raise IndexError(
+                f"mode {mm} is outside the computed modes 0..={self.n_modes - 1} "
+                f"(of N = {self.n_terms}: the modes above are negligible)"
+            )
         orders, (t11, t12, t21, t22) = b
         return TMatrixBlock(*(_frozen(v) for v in (orders, t11, t12, t21, t22)))
 
@@ -535,7 +546,7 @@ class TMatrix:
 
     def __repr__(self) -> str:
         return (
-            f"TMatrix(n_terms={self.n_terms}, n_theta={self.n_theta}, "
+            f"TMatrix(n_terms={self.n_terms}, n_modes={self.n_modes}, n_theta={self.n_theta}, "
             f"error_estimate={self.error_estimate:.1e})"
         )
 

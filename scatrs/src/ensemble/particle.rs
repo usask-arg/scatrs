@@ -4,14 +4,22 @@
 //! The per-sphere quantities are differentiated along the particle's directions: the real and
 //! imaginary parts of the refractive index of each group, in order (Re m and Im m for a
 //! sphere; of each layer for a layered sphere), then the particle's real parameters (the radius
-//! fraction of each layer of a layered sphere but the last).
+//! fraction of each layer of a layered sphere but the last; a spheroid's aspect ratio).
+//!
+//! A spheroid has no Mie coefficients: its T-matrix gives the orientation-averaged
+//! efficiencies and Greek coefficients directly ([`SpheroidValues`]), which the engine
+//! integrates over the sizes (its direct path).
 
 use num_complex::Complex;
 
 use super::Particle;
 use crate::Result;
 use crate::layered::{self, Layered};
-use crate::mie::{Coefficients, Efficiencies, EfficiencyJacobian, Group, Mie, MieOptions, n_terms};
+use crate::mie::{
+    Coefficients, Efficiencies, EfficiencyJacobian, GreekCoefficients, Group, Mie, MieOptions,
+    MieOutput, Normalization, n_terms,
+};
+use crate::tmatrix::{self, Shape, TMatrix, TMatrixOptions};
 
 impl Particle {
     /// The particle at wavelength `i`.
@@ -26,6 +34,13 @@ impl Particle {
                 m: refractive_index,
                 i,
             },
+            Particle::Spheroid {
+                aspect_ratio,
+                refractive_index,
+            } => Optics::Spheroid {
+                m: refractive_index[i],
+                aspect_ratio: *aspect_ratio,
+            },
         }
     }
 
@@ -33,21 +48,34 @@ impl Particle {
     /// [`validate`](Self::validate)).
     pub(super) fn wavelengths(&self) -> usize {
         match self {
-            Particle::Sphere { refractive_index } => refractive_index.len(),
+            Particle::Sphere { refractive_index }
+            | Particle::Spheroid {
+                refractive_index, ..
+            } => refractive_index.len(),
             Particle::LayeredSphere {
                 refractive_index, ..
             } => refractive_index.first().map_or(0, Vec::len),
         }
     }
 
-    /// Checks the particle's own description: a layered sphere's layers and fractions.
+    /// Checks the particle's own description: a layered sphere's layers and fractions, a
+    /// spheroid's aspect ratio.
     pub(super) fn validate(&self) -> core::result::Result<(), String> {
-        let Particle::LayeredSphere {
-            radius_fractions: f,
-            refractive_index: m,
-        } = self
-        else {
-            return Ok(());
+        let (f, m) = match self {
+            Particle::Sphere { .. } => return Ok(()),
+            Particle::Spheroid { aspect_ratio, .. } => {
+                return if aspect_ratio.is_finite() && *aspect_ratio > 0.0 {
+                    Ok(())
+                } else {
+                    Err(format!(
+                        "the aspect ratio must be finite and positive, got {aspect_ratio}"
+                    ))
+                };
+            }
+            Particle::LayeredSphere {
+                radius_fractions,
+                refractive_index,
+            } => (radius_fractions, refractive_index),
         };
         let layers = m.len();
         if layers == 0 || layers > layered::MAX_LAYERS {
@@ -91,17 +119,19 @@ impl Particle {
     /// The number of derivative groups (a size parameter and a refractive index each).
     pub(super) fn groups(&self) -> usize {
         match self {
-            Particle::Sphere { .. } => 1,
+            Particle::Sphere { .. } | Particle::Spheroid { .. } => 1,
             Particle::LayeredSphere {
                 refractive_index, ..
             } => refractive_index.len(),
         }
     }
 
-    /// The number of real directions after the groups' (the radius fractions).
+    /// The number of real directions after the groups' (the radius fractions, the aspect
+    /// ratio).
     pub(super) fn reals(&self) -> usize {
         match self {
             Particle::Sphere { .. } => 0,
+            Particle::Spheroid { .. } => 1,
             Particle::LayeredSphere {
                 radius_fractions, ..
             } => radius_fractions.len(),
@@ -126,11 +156,19 @@ pub(super) enum Optics<'a> {
         m: &'a [Vec<Complex<f64>>],
         i: usize,
     },
+    /// A randomly oriented spheroid of refractive index m and aspect ratio a/c.
+    Spheroid { m: Complex<f64>, aspect_ratio: f64 },
 }
 
 impl Optics<'_> {
+    /// Whether the particle takes the direct path (a spheroid): its quantities come from
+    /// [`Solver::spheroid`], not from Mie coefficients.
+    pub(super) fn is_direct(self) -> bool {
+        matches!(self, Optics::Spheroid { .. })
+    }
+
     /// The number of terms of the particle of size parameter `x`, after the input checks of
-    /// [`Solver::solve`].
+    /// [`Solver::solve`] (spheres and layered spheres: a spheroid's is known once solved).
     pub(super) fn n_terms(self, x: f64, opts: &MieOptions) -> Result<usize> {
         match self {
             Optics::Sphere(m) => n_terms(x, m, opts),
@@ -139,6 +177,7 @@ impl Optics<'_> {
                 self.layers(x, &mut xs, &mut ms);
                 layered::n_terms(&xs, &ms, opts)
             }
+            Optics::Spheroid { .. } => unreachable!("a spheroid's N comes from its solution"),
         }
     }
 
@@ -210,10 +249,54 @@ impl Solved<'_> {
     }
 }
 
+/// One spheroid's quantities for the direct path, per unit geometric cross section of the
+/// sphere of equal volume (an ensemble multiplies them by πr²), with their derivatives along
+/// the particle's directions (Re m, Im m, the aspect ratio) and then with respect to x.
+#[derive(Clone, Debug)]
+pub(super) struct SpheroidValues {
+    /// The efficiencies.
+    pub(super) q: Efficiencies<f64>,
+    /// Q_back − Q_sca F₂₂(180°) (F₂₂ normalized), the numerator of the depolarization ratio.
+    pub(super) depol: f64,
+    /// The unnormalized Greek coefficients (α₁⁰ = Q_sca) of every order 0, …, 2N, if kept.
+    pub(super) greek: Option<GreekCoefficients<f64>>,
+    /// Along Re m, Im m, the aspect ratio, then x: the efficiencies, the depolarization
+    /// numerator and (if kept) the Greek coefficients.
+    pub(super) dq: Vec<Efficiencies<f64>>,
+    pub(super) ddepol: Vec<f64>,
+    pub(super) dgreek: Vec<GreekCoefficients<f64>>,
+    /// The number of orders N.
+    pub(super) n_terms: usize,
+    /// The node's error scale max(`rtol`, error estimate): the declared error of each output
+    /// is its constant ([`tmatrix::ValidatedDomain::constant`]) times this, in the output's
+    /// measure.
+    pub(super) tau: f64,
+}
+
+/// Q_back − Q_sca F₂₂(180°) from unnormalized Greek coefficients: F₁₁(180°) = Σ (−1)ˡ α₁ˡ is
+/// Q_back, and F₂₂(180°) = ½ Σ (−1)ˡ (α₂ˡ − α₃ˡ), since d^l₂₂(π) = 0 and d^l₂,₋₂(π) = (−1)ˡ.
+fn depolarization_numerator(g: &GreekCoefficients<f64>) -> f64 {
+    let mut s = 0.0;
+    for l in 0..g.alpha1.len() {
+        let v = g.alpha1[l] - 0.5 * (g.alpha2[l] - g.alpha3[l]);
+        s += if l % 2 == 0 { v } else { -v };
+    }
+    s
+}
+
+impl SpheroidValues {
+    /// The declared error of an efficiency, in units of its measure's scale: its constant
+    /// times [`tau`](Self::tau).
+    pub(super) fn bound(&self, output: MieOutput) -> f64 {
+        tmatrix::ValidatedDomain::constant(output) * self.tau
+    }
+}
+
 /// A per-thread workspace for solving particles.
 pub(super) struct Solver {
     mie: Mie<f64>,
     layered: Layered<f64>,
+    tmatrix: TMatrix,
     xs: Vec<f64>,
     ms: Vec<Complex<f64>>,
 }
@@ -223,9 +306,63 @@ impl Solver {
         Self {
             mie: Mie::new(),
             layered: Layered::new(),
+            tmatrix: TMatrix::new(),
             xs: Vec::new(),
             ms: Vec::new(),
         }
+    }
+
+    /// The spheroid `optics` of equal-volume size parameter `x`, converged to `opts`, with its
+    /// derivatives if `derivatives`, keeping its Greek coefficients if `keep_greek`.
+    pub(super) fn spheroid(
+        &mut self,
+        optics: Optics<'_>,
+        x: f64,
+        opts: &TMatrixOptions,
+        derivatives: bool,
+        keep_greek: bool,
+    ) -> Result<SpheroidValues> {
+        let Optics::Spheroid { m, aspect_ratio } = optics else {
+            unreachable!("a spheroid")
+        };
+        let shape = Shape::Spheroid { aspect_ratio };
+        let s = if derivatives {
+            self.tmatrix.compute_with_derivatives(shape, x, m, opts)
+        } else {
+            self.tmatrix.compute(shape, x, m, opts)
+        }?;
+        let q = s.efficiencies();
+        let tau = opts.rtol.max(s.error_estimate());
+        let n_terms = s.n_terms();
+        let (greek, d) = if derivatives {
+            let (g, d) = s.greek_with_derivatives(None, Normalization::Unnormalized)?;
+            (g, Some(d))
+        } else {
+            (s.greek(None, Normalization::Unnormalized)?, None)
+        };
+        let depol = depolarization_numerator(&greek);
+        let (mut dq, mut ddepol, mut dgreek) = (Vec::new(), Vec::new(), Vec::new());
+        if let Some(d) = d {
+            let j = s
+                .efficiencies_jacobian()
+                .expect("computed with derivatives");
+            dq = vec![j.m_re, j.m_im, j.aspect_ratio, j.x];
+            dgreek = vec![d.m_re, d.m_im, d.aspect_ratio, d.x];
+            ddepol = dgreek.iter().map(depolarization_numerator).collect();
+            if !keep_greek {
+                dgreek.clear();
+            }
+        }
+        Ok(SpheroidValues {
+            q,
+            depol,
+            greek: keep_greek.then_some(greek),
+            dq,
+            ddepol,
+            dgreek,
+            n_terms,
+            tau,
+        })
     }
 
     /// The particle `optics` of (outer) size parameter `x`, with its derivative groups if
@@ -264,6 +401,7 @@ impl Solver {
                     fractions,
                 })
             }
+            Optics::Spheroid { .. } => unreachable!("a spheroid takes the direct path"),
         }
     }
 }

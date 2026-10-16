@@ -1,8 +1,9 @@
 """Ensembles of particles: size distributions, adaptive size integration and mixtures.
 
-An :class:`Ensemble` is a particle (:class:`~scatrs.Sphere` or
-:class:`~scatrs.LayeredSphere`) and a size distribution (:mod:`scatrs.size`) of its radius (a
-layered sphere's outer radius); a :class:`Mixture` is several ensembles with relative number
+An :class:`Ensemble` is a particle (:class:`~scatrs.Sphere`, :class:`~scatrs.LayeredSphere`
+or :class:`~scatrs.Spheroid`) and a size distribution (:mod:`scatrs.size`) of its radius (a
+layered sphere's outer radius, a spheroid's equal-volume radius); a :class:`Mixture` is several
+ensembles with relative number
 concentrations. Their ``compute`` methods average the optical properties over the sizes at
 each wavelength. Radii and wavelengths are in the same (any) unit; cross sections are per
 particle, averaged over the number distribution, in that unit squared. See
@@ -13,7 +14,8 @@ sections, g and the distribution moments, and optionally the backscattering, mee
 Every output comes with an error estimate (:attr:`~scatrs.EnsembleResult.error`) and, with
 ``derivatives``, its derivatives with respect to the distribution parameters, the particle's
 (``"m_real"`` and ``"m_imag"``; each layer's ``"layer{l}.m_real"``, ``"layer{l}.m_imag"`` and
-``"layer{l}.radius_fraction"``) and the mixture weights (:meth:`~scatrs.EnsembleResult.d`).
+``"layer{l}.radius_fraction"``; a spheroid's ``"aspect_ratio"``) and the mixture weights
+(:meth:`~scatrs.EnsembleResult.d`).
 
 A distribution whose parameters are arrays is a grid of distributions, computed at once with
 shared size nodes (as an optics table needs): the results have the grid's axes first.
@@ -33,7 +35,7 @@ import numpy as np
 from numpy.typing import ArrayLike, NDArray
 
 from scatrs import _args, _scatrs
-from scatrs.particles import LayeredSphere, Sphere
+from scatrs.particles import LayeredSphere, Sphere, Spheroid
 from scatrs.size import Distribution, _check, _grid, _scalar_spec, _specs
 
 __all__ = [
@@ -121,12 +123,15 @@ class EnsembleGreek(_ReadOnly):
 @dataclass(frozen=True, eq=False)
 class EnsemblePhase(_ReadOnly):
     """The phase matrix per wavelength at the cosines ``mu``, arrays of shape
-    ``wavelength.shape + mu.shape`` (after the grid's axes)."""
+    ``wavelength.shape + mu.shape`` (after the grid's axes): its six independent elements, with
+    ``f22`` equal to ``f11`` and ``f44`` to ``f33`` for spheres and layered spheres."""
 
     f11: NDArray[np.float64]
     f12: NDArray[np.float64]
+    f22: NDArray[np.float64]
     f33: NDArray[np.float64]
     f34: NDArray[np.float64]
+    f44: NDArray[np.float64]
 
 
 @dataclass(frozen=True, eq=False)
@@ -142,7 +147,8 @@ class EnsembleOutputs(_ReadOnly):
     ssa, g : numpy.ndarray
         Single-scattering albedo and asymmetry parameter.
     lidar_ratio, depolarization : numpy.ndarray
-        4π ``c_ext``/``c_back``, and the linear depolarization ratio (exactly 0 for spheres).
+        4π ``c_ext``/``c_back``, and the linear depolarization ratio (F₁₁ − F₂₂)/(F₁₁ + F₂₂)
+        at 180° (exactly 0 for spheres).
     effective_radius, mean_area, mean_volume : numpy.ndarray
         ⟨r³⟩/⟨r²⟩, ⟨πr²⟩ and ⟨4πr³/3⟩.
     greek : EnsembleGreek or None
@@ -184,8 +190,9 @@ class EnsembleResult(EnsembleOutputs):
     wavelength : numpy.ndarray
         The wavelengths, as given.
     refractive_index : numpy.ndarray or tuple of numpy.ndarray
-        m at the wavelengths: of the wavelengths' shape for a :class:`~scatrs.Sphere`, and
-        ``(L,) + wavelength.shape`` for a :class:`~scatrs.LayeredSphere` of L layers; for a
+        m at the wavelengths: of the wavelengths' shape for a :class:`~scatrs.Sphere` or a
+        :class:`~scatrs.Spheroid`, and ``(L,) + wavelength.shape`` for a
+        :class:`~scatrs.LayeredSphere` of L layers; for a
         :class:`Mixture`, a tuple of each component's.
     grid : Mapping[str, numpy.ndarray]
         Each array-valued distribution parameter, by name (as in :attr:`params`), broadcast
@@ -408,10 +415,10 @@ def _weight(w: ArrayLike, what: str) -> float:
     return float(a)
 
 
-def _particle(particle: object, what: str) -> Sphere | LayeredSphere:
-    if not isinstance(particle, (Sphere, LayeredSphere)):
+def _particle(particle: object, what: str) -> Sphere | LayeredSphere | Spheroid:
+    if not isinstance(particle, (Sphere, LayeredSphere, Spheroid)):
         raise TypeError(
-            f"{what} must be a Sphere or a LayeredSphere, not {type(particle).__name__}"
+            f"{what} must be a Sphere, a LayeredSphere or a Spheroid, not {type(particle).__name__}"
         )
     return particle
 
@@ -480,11 +487,12 @@ class Ensemble:
 
     Parameters
     ----------
-    particle : Sphere or LayeredSphere
+    particle : Sphere, LayeredSphere or Spheroid
         The particle, with its refractive-index models.
     size : LogNormal, Gamma, ModifiedGamma, PowerLaw, Monodisperse, Tabulated, MultiModal or list
         The number size distribution of the particle's radius (of a layered sphere's outer
-        radius, its interfaces at fixed fractions of it). If its parameters are arrays, the
+        radius, its interfaces at fixed fractions of it; of a spheroid's equal-volume
+        radius). If its parameters are arrays, the
         ensemble is a grid of distributions, one per point of their broadcast shape. A list
         (or tuple) of distributions with scalar parameters, of any kinds, is a batch with one
         axis, one point per distribution; it is stored as a tuple.
@@ -492,14 +500,14 @@ class Ensemble:
     Raises
     ------
     TypeError
-        If ``particle`` is not a :class:`~scatrs.Sphere` or a :class:`~scatrs.LayeredSphere`,
-        or ``size`` or an element of a list not a distribution.
+        If ``particle`` is not a :class:`~scatrs.Sphere`, a :class:`~scatrs.LayeredSphere` or a
+        :class:`~scatrs.Spheroid`, or ``size`` or an element of a list not a distribution.
     ValueError
         If the distribution's array-valued parameters do not broadcast together, or an
         element of a list is a grid.
     """
 
-    particle: Sphere | LayeredSphere
+    particle: Sphere | LayeredSphere | Spheroid
     size: Distribution | tuple[Distribution, ...]
 
     def __post_init__(self) -> None:
@@ -589,7 +597,9 @@ Ensemble.compute.__doc__ = _COMPUTE_DOC.format(
     '``"mode{j}.weight"`` for a multimodal one), then the particle\'s: ``"m_real"`` and '
     '``"m_imag"`` (Re m and Im m at each wavelength) of a Sphere; ``"layer{l}.m_real"`` and '
     '``"layer{l}.m_imag"`` of each layer of a LayeredSphere, then ``"layer{l}.radius_fraction"`` '
-    "of each layer but the last (at a fixed outer radius). Not available for a grid or a list. "
+    'of each layer but the last (at a fixed outer radius); ``"m_real"``, ``"m_imag"`` and '
+    '``"aspect_ratio"`` of a Spheroid (at a fixed equal-volume radius). Not available for a '
+    "grid or a list. "
     "A LayeredSphere's derivatives along its own parameters, and a monodisperse one's radius "
     "derivative, are validated up to an outer size parameter of 1000.",
     per="wavelength (shared by the points of a grid or a list)",

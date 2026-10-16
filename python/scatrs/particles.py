@@ -11,7 +11,7 @@ from numpy.typing import NDArray
 
 from scatrs.refractive import Constant, Function, RefractiveIndex
 
-__all__ = ["LayeredSphere", "Sphere"]
+__all__ = ["LayeredSphere", "Sphere", "Spheroid"]
 
 
 def _model(value: object) -> RefractiveIndex:
@@ -168,3 +168,52 @@ class LayeredSphere:
         m = np.stack([v.evaluate(wavelength) for v in self.refractive_index])
         fractions = np.array(self.radius_fraction, dtype=np.float64)
         return ("layered", fractions, np.ascontiguousarray(m.reshape(self.layers, -1))), m
+
+
+@dataclass(frozen=True)
+class Spheroid:
+    """Randomly oriented spheroids of one aspect ratio (see :mod:`scatrs.tmatrix`).
+
+    A spheroid has semi-axes ``a, a, c``, ``c`` along its axis of symmetry, and aspect ratio
+    ``aspect_ratio = a / c``: oblate above 1, prolate below 1, a sphere at 1. In an
+    :class:`~scatrs.Ensemble` the size distribution gives the radius of the sphere of equal
+    volume, and its cross sections are per particle, as for spheres. Each size node solves a
+    T-matrix, which costs milliseconds to seconds rather than the microseconds of a sphere
+    (see :doc:`/theory/ensembles`).
+
+    Parameters
+    ----------
+    refractive_index
+        A :mod:`scatrs.refractive` model; a number becomes
+        :class:`~scatrs.refractive.Constant` and any other callable
+        :class:`~scatrs.refractive.Function`, as for :class:`Sphere`.
+    aspect_ratio : float
+        a/c, finite and positive.
+
+    Raises
+    ------
+    TypeError
+        If ``refractive_index`` is not a model, number or callable, or ``aspect_ratio`` not a
+        real number.
+    ValueError
+        If ``aspect_ratio`` is not finite and positive.
+    """
+
+    refractive_index: RefractiveIndex
+    aspect_ratio: float
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "refractive_index", _model(self.refractive_index))
+        v = self.aspect_ratio
+        if isinstance(v, (bool, np.bool_)) or not isinstance(v, numbers.Real):
+            raise TypeError(f"aspect_ratio must be a real number, not {type(v).__name__}")
+        f = float(v)
+        if not (np.isfinite(f) and f > 0.0):
+            raise ValueError(f"aspect_ratio must be finite and positive, got {f}")
+        object.__setattr__(self, "aspect_ratio", f)
+
+    def _engine(self, wavelength: NDArray[np.float64]) -> tuple[tuple, NDArray[np.complex128]]:
+        """The engine's tagged tuple for the particle at ``wavelength``, and its refractive
+        index there (the wavelengths' shape), which the result reports."""
+        m = self.refractive_index.evaluate(wavelength)
+        return ("spheroid", self.aspect_ratio, np.ascontiguousarray(m.reshape(-1))), m

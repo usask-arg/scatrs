@@ -42,7 +42,7 @@ def _equal(raw, result, shape, params=()):
     for row, name in zip(raw["greek"], greek, strict=True):
         np.testing.assert_array_equal(getattr(result.greek, name), row.reshape((*shape, 9)))
     for key, outputs in [("phase", result), ("phase_errors", result.error)]:
-        for row, name in zip(raw[key], ("f11", "f12", "f33", "f34"), strict=True):
+        for row, name in zip(raw[key], ("f11", "f12", "f22", "f33", "f34", "f44"), strict=True):
             np.testing.assert_array_equal(getattr(outputs.phase, name), row.reshape((*shape, 7)))
     for k, p in enumerate(params):
         for row, name in zip(raw["d"][k], names, strict=True):

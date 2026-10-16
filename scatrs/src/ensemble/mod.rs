@@ -3,7 +3,8 @@
 //!
 //! [`compute`] averages the optical properties of spheres over a [`SizeDistribution`] at each
 //! wavelength, and [`compute_with_particle`] those of any [`Particle`] (a layered sphere's size
-//! is its outer radius, with each interface at a fixed fraction of it); [`compute_mixture`]
+//! is its outer radius, with each interface at a fixed fraction of it; a spheroid's the radius
+//! of the sphere of equal volume, its T-matrix solved at every size node); [`compute_mixture`]
 //! averages over several [`Component`]s, and [`compute_batch`] over each of many distributions
 //! of one material (an optics database), sharing their solutions. The size integral is adaptive (Gauss–Kronrod panels in ln r, refined until the
 //! cross sections and g meet `rtol`; the distribution's moments and normalization are
@@ -42,7 +43,8 @@ use crate::mie::{GreekCoefficients, MAX_GREEK_ORDER, Normalization};
 use crate::{Error, Result};
 
 /// The particles of a component, given at each wavelength. A size distribution describes the
-/// radius the particle defines: the radius of a sphere, the outer radius of a layered sphere.
+/// radius the particle defines: the radius of a sphere, the outer radius of a layered sphere,
+/// the radius of the sphere of equal volume of a spheroid.
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub enum Particle {
@@ -60,6 +62,15 @@ pub enum Particle {
         /// The refractive index of each layer (the core first) at each wavelength:
         /// `refractive_index[l][i]` is layer l's at wavelength i.
         refractive_index: Vec<Vec<Complex<f64>>>,
+    },
+    /// Randomly oriented spheroids ([`crate::tmatrix`]) of one aspect ratio a/c (oblate above
+    /// 1, prolate below 1), the size distribution describing the radius of the sphere of equal
+    /// volume.
+    Spheroid {
+        /// The aspect ratio a/c, > 0.
+        aspect_ratio: f64,
+        /// The refractive index at each wavelength.
+        refractive_index: Vec<Complex<f64>>,
     },
 }
 
@@ -89,6 +100,23 @@ impl Particle {
     ) -> Self {
         Particle::LayeredSphere {
             radius_fractions,
+            refractive_index,
+        }
+    }
+
+    /// Randomly oriented spheroids of aspect ratio `aspect_ratio` = a/c and refractive index
+    /// `refractive_index[i]` at wavelength i.
+    ///
+    /// ```
+    /// use num_complex::Complex;
+    /// use scatrs::ensemble::Particle;
+    ///
+    /// // Oblate dust spheroids, twice as wide as tall, at one wavelength.
+    /// let dust = Particle::spheroid(2.0, vec![Complex::new(1.53, 0.008)]);
+    /// ```
+    pub fn spheroid(aspect_ratio: f64, refractive_index: Vec<Complex<f64>>) -> Self {
+        Particle::Spheroid {
+            aspect_ratio,
             refractive_index,
         }
     }
@@ -167,6 +195,8 @@ pub enum ParamKind {
     /// The radius fraction of layer l's outer surface of a layered sphere (l < L − 1), at a
     /// fixed outer radius.
     RadiusFraction(usize),
+    /// The aspect ratio a/c of a spheroid, at a fixed equal-volume radius.
+    AspectRatio,
     /// The weight of a mixture component (`mode` = `None`) or of a mode of a multimodal
     /// distribution.
     Weight,
@@ -195,8 +225,8 @@ impl EnsembleParam {
     }
 
     /// Its name: `median_radius`, `m_real`, `m_imag`, `layer{l}.m_real`, `layer{l}.m_imag`,
-    /// `layer{l}.radius_fraction`, `weight`, …, prefixed by `mode{j}.` for a mode and, with
-    /// `mixture`, by `c{i}.` for the component.
+    /// `layer{l}.radius_fraction`, `aspect_ratio`, `weight`, …, prefixed by `mode{j}.` for a
+    /// mode and, with `mixture`, by `c{i}.` for the component.
     pub fn name(&self, mixture: bool) -> String {
         let base = match self.kind {
             ParamKind::Distribution(name) => name.to_owned(),
@@ -205,6 +235,7 @@ impl EnsembleParam {
             ParamKind::LayerRefrReal(l) => format!("layer{l}.m_real"),
             ParamKind::LayerRefrImag(l) => format!("layer{l}.m_imag"),
             ParamKind::RadiusFraction(l) => format!("layer{l}.radius_fraction"),
+            ParamKind::AspectRatio => "aspect_ratio".to_owned(),
             ParamKind::Weight => "weight".to_owned(),
         };
         let mut out = String::new();
@@ -252,6 +283,11 @@ fn component_parameters(
             out.push(EnsembleParam::new(index, None, ParamKind::RefrReal));
             out.push(EnsembleParam::new(index, None, ParamKind::RefrImag));
         }
+        Particle::Spheroid { .. } => {
+            out.push(EnsembleParam::new(index, None, ParamKind::RefrReal));
+            out.push(EnsembleParam::new(index, None, ParamKind::RefrImag));
+            out.push(EnsembleParam::new(index, None, ParamKind::AspectRatio));
+        }
         Particle::LayeredSphere {
             radius_fractions,
             refractive_index,
@@ -283,7 +319,7 @@ pub fn parameters(distribution: &SizeDistribution) -> Vec<EnsembleParam> {
 /// Every parameter of a single distribution of `particle`s, for [`compute_with_particle`]: the
 /// distribution's, then the particle's (`m_real`, `m_imag` for a sphere; for a layered sphere
 /// `layer{l}.m_real` and `layer{l}.m_imag` of each layer, then `layer{l}.radius_fraction` of
-/// each but the last).
+/// each but the last; `m_real`, `m_imag` and `aspect_ratio` for a spheroid).
 pub fn parameters_with_particle(
     distribution: &SizeDistribution,
     particle: &Particle,
@@ -419,14 +455,18 @@ impl EnsembleOptions {
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct PhaseValues {
-    /// F₁₁ (= F₂₂ for spheres).
+    /// F₁₁.
     pub f11: Vec<f64>,
     /// F₁₂.
     pub f12: Vec<f64>,
-    /// F₃₃ (= F₄₄ for spheres).
+    /// F₂₂ (= F₁₁ for spheres).
+    pub f22: Vec<f64>,
+    /// F₃₃.
     pub f33: Vec<f64>,
     /// F₃₄.
     pub f34: Vec<f64>,
+    /// F₄₄ (= F₃₃ for spheres).
+    pub f44: Vec<f64>,
 }
 
 /// The outputs of an ensemble at one wavelength (or their error estimates, or their
@@ -449,7 +489,7 @@ pub struct Outputs {
     pub g: f64,
     /// The lidar ratio 4π⟨C_ext⟩/⟨C_back⟩.
     pub lidar_ratio: f64,
-    /// The linear depolarization ratio at 180°: exactly 0 for spheres.
+    /// The linear depolarization ratio at 180°, (F₁₁ − F₂₂)/(F₁₁ + F₂₂): exactly 0 for spheres.
     pub depolarization: f64,
     /// The effective radius ⟨r³⟩/⟨r²⟩.
     pub effective_radius: f64,

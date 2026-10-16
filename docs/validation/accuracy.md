@@ -262,7 +262,7 @@ next, so they add up in the forward sum, and the derivatives' domain ends at 100
 
 The outputs of {mod}`scatrs.tmatrix` are converged to a tolerance `rtol` and come with an
 error estimate $\hat\varepsilon$ ({doc}`/theory/spheroids`). Inside the validated domain
-(aspect ratios from 1/5 to 5, equal-volume $x \ge 0.3$, $|m|\,x_{\max} \le 60$ with $x_{\max}$
+(aspect ratios from 1/5 to 5, equal-volume $x \ge 10^{-6}$, $|m|\,x_{\max} \le 60$ with $x_{\max}$
 the size parameter of the longest semi-axis, $1.3 \le \mathrm{Re}\,m \le 3$,
 $\mathrm{Im}\,m \le 0.5$), every output is within $C\cdot\max(\mathtt{rtol}, \hat\varepsilon)$
 of the exact value, in the measures of the sphere's outputs ($Q_{\mathrm{abs}}$ relative to
@@ -279,8 +279,8 @@ relative to $\max(F_{11}, 1)$, normalized). Three tests enforce it:
   $Q_\text{ext}$ published by Somerville, Auguié & Le Ru (2013) for two spheroids inside the
   domain, one of them the benchmark of Kuik, de Haan & Hovenier (1992) ({doc}`external`).
 - `scatrs/tests/tmatrix_accuracy_map.rs` compares the default results (`rtol = 1e-8`) with a
-  reference using more orders and nodes and every mode refined, for 221 spheroids: 8 aspect
-  ratios, $x$ from 0.3 to 14 and four indices, up to $|m|\,x_{\max} = 70$.
+  reference using more orders and nodes and every mode refined, for 349 spheroids: 8 aspect
+  ratios, $x$ from $10^{-6}$ to 14 and four indices, up to $|m|\,x_{\max} = 70$.
 
 The worst ratio of each error to $\max(\mathtt{rtol}, \hat\varepsilon)$ inside the domain, against
 the declared constant:
@@ -328,7 +328,9 @@ integration and of the cut-offs of the distribution. Every output has an estimat
 error (`result.error`), and the integration is refined until the estimates of the cross
 sections, $g$ and the moments meet the tolerance `rtol` (default $10^{-6}$). The Mie
 solutions' own errors, declared above, are far smaller at the tolerances the ensembles accept,
-and are not included.
+and are not included. A spheroid's are: every size node adds its declared error, its constant
+times $\max(\tau, \hat\varepsilon)$ for its own estimate and the node tolerance $\tau$
+({ref}`ensemble-spheroids`).
 
 The test `error_estimates_bound_the_true_errors` in `scatrs/tests/ensemble.rs` checks the
 estimates for every change. It computes nine distributions of spheres and two of layered
@@ -359,6 +361,17 @@ other values, the Greek coefficients, the phase matrix and every derivative) wit
 their estimates. The worst ratio of true error to estimate is 0.003 for the refined outputs
 and 1.210 for the others. {doc}`/examples/ensemble` shows the same comparison for one
 distribution.
+
+For spheroids, `scatrs/tests/ensemble_spheroid.rs` checks the same: a lognormal of prolate
+spheroids ($a/c = 1/3$, $r_g = 0.03$, $\sigma_g = 1.4$, $m = 1.53 + 0.008i$, $\lambda = 1$) at
+rtol $10^{-6}$ against rtol $10^{-10}$, with backscattering refined, the Greek coefficients to
+order 8 and the phase matrix at three cosines. Every scalar output is within its estimate,
+which the nodes' declared errors make 10 to 1000 times the true error, and the Greek
+coefficients and the phase matrix within twice theirs. The same file checks that an aspect
+ratio of 1 is the sphere ensemble within the estimates, that a monodisperse ensemble is the
+single spheroid, and the Jacobians (the aspect ratio, $\mathrm{Re}\,m$, $\mathrm{Im}\,m$, the
+distribution's parameters, a monodisperse radius and a mixture's spheroid component) against
+central differences.
 
 What that supports:
 

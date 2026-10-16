@@ -42,6 +42,21 @@ impl Lin {
         Self { v, e, d, de }
     }
 
+    /// Σ cᵢ·`terms`ᵢ for exact constants cᵢ, the error estimates added as bounds (`n`
+    /// parameters).
+    pub(crate) fn combine(terms: &[(f64, &Self)], n: usize) -> Self {
+        let mut out = Self::constant(0.0, n);
+        for &(c, l) in terms {
+            out.v += c * l.v;
+            out.e += c.abs() * l.e;
+            for k in 0..n {
+                out.d[k] += c * l.d[k];
+                out.de[k] += c.abs() * l.de[k];
+            }
+        }
+        out
+    }
+
     /// `c`·`self` for an exact constant `c`.
     pub(crate) fn scale(&self, c: f64) -> Self {
         Self {
@@ -81,5 +96,8 @@ mod tests {
         let worst = ((3.0f64 + 1e-3) / (5.0 - 2e-3) - 0.6).abs();
         assert!(worst <= q.e * (1.0 + 1e-3) && worst >= q.e * (1.0 - 1e-3));
         assert_eq!(a.scale(2.0).d, vec![4.0]);
+        let c = Lin::combine(&[(2.0, &a), (-1.0, &b)], 1);
+        assert_eq!((c.v, c.d[0]), (1.0, 5.0));
+        assert!((c.e - 4e-3).abs() < 1e-18 && (c.de[0] - 2e-4).abs() < 1e-18);
     }
 }

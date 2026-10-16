@@ -12,7 +12,7 @@
 //! of `tmatrix::VALIDATED_DOMAIN` are at least 4 times the worst ratio inside.
 //!
 //! Run with `cargo test --release -p scatrs --test tmatrix_accuracy_map -- --ignored --nocapture`
-//! (about an hour on an Apple M4 Pro). With `SCATRS_ACCURACY_MAP` set to a path it also writes
+//! (about 12 minutes on an Apple M4 Pro). With `SCATRS_ACCURACY_MAP` set to a path it also writes
 //! the points as JSON there, for the documentation's plots:
 //!
 //! ```text
@@ -117,9 +117,9 @@ fn errors(a: &Point, b: &Point) -> [f64; 7] {
 }
 
 #[test]
-#[ignore = "the accuracy map: about an hour"]
+#[ignore = "the accuracy map: about 12 minutes"]
 fn accuracy_map() {
-    let xs: [f64; 7] = [0.3, 1.0, 2.0, 4.0, 7.0, 10.0, 14.0];
+    let xs: [f64; 11] = [1e-6, 1e-4, 0.01, 0.1, 0.3, 1.0, 2.0, 4.0, 7.0, 10.0, 14.0];
     let eps: [f64; 8] = [0.2, 1.0 / 3.0, 0.5, 0.8, 1.25, 2.0, 3.0, 5.0];
     let ms = [
         Complex::new(1.33, 0.0),

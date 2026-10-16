@@ -57,7 +57,10 @@ into the next release's notes, above GitHub's generated list, then delete this f
     (aspect ratios to 100) and metallic indices converge with `allow_unvalidated`, without
     declared accuracy constants (a silver nanorod of aspect ratio 20 at its plasmon resonance
     agrees with its published value to 3·10⁻¹⁵).
-  - Documentation: the theory chapter "Spheroids", and the validation pages.
+  - Documentation: the theory chapter "Spheroids", the validation pages, and the example
+    "Mineral dust as spheroids".
+- Documentation: the example "Size distributions and refractive-index models", covering every
+  size distribution and refractive-index model, and spheroids in the quick start.
 
 ## 0.2.0 (the notes of v0.2.0: delete this section once they are on its GitHub release)
 

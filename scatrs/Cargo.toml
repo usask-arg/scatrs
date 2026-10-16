@@ -1,6 +1,6 @@
 [package]
 name = "scatrs"
-description = "Fast, linearized, rigorously validated single-scattering calculations for spherical particles (Lorenz–Mie, size distributions)"
+description = "Fast, linearized, rigorously validated single-scattering calculations for spherical and spheroidal particles (Lorenz–Mie, layered spheres, T-matrix spheroids, size distributions)"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

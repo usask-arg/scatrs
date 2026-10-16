@@ -8,9 +8,10 @@ kernelspec:
 
 # Quick start
 
-scatrs computes the optical properties of spherical particles: single spheres with
-{mod}`scatrs.mie`, and size distributions and mixtures of them with {class}`~scatrs.Ensemble` and
-{class}`~scatrs.Mixture`.
+scatrs computes the optical properties of particles: single spheres with {mod}`scatrs.mie`,
+layered spheres with {mod}`scatrs.layered`, randomly oriented spheroids with
+{mod}`scatrs.tmatrix`, and size distributions and mixtures of spheres with
+{class}`~scatrs.Ensemble` and {class}`~scatrs.Mixture`.
 This page shows the main calls and the conventions to know before using the results. See
 {doc}`installation` to install the package.
 
@@ -28,7 +29,7 @@ in {doc}`/theory/conventions`.
 | Phase matrix | Normalized so that $\tfrac12\int_{-1}^{1} F_{11}\,d\mu = 1$. The degree of linear polarization is $-F_{12}/F_{11}$. |
 | Greek coefficients | The expansion of Mishchenko, Travis & Lacis (2002), normalized so that $\alpha_1^0 = 1$, and then $\alpha_1^1 = 3g$. $\beta_1$ and $\beta_2$ have the opposite sign to sasktran2's. |
 | Amplitudes | $S_1$, $S_2$ of Bohren & Huffman, time dependence $e^{-i\omega t}$: codes that use $e^{+i\omega t}$, such as MIEV0, report their complex conjugates. |
-| Validated domain | $10^{-6} \le x \le 2\cdot10^4$, $0 < \mathrm{Re}\,m \le 10$, $0 \le \mathrm{Im}\,m \le 10$, $\lvert m\rvert \ge 0.1$. Outside it, calls raise {class}`~scatrs.errors.OutsideValidatedDomainError` unless `allow_unvalidated=True`. |
+| Validated domain | For spheres $10^{-6} \le x \le 2\cdot10^4$, $0 < \mathrm{Re}\,m \le 10$, $0 \le \mathrm{Im}\,m \le 10$, $\lvert m\rvert \ge 0.1$; layered spheres and spheroids have their own ({doc}`validation/accuracy`). Outside it, calls raise {class}`~scatrs.errors.OutsideValidatedDomainError` unless `allow_unvalidated=True`. |
 
 ## One sphere
 
@@ -83,6 +84,26 @@ print(f"{g.alpha1.shape[-1]} orders")
 print("alpha1[:4] =", g.alpha1[:4])
 print("beta1[:4]  =", g.beta1[:4])
 assert g.alpha1[0] == 1 and abs(g.alpha1[1] - 3 * q.g) < 1e-12
+```
+
+## A spheroid
+
+{mod}`scatrs.tmatrix` computes randomly oriented spheroids by the T-matrix method, with the
+outputs of {mod}`scatrs.mie` and two more elements of the phase matrix, $F_{22}$ and $F_{44}$,
+which a sphere's fixes ($F_{22} = F_{11}$, $F_{44} = F_{33}$). A spheroid of semi-axes
+$a, a, c$ has `aspect_ratio` $= a/c$, oblate above 1 and prolate below; `x` and the
+efficiencies are those of the sphere of equal volume. Each result is converged to a tolerance
+(`rtol`, by default $10^{-8}$) and carries its error estimate. The droplet above, flattened to
+twice as wide as it is tall:
+
+```{code-cell} python
+from scatrs import tmatrix
+
+s = tmatrix.efficiencies(x, m, aspect_ratio=2.0)
+print(f"Q_ext = {s.q_ext:.6f}, g = {s.g:.6f} (the sphere: {q.q_ext:.6f}, {q.g:.6f})")
+print(f"N = {s.n_terms}, estimated error {s.error:.0e}")
+f2 = tmatrix.phase_matrix(x, m, 2.0, np.cos(np.radians([90, 180])))
+print("F22/F11 at 90° and 180°:", f2.f22 / f2.f11)
 ```
 
 ## A size distribution
@@ -146,8 +167,9 @@ print("dC_ext/dr_g =", r.d("median_radius").c_ext, "µm")
 
 ## Next steps
 
-- The examples go further: {doc}`examples/mie`, {doc}`examples/greek` and
-  {doc}`examples/ensemble`.
+- The examples go further: {doc}`examples/mie`, {doc}`examples/greek`,
+  {doc}`examples/ensemble`, {doc}`examples/distributions`, {doc}`examples/coated` and
+  {doc}`examples/spheroids`.
 - {doc}`validation/overview` explains how the results are checked, and how far they can be
   trusted.
 - {doc}`api` documents every function and option.

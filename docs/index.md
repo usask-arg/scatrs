@@ -49,7 +49,9 @@ quickstart
 examples/mie
 examples/greek
 examples/ensemble
+examples/distributions
 examples/coated
+examples/spheroids
 ```
 
 ```{toctree}

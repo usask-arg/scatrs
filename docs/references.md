@@ -44,6 +44,21 @@
   investigative review", *Aerosol Science and Technology* 40 (2006), 27–67. The refractive
   index of black carbon in {doc}`examples/coated`.
 
+**Size distributions and refractive indices**
+
+- J. E. Hansen and L. D. Travis, "Light scattering in planetary atmospheres", *Space Science
+  Reviews* 16 (1974), 527–610. The effective radius and effective variance, and the gamma
+  distribution of `Gamma`.
+- D. Deirmendjian, *Electromagnetic Scattering on Spherical Polydispersions*, Elsevier (1969).
+  The modified gamma distribution of `ModifiedGamma`.
+- I. H. Malitson, "Interspecimen comparison of the refractive index of fused silica",
+  *Journal of the Optical Society of America* 55 (1965), 1205–1209. The Sellmeier
+  coefficients of fused silica in {doc}`theory/refractive-index` and
+  {doc}`examples/distributions`.
+- C. F. Bohren and D. R. Huffman, *Absorption and Scattering of Light by Small Particles*,
+  Wiley (1983), Chapter 9. The Lorentz oscillator model of an absorption band in
+  {doc}`examples/distributions`.
+
 **Quadrature**
 
 - F. G. Tricomi, "Sugli zeri dei polinomi sferici ed ultrasferici", *Annali di Matematica Pura
@@ -96,6 +111,11 @@
   electromagnetic scattering: Exact results for spheroidal particles", *Journal of Quantitative
   Spectroscopy and Radiative Transfer* 200 (2017), 50–58. The electrostatic limit of the
   EBCM matrices.
+- O. Dubovik, A. Sinyuk, T. Lapyonok, B. N. Holben, M. Mishchenko, P. Yang, T. F. Eck,
+  H. Volten, O. Muñoz, B. Veihelmann, W. J. van der Zande, J.-F. Leon, M. Sorokin and
+  I. Slutsker, "Application of spheroid models to account for aerosol particle nonsphericity
+  in remote sensing of desert dust", *Journal of Geophysical Research* 111 (2006), D11208.
+  Spheroids as the model of mineral dust in {doc}`examples/spheroids`.
 - N. J. Higham, *Accuracy and Stability of Numerical Algorithms*, 2nd edition, SIAM (2002),
   Chapters 12 and 15. Iterative refinement in mixed precision, and condition estimation.
 

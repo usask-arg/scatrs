@@ -266,7 +266,7 @@ assert abs(qd.d("aspect_ratio").q_ext - difference) < 1e-7 * abs(difference)
 
 ## Outside the validated domain
 
-The validated domain covers aspect ratios from 1/5 to 5, equal-volume $x \ge 0.3$,
+The validated domain covers aspect ratios from 1/5 to 5, equal-volume $x \ge 10^{-6}$,
 $|m|\,x_{\max} \le 60$, $1.3 \le \mathrm{Re}\,m \le 3$ and $\mathrm{Im}\,m \le 0.5$
 ({doc}`/validation/accuracy`). Outside it a call raises
 {class}`~scatrs.errors.OutsideValidatedDomainError`, unless `allow_unvalidated=True`: then it

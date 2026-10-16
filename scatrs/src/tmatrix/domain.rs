@@ -38,10 +38,10 @@ pub struct ValidatedDomain {
     pub rtol_min: f64,
 }
 
-/// The validated domain: aspect ratios 1/5 to 5, equal-volume x ≥ 0.3, |m|·x_max ≤ 60,
+/// The validated domain: aspect ratios 1/5 to 5, equal-volume x ≥ 10⁻⁶, |m|·x_max ≤ 60,
 /// 1.3 ≤ Re m ≤ 3, Im m ≤ 0.5, `rtol` ≥ 10⁻¹².
 ///
-/// The accuracy map covers 221 spheroids: 8 aspect ratios from 1/5 to 5, x from 0.3 to 14 and
+/// The accuracy map covers 349 spheroids: 8 aspect ratios from 1/5 to 5, x from 10⁻⁶ to 14 and
 /// four indices from 1.33 to 2.5 + 0.1i and 1.5 + 0.5i, up to |m|·x_max = 70. Its worst ratio of
 /// error to max(`rtol`, estimate) inside the domain is 1.04 (Q_back, ε = 1/3, x = 4), and 0.57
 /// for the Greek coefficients; the cross sections and g stay below 0.04. Past |m|·x_max = 60 the
@@ -50,7 +50,7 @@ pub struct ValidatedDomain {
 pub const VALIDATED_DOMAIN: ValidatedDomain = ValidatedDomain {
     aspect_ratio_min: 0.2,
     aspect_ratio_max: 5.0,
-    x_min: 0.3,
+    x_min: 1e-6,
     max_phase: 60.0,
     m_re_min: 1.3,
     m_re_max: 3.0,

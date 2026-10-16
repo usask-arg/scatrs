@@ -53,7 +53,7 @@ describes what the accuracy figures rest on.
 - **Random orientation only.** Fixed orientations, other axisymmetric shapes (cylinders,
   Chebyshev particles) and spheroids in size distributions and mixtures are not yet
   available.
-- **Validated domain.** Aspect ratios from 1/5 to 5, equal-volume $x \ge 0.3$,
+- **Validated domain.** Aspect ratios from 1/5 to 5, equal-volume $x \ge 10^{-6}$,
   $|m|\,x_{\max} \le 60$ with $x_{\max}$ the size parameter of the longest semi-axis,
   $1.3 \le \mathrm{Re}\,m \le 3$, $\mathrm{Im}\,m \le 0.5$, and `rtol` down to $10^{-12}$
   ({doc}`validation/accuracy`). The edge in $|m|\,x_{\max}$ is set by cost, not accuracy.

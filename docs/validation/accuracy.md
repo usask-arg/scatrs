@@ -262,7 +262,7 @@ next, so they add up in the forward sum, and the derivatives' domain ends at 100
 
 The outputs of {mod}`scatrs.tmatrix` are converged to a tolerance `rtol` and come with an
 error estimate $\hat\varepsilon$ ({doc}`/theory/spheroids`). Inside the validated domain
-(aspect ratios from 1/5 to 5, equal-volume $x \ge 0.3$, $|m|\,x_{\max} \le 60$ with $x_{\max}$
+(aspect ratios from 1/5 to 5, equal-volume $x \ge 10^{-6}$, $|m|\,x_{\max} \le 60$ with $x_{\max}$
 the size parameter of the longest semi-axis, $1.3 \le \mathrm{Re}\,m \le 3$,
 $\mathrm{Im}\,m \le 0.5$), every output is within $C\cdot\max(\mathtt{rtol}, \hat\varepsilon)$
 of the exact value, in the measures of the sphere's outputs ($Q_{\mathrm{abs}}$ relative to
@@ -279,8 +279,8 @@ relative to $\max(F_{11}, 1)$, normalized). Three tests enforce it:
   $Q_\text{ext}$ published by Somerville, Auguié & Le Ru (2013) for two spheroids inside the
   domain, one of them the benchmark of Kuik, de Haan & Hovenier (1992) ({doc}`external`).
 - `scatrs/tests/tmatrix_accuracy_map.rs` compares the default results (`rtol = 1e-8`) with a
-  reference using more orders and nodes and every mode refined, for 221 spheroids: 8 aspect
-  ratios, $x$ from 0.3 to 14 and four indices, up to $|m|\,x_{\max} = 70$.
+  reference using more orders and nodes and every mode refined, for 349 spheroids: 8 aspect
+  ratios, $x$ from $10^{-6}$ to 14 and four indices, up to $|m|\,x_{\max} = 70$.
 
 The worst ratio of each error to $\max(\mathtt{rtol}, \hat\varepsilon)$ inside the domain, against
 the declared constant:

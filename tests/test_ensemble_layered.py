@@ -147,7 +147,7 @@ def test_the_derivatives_domain_and_wrong_particles():
     # So does the radius derivative of a monodisperse ensemble, at fixed fractions.
     with pytest.raises(OutsideValidatedDomainError, match="derivatives"):
         big.compute(0.55, derivatives=["radius"])
-    with pytest.raises(TypeError, match="Sphere or a LayeredSphere"):
+    with pytest.raises(TypeError, match="Sphere, a LayeredSphere or a Spheroid"):
         Ensemble(1.5, SIZE)  # type: ignore[arg-type]
     with pytest.raises(ValueError, match="unknown parameter"):
         Ensemble(coated, SIZE).compute(0.55, derivatives=["m_real"])

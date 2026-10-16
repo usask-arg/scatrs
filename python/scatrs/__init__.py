@@ -28,7 +28,7 @@ from scatrs.errors import (
     OutsideValidatedDomainError,
     ScatrsError,
 )
-from scatrs.particles import LayeredSphere, Sphere
+from scatrs.particles import LayeredSphere, Sphere, Spheroid
 from scatrs.size import (
     Gamma,
     LogNormal,
@@ -58,6 +58,7 @@ __all__ = [
     "PowerLaw",
     "ScatrsError",
     "Sphere",
+    "Spheroid",
     "Tabulated",
     "__version__",
     "ensemble",

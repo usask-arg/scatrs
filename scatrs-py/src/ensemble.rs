@@ -3,8 +3,8 @@
 //! Distributions arrive as tagged tuples from `scatrs.ensemble` (`("lognormal", r_g, σ_g)`,
 //! `("tabulated", radii, densities)`, `("multimodal", [(weight, spec), …])`, …), particles as
 //! tagged tuples too (`("sphere", m)`, one refractive index per wavelength; `("layered",
-//! fractions, m)`, L − 1 radius fractions and m of shape (L, wavelengths)), and components as
-//! `(spec, particle, weight)`. Results
+//! fractions, m)`, L − 1 radius fractions and m of shape (L, wavelengths); `("spheroid",
+//! aspect_ratio, m)`), and components as `(spec, particle, weight)`. Results
 //! return as a dict of arrays, one row per wavelength, which `scatrs.ensemble` wraps;
 //! derivatives are selected by their index in `ensemble_parameters`. Arrays are borrowed with
 //! `try_readonly` (see `special.rs`), and the outputs are computed and laid out without the GIL.
@@ -114,6 +114,18 @@ fn particle(spec: &Bound<'_, PyAny>) -> PyResult<Particle> {
             Ok(Particle::layered_sphere(
                 f.as_array().iter().copied().collect(),
                 layers.collect(),
+            ))
+        }
+        "spheroid" => {
+            let aspect_ratio: f64 = t.get_item(1)?.extract()?;
+            let m = t.get_item(2)?;
+            let m = m.cast::<PyArrayDyn<Complex64>>().map_err(|_| {
+                PyTypeError::new_err("a spheroid's refractive indices must be an array")
+            })?;
+            let m = borrow(m, "refractive_index")?;
+            Ok(Particle::spheroid(
+                aspect_ratio,
+                m.as_array().iter().copied().collect(),
             ))
         }
         other => Err(PyTypeError::new_err(format!(
@@ -253,13 +265,13 @@ fn arrays(
     let phase = (n_mu > 0).then(|| {
         let pick = |o: &Outputs, k: usize, j: usize| {
             let ph = o.phase.as_ref().expect("requested");
-            [&ph.f11, &ph.f12, &ph.f33, &ph.f34][k][j]
+            [&ph.f11, &ph.f12, &ph.f22, &ph.f33, &ph.f34, &ph.f44][k][j]
         };
         let f = |s: Pick<'_>| {
-            Array3::from_shape_fn((4, n, n_mu), |(k, i, j)| pick(s(&results[i], 0), k, j))
+            Array3::from_shape_fn((6, n, n_mu), |(k, i, j)| pick(s(&results[i], 0), k, j))
         };
         let df = |s: Pick<'_>| {
-            Array4::from_shape_fn((p, 4, n, n_mu), |(c, k, i, j)| {
+            Array4::from_shape_fn((p, 6, n, n_mu), |(c, k, i, j)| {
                 pick(s(&results[i], c), k, j)
             })
         };
@@ -276,7 +288,8 @@ fn arrays(
 
 /// The ensemble outputs at each wavelength: a dict of arrays `values`/`errors` (11, n),
 /// `d`/`d_errors` (P, 11, n), with the Greek coefficients (`greek`… (6, n, L + 1), zero-padded
-/// to the longest) and the phase matrix (`phase`… (4, n, n_mu)) when requested, `converged`
+/// to the longest) and the phase matrix (`phase`… (6, n, n_mu): F₁₁, F₁₂, F₂₂, F₃₃, F₃₄, F₄₄)
+/// when requested, `converged`
 /// (n) and `panels` (n). The Greek coefficients go up to `greek`, or every order with
 /// `all_orders`, or are not computed.
 #[pyfunction]

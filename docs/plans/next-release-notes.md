@@ -3,6 +3,26 @@
 The GitHub release notes are the changelog (see "Releasing" in `CONTRIBUTING.md`). Paste this
 into the next release's notes, above GitHub's generated list, then delete this file.
 
+## Next release: spheroids in size distributions
+
+### New features
+
+- Spheroids in ensembles: `scatrs.Spheroid` (in Rust `Particle::Spheroid`) in `Ensemble`,
+  `Mixture` and grids, with every output's error estimate and Jacobians, the aspect ratio's
+  among them (`"aspect_ratio"`; `ParamKind::AspectRatio`). The size distribution describes the
+  radius of the sphere of equal volume. Each size node solves its T-matrix once; the Greek
+  coefficients are integrated directly and the phase matrix comes from them; every node's
+  declared error is included in the estimates. A `Mixture` of spheroids of several aspect
+  ratios is a mixture of shapes, and spheroids mix with spheres and layered spheres.
+- The ensemble phase matrix has its six elements: `f22` and `f44` (in Rust `PhaseValues`),
+  equal to `f11` and `f33` for spheres; the depolarization ratio is
+  (F₁₁ − F₂₂)/(F₁₁ + F₂₂) at 180°.
+- The spheroids' validated domain reaches down to x = 10⁻⁶, as the spheres' does.
+
+### Changed
+
+- `EnsemblePhase` has the fields `f11, f12, f22, f33, f34, f44`, in that order.
+
 ## 0.3.0: layered spheres and spheroids
 
 ### Breaking changes

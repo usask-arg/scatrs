@@ -17,7 +17,7 @@ library for the optical properties of particles. Install it with `pip install sc
 - **Randomly oriented spheroids** ({mod}`scatrs.tmatrix`): efficiencies, Greek coefficients
   and the six-element phase matrix of oblate and prolate spheroids, by the T-matrix method,
   converged to a tolerance with an error estimate, and their derivatives.
-- **Ensembles** of spheres and layered spheres ({class}`scatrs.Ensemble`,
+- **Ensembles** of spheres, layered spheres and spheroids ({class}`scatrs.Ensemble`,
   {class}`scatrs.Mixture`): averages over seven kinds of size distribution and over external
   mixtures, at many wavelengths in parallel, with an error estimate for every output, and refractive indices that vary with
   wavelength ({mod}`scatrs.refractive`). Grids of distributions share their Mie solutions, for

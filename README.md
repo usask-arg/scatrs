@@ -15,7 +15,7 @@ library for the optical properties of particles.
 - **Randomly oriented spheroids:** efficiencies, Greek coefficients and the six-element phase
   matrix of oblate and prolate spheroids, by the T-matrix method, converged to a tolerance
   with an error estimate, and their derivatives.
-- **Ensembles of spheres and layered spheres:** averages over seven kinds of size
+- **Ensembles of spheres, layered spheres and spheroids:** averages over seven kinds of size
   distribution, external mixtures and batches of distributions, at many wavelengths in
   parallel, with an error estimate for every output.
 - **Derivatives** of every output, in closed form: with respect to the size parameter and

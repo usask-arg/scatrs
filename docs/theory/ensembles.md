@@ -4,8 +4,8 @@ This page describes the methods behind {rust}`scatrs::ensemble` (Python: {class}
 and {class}`scatrs.Mixture`): the
 size distributions, their cut-offs, the adaptive size integration, the error estimates, the
 Jacobians and the mixtures. The rustdoc of {rust}`scatrs::ensemble` is the authoritative statement of
-the interface; the single-particle quantities come from {doc}`mie` for spheres and from
-{doc}`layered` for layered spheres.
+the interface; the single-particle quantities come from {doc}`mie` for spheres, from
+{doc}`layered` for layered spheres and from {doc}`spheroids` for spheroids.
 
 ## Averages
 
@@ -13,12 +13,16 @@ the interface; the single-particle quantities come from {doc}`mie` for spheres a
 
 Radii and wavelengths are in the same (any) unit, and $x = 2\pi r/\lambda$. Each component of
 an ensemble is a particle given at each wavelength: a sphere, with one refractive index per
-wavelength, or a layered sphere ({rust}`Particle::LayeredSphere
+wavelength, a layered sphere ({rust}`Particle::LayeredSphere
 <scatrs::ensemble::Particle::LayeredSphere>`, Python {class}`scatrs.LayeredSphere`), with one
-per layer and wavelength. The size distribution describes the radius the particle defines: a
+per layer and wavelength, or randomly oriented spheroids of one aspect ratio
+({rust}`Particle::Spheroid <scatrs::ensemble::Particle::Spheroid>`, Python
+{class}`scatrs.Spheroid`). The size distribution describes the radius the particle defines: a
 layered sphere's outer radius $r$, with layer $l$'s outer surface at the fixed fraction $f_l$
-of it ($x_l = f_l x$), so a distribution scales the whole particle. Everything below applies to
-either; the text says "sphere" for any particle. Every output is a number average,
+of it ($x_l = f_l x$), so a distribution scales the whole particle; a spheroid's radius of the
+sphere of equal volume, whose cross section normalizes its efficiencies. Everything below
+applies to any of them, with the spheroids' differences in {ref}`ensemble-spheroids`; the text
+says "sphere" for any particle. Every output is a number average,
 
 $$\langle C\rangle = \frac{\int C(r)\,n(r)\,dr}{\int n(r)\,dr}
 = \frac{\int C(e^t)\,n(e^t)\,e^t\,dt}{\int n(e^t)\,e^t\,dt}, \qquad t = \ln r,$$
@@ -33,18 +37,21 @@ square of the unit of the radii. The outputs at each wavelength are
   and the asymmetry parameter $g = \langle C_\text{sca}\,g\rangle/\langle C_\text{sca}\rangle$;
 - $\langle C_\text{back}\rangle$, Bohren & Huffman's backscattering cross section ($4\pi$ times
   $d\sigma/d\Omega$ at 180°), the lidar ratio $4\pi\langle C_\text{ext}\rangle/\langle
-  C_\text{back}\rangle$, and the linear depolarization ratio, exactly 0 for spheres;
+  C_\text{back}\rangle$, and the linear depolarization ratio $(F_{11} - F_{22})/(F_{11} +
+  F_{22})$ at 180°, exactly 0 for spheres;
 - the moments $r_\text{eff} = \langle r^3\rangle/\langle r^2\rangle$, $\langle\pi r^2\rangle$
   and $\langle 4\pi r^3/3\rangle$;
 - on request, the Greek coefficients up to an order $L$ or to every order, and the phase matrix
-  ($F_{11}$, $F_{12}$, $F_{33}$, $F_{34}$) at given cosines, normalized
+  ($F_{11}$, $F_{12}$, $F_{22}$, $F_{33}$, $F_{34}$, $F_{44}$; a sphere's $F_{22}$ is its
+  $F_{11}$ and its $F_{44}$ its $F_{33}$) at given cosines, normalized
   ($\alpha_1^0 = 1$, $\tfrac12\int F_{11}\,d\mu = 1$) or per particle ($\alpha_1^0 =
   \langle C_\text{sca}\rangle$, the phase matrix times $\langle C_\text{sca}\rangle$).
 
 Each output comes with an error estimate of the same shape and, on request, derivatives with
 their own error estimates. The relative tolerance rtol of the size integration is in $[10^{-13},
-0.1]$ (default $10^{-6}$). Every size node must be in the validated domain of the Mie solution
-({doc}`mie`) unless `allow_unvalidated` is set; otherwise the call fails with
+0.1]$ (default $10^{-6}$). Every size node must be in the validated domain of the
+single-particle solution ({doc}`mie`, {doc}`layered`, {doc}`spheroids`) unless
+`allow_unvalidated` is set; otherwise the call fails with
 `OutsideValidatedDomain`, naming the wavelength and the radius. The tails of broad distributions
 can push $x$ past $2\cdot10^4$; a Mie range that reaches $x > 10^6$ (`MAX_SIZE_PARAMETER`, the
 largest the Mie solution accepts) is `InvalidInput` before any panel is evaluated. So are
@@ -256,11 +263,45 @@ weights at the nodes
 $\tfrac{2l + 1}{2}w_k d_l(\mu_k)$ times the tables of every mixture (or batch distribution) and
 derivative at once, so the generalized spherical functions are computed once per band.
 
+(ensemble-spheroids)=
+### Spheroids: the direct path
+
+A spheroid has no Mie coefficients: each size node solves its T-matrix ({doc}`spheroids`), which
+gives the orientation-averaged efficiencies and Greek coefficients directly, at a cost of
+milliseconds to seconds rather than microseconds. So spheroids take their own path through the
+same panels:
+
+- **Each node is solved once.** Pass 1 converges each node's T-matrix to a tolerance $	au$ of
+  a hundredth of rtol, within $[10^{-12}, 10^{-8}]$, and keeps its efficiencies, its Greek
+  coefficients (all orders to $2N$, unnormalized) and their derivatives; pass 2 integrates the
+  final panels' kept values without solving them again. The efficiencies need the Greek
+  coefficients anyway ($g$ and $Q_	ext{back}$ come from them), so keeping them costs no
+  solve.
+- **The Greek coefficients are integrated directly.** Their per-particle values $\pi r^2lpha$
+  are integrated like the cross sections, with no tables or projection. The ensemble's phase
+  matrix at the requested cosines is the expansion of the averaged coefficients, exact to their
+  order $2N_	ext{max}$, and its $F_{22}$ and $F_{44}$ are the spheroids' own.
+- **The depolarization ratio** comes from $\langle C_	ext{back} - C_	ext{sca}F_{22}(180°)
+angle$,
+  with $F_{22}(180°) = 	frac12\sum_l (-1)^l(lpha_2^l - lpha_3^l)$ per node, over
+  $2\langle C_	ext{back}
+angle$ minus it.
+- **Mixtures.** The spheres' projected Greek coefficients and tables and the spheroids' direct
+  ones are both per particle, so a mixture of spheres, layered spheres and spheroids adds them
+  with its number fractions.
+
 ## Error estimates
 
 Every output has an estimate of the error of the size integration and of the cut-offs, of the
 same shape. The Mie solutions' own rounding errors, bounded separately ({doc}`mie`), are not
-included; at the tolerances the ensembles accept they are far smaller.
+included; at the tolerances the ensembles accept they are far smaller. A spheroid's are: each
+node adds its declared error, $C\cdot\max(	au, \hatarepsilon)$ for its own estimate
+$\hatarepsilon$ and the constants $C$ of its validated domain (4 for $Q_	ext{ext}$,
+$Q_	ext{sca}$ and $g$, 16 for the others, the Greek coefficients relative to the largest
+$lpha_1$), weighted with the absolute integration weights; a derivative's node error is the
+same constant times $\max(	au, \hatarepsilon)$ relative to the derivative itself. These are
+not refined away (they do not shrink with the panels), and they keep the estimates bounds when
+the nodes' errors approach the size integration's.
 
 - **Integrals.** $E = \sum_\text{panels}\lvert K_{15} - G_7\rvert$, the usual estimate of
   the error of the $K_{15}$ sum, which is pessimistic once the panels resolve the integrand.
@@ -285,7 +326,8 @@ included; at the tolerances the ensembles accept they are far smaller.
   \lvert\partial(a/b)\rvert e_b + e(a/b)\lvert\partial b\rvert)/\lvert b\rvert$.
 - **Mixtures** add the components' estimates with their weights.
 
-A monodisperse component is exact: its estimates are 0. {ref}`ensemble-accuracy` measures how
+A monodisperse component of spheres is exact: its estimates are 0 (a spheroid's are its node's
+declared errors). {ref}`ensemble-accuracy` measures how
 well the estimates bound the true errors.
 
 ## Jacobians
@@ -304,6 +346,8 @@ has a derivative.
   sphere), at each wavelength: from the single-particle efficiency Jacobian and phase-matrix
   derivatives, integrated with the same weights ($m$ does not change the density, so no
   renormalization term).
+- **The aspect ratio** of a spheroid, at a fixed equal-volume radius, from the T-matrix's
+  derivatives, integrated with the same weights.
 - **Radius fractions** of a layered sphere, at a fixed outer radius:
   $\partial Q/\partial f_l = x\,\partial Q/\partial x_l$, likewise integrated with the same
   weights. The derivatives with respect to the inner size parameters $x_l$ carry no term of
@@ -322,13 +366,17 @@ layered spheres $F_{11}$ too, with each layer's $\mathrm{Re}\,m$ and $\mathrm{Im
 core fraction of a coated sphere, the middle layer's fraction and $\mathrm{Im}\,m$ of a
 three-layer one, the median radius, the monodisperse radius, and the core fraction of a
 mixture's coated component. An ensemble of one-layer layered spheres is the sphere ensemble
-bitwise, values, estimates and derivatives.
+bitwise, values, estimates and derivatives. For spheroids the tests check every scalar output,
+$\alpha_1^l$ and $\beta_1^l$ up to order 6 and the six phase-matrix elements at three cosines,
+at rtol $10^{-9}$, for the aspect ratio (oblate and prolate), $\mathrm{Re}\,m$,
+$\mathrm{Im}\,m$, the lognormal's parameters, a monodisperse radius and the aspect ratio of a
+mixture's spheroid component.
 
 ## Mixtures
 
 {rust}`compute_mixture <scatrs::ensemble::compute_mixture>` (Python {class}`scatrs.Mixture`)
-averages over external mixtures: components, each a distribution, its particle (spheres and
-layered spheres can mix) and a weight $w_i \ge 0$ (a relative number concentration; their sum finite and positive).
+averages over external mixtures: components, each a distribution, its particle (spheres,
+layered spheres and spheroids can mix) and a weight $w_i \ge 0$ (a relative number concentration; their sum finite and positive).
 {rust}`compute <scatrs::ensemble::compute>` is a mixture of one component, without the weight
 parameter. Cross sections and moments are averaged with the number fractions $w_i/\sum w$. The phase-matrix
 tables, in $C_\text{sca}$ units, are averaged with the same fractions, so the phase matrices
@@ -368,7 +416,8 @@ by one. Memory grows with the distributions: each holds its sums over every band
 
 Wavelengths, the panels of each pass-1 round and chunks of four pass-2 panels run in parallel
 on the current rayon pool (in Rust, a caller can `install` its own); each task owns its Mie
-workspace, and the matrix products run on one thread within a task. Refinement decisions depend
+workspace, and the matrix products run on one thread within a task (a spheroid's T-matrix runs
+its own quadrature in parallel on the same pool, also independently of the threads). Refinement decisions depend
 only on the values, and the sums are reduced in a fixed order (the chunks' sums in windows of
 32 chunks, which bounds the memory of large batches), so results are bitwise identical for any
 number of threads (tested with pools of 1 to 5, mixtures and batches included). Errors are too: the parallel tasks all finish, and the first error in wavelength, part and
@@ -399,3 +448,19 @@ weakly absorbing shell's $\mathrm{Im}\,m$, like a sphere's, reaches `max_panels`
 wavelength, and with every derivative the coated spheres take 3.5 times the spheres' time.
 {doc}`/validation/sasktran2` compares the speed and accuracy with sasktran2's at matched
 accuracy, for one distribution and for a database grid.
+
+Spheroids cost their T-matrices ({ref}`ensemble-spheroids`): each size node solves one,
+milliseconds at small sizes and seconds near $|m|\,x_{\max} = 50$, and the tighter rtol, the
+further the cut-offs reach into the distribution's tail of large particles. A dust lognormal
+($r_g = 0.15$, $\sigma_g = 1.4$, $m = 1.53 + 0.008i$) at $\lambda = 0.55$ with the Greek
+coefficients to order 63, on the same machine (best of 2):
+
+| aspect ratio | rtol $10^{-3}$ | rtol $10^{-4}$ | rtol $10^{-6}$ |
+|---|---|---|---|
+| 2 (oblate) | 1.2 s | 3.2 s | 12 s |
+| 1/2 (prolate) | 3.4 s | 6.9 s | 21 s |
+
+on 19, 21 and 25 panels, whose largest sizes are $x$ = 9.2, 10.9 and 15.3; the same spheres take
+2 ms. Prolate spheroids cost more ({doc}`spheroids`), and so do broad distributions, whose tails
+can also leave the validated domain at tight tolerances: for radiative transfer, an rtol of
+$10^{-4}$ to $10^{-3}$ is ample.

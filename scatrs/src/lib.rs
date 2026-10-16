@@ -2,8 +2,8 @@
 //! spheroidal particles.
 //!
 //! scatrs computes the optical properties of homogeneous spheres by Lorenz–Mie theory, of
-//! layered spheres, and of randomly oriented spheroids by the T-matrix method, and the averages
-//! of spheres over size distributions and external mixtures, with closed-form derivatives and a
+//! layered spheres, and of randomly oriented spheroids by the T-matrix method, and their
+//! averages over size distributions and external mixtures, with closed-form derivatives and a
 //! declared, tested accuracy. The same crate is the core of the Python package `scatrs`.
 //! This reference covers the Rust API; the scatrs documentation also has a user guide with
 //! examples, the theory behind every method, and the validation of the results.
@@ -13,7 +13,7 @@
 //! | [`mie`] | One sphere: Mie coefficients, efficiencies, amplitudes, phase matrix and Greek coefficients, with their derivatives. |
 //! | [`layered`] | One layered sphere, a core and concentric shells: the same outputs, with derivatives with respect to every layer. |
 //! | [`tmatrix`] | One randomly oriented spheroid by the T-matrix method: efficiencies, Greek coefficients and six-element phase matrix, the T-matrix itself and its convergence, with derivatives. |
-//! | [`ensemble`] | Averages of spheres and layered spheres over size distributions, external mixtures and batches of distributions, with error estimates and derivatives. |
+//! | [`ensemble`] | Averages of spheres, layered spheres and spheroids over size distributions, external mixtures and batches of distributions, with error estimates and derivatives. |
 //! | [`special`] | Gauss–Legendre quadrature and Wigner d-functions. |
 //! | [`scalar`] | The [`Real`] trait the numerical kernels are generic over, and its double-double and dual-number types. |
 //! | [`error`] | The [`Error`] that every fallible function returns. |

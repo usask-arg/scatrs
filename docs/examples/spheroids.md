@@ -119,8 +119,8 @@ Natural dust is a mixture of shapes. The phase matrix of a mixture is the averag
 members' weighted by their scattering cross sections: with `normalized=False` the phase
 matrices are already multiplied by $Q_\text{sca}$, and since every member has the same volume
 here, they average directly. Fifteen aspect ratios from 1/3 to 3, evenly spaced in
-$\ln(a/c)$ and equally numerous, against the sphere. (Size distributions of spheroids are not
-yet built in; the same weighting by hand over sizes gives one.)
+$\ln(a/c)$ and equally numerous, against the sphere, all of one size here; the next section
+averages over sizes too.
 
 ```{code-cell} python
 mixture = np.geomspace(1 / 3, 3, 15)
@@ -153,6 +153,38 @@ plt.show()
 The mixture smooths the single shapes' features into a flat side and back scattering, with a
 depolarization of about 0.2 and a lidar ratio near 45 sr, of the order lidars measure in
 desert dust.
+
+## Size distributions and mixtures of shapes
+
+An {class}`~scatrs.Ensemble` of {class}`~scatrs.Spheroid` particles averages over a size
+distribution as for spheres ({doc}`/examples/ensemble`); its size is the radius of the sphere
+of equal volume. A {class}`~scatrs.Mixture` of ensembles of different aspect ratios is a
+mixture of shapes, weighted as the previous section weighted them by hand. Each size node
+solves a T-matrix, so an ensemble of spheroids costs seconds where spheres cost milliseconds,
+and the tighter `rtol`, the further the integration reaches into the large sizes of the
+distribution's tail; a loose `rtol` such as $10^{-4}$ keeps it practical
+({doc}`/theory/ensembles`). A dust mode at 550 nm, four shapes in equal numbers (this cell
+takes about half a minute):
+
+```{code-cell} python
+size = scatrs.LogNormal(median_radius=0.15, width=1.4)  # µm
+shapes = [1 / 3, 1 / 2, 2.0, 3.0]
+dust = scatrs.Mixture([(1.0, scatrs.Ensemble(scatrs.Spheroid(m, e), size)) for e in shapes])
+spheres = scatrs.Ensemble(scatrs.Sphere(m), size)
+options = {"rtol": 1e-4, "greek": 16, "mu": [-1.0]}
+rd, rs = dust.compute(0.55, **options), spheres.compute(0.55, **options)
+for name, r in [("spheroids", rd), ("spheres", rs)]:
+    print(f"{name:9}: C_ext {r.c_ext:.4e} µm² (± {r.error.c_ext:.0e}), g {r.g:.4f}, "
+          f"lidar ratio {r.lidar_ratio:.1f} sr, depolarization {r.depolarization:.3f}")
+assert rd.converged and rs.depolarization == 0 and rd.depolarization > 0.05
+assert rd.lidar_ratio > 1.2 * rs.lidar_ratio
+# A sphere's F22 is its F11; a mixture of spheroids' is not.
+assert rs.phase.f22 == rs.phase.f11 and rd.phase.f22 < rd.phase.f11
+```
+
+Particles comparable to the wavelength: the spheroids extinguish about 6% less than spheres of
+the same volume, scatter more forward, and scatter less straight back, which raises the lidar
+ratio from about 75 to about 105 sr and depolarizes the backscattered light by about 0.1.
 
 ## Greek coefficients
 

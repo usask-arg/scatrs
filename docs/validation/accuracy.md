@@ -328,7 +328,9 @@ integration and of the cut-offs of the distribution. Every output has an estimat
 error (`result.error`), and the integration is refined until the estimates of the cross
 sections, $g$ and the moments meet the tolerance `rtol` (default $10^{-6}$). The Mie
 solutions' own errors, declared above, are far smaller at the tolerances the ensembles accept,
-and are not included.
+and are not included. A spheroid's are: every size node adds its declared error, its constant
+times $\max(\tau, \hat\varepsilon)$ for its own estimate and the node tolerance $\tau$
+({ref}`ensemble-spheroids`).
 
 The test `error_estimates_bound_the_true_errors` in `scatrs/tests/ensemble.rs` checks the
 estimates for every change. It computes nine distributions of spheres and two of layered
@@ -359,6 +361,17 @@ other values, the Greek coefficients, the phase matrix and every derivative) wit
 their estimates. The worst ratio of true error to estimate is 0.003 for the refined outputs
 and 1.210 for the others. {doc}`/examples/ensemble` shows the same comparison for one
 distribution.
+
+For spheroids, `scatrs/tests/ensemble_spheroid.rs` checks the same: a lognormal of prolate
+spheroids ($a/c = 1/3$, $r_g = 0.03$, $\sigma_g = 1.4$, $m = 1.53 + 0.008i$, $\lambda = 1$) at
+rtol $10^{-6}$ against rtol $10^{-10}$, with backscattering refined, the Greek coefficients to
+order 8 and the phase matrix at three cosines. Every scalar output is within its estimate,
+which the nodes' declared errors make 10 to 1000 times the true error, and the Greek
+coefficients and the phase matrix within twice theirs. The same file checks that an aspect
+ratio of 1 is the sphere ensemble within the estimates, that a monodisperse ensemble is the
+single spheroid, and the Jacobians (the aspect ratio, $\mathrm{Re}\,m$, $\mathrm{Im}\,m$, the
+distribution's parameters, a monodisperse radius and a mixture's spheroid component) against
+central differences.
 
 What that supports:
 

@@ -58,7 +58,7 @@ impl<T: Real> GreekCoefficients<T> {
         ]
     }
 
-    fn arrays(&self) -> [&Vec<T>; 6] {
+    pub(crate) fn arrays(&self) -> [&Vec<T>; 6] {
         [
             &self.alpha1,
             &self.alpha2,

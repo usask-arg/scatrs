@@ -515,7 +515,8 @@ fn phase_of<T: Real>(g: &GreekCoefficients<T>, d: &[Vec<f64>; 4]) -> [T; 6] {
     ]
 }
 
-fn wigner_tables(mu: f64, len: usize, d: &mut [Vec<f64>; 4]) -> Result<()> {
+/// The Wigner d-functions d⁰⁰, d²², d²,⁻², d⁰² at cosine `mu`, orders 0 to `len` − 1, into `d`.
+pub(crate) fn wigner_tables(mu: f64, len: usize, d: &mut [Vec<f64>; 4]) -> Result<()> {
     for v in d.iter_mut() {
         v.resize(len, 0.0);
     }

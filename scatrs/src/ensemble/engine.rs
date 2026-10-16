@@ -11,23 +11,26 @@ use super::distribution::{SizeDistribution, Support};
 use super::fast::{BandProjection, BandTables, PanelProducts};
 use super::lin::Lin;
 use super::moments::{Moments, moments};
-use super::particle::{Optics, Solver};
+use super::particle::{Optics, Solver, SpheroidValues};
 use super::range::{self, MIE_POWERS, MOMENT_POWERS, STEP};
 use super::{
     Component, EnsembleOptions, EnsembleResult, GreekOrder, Outputs, ParamKind, Particle,
     PhaseValues, kronrod,
 };
 use crate::mie::{
-    Coefficients, GreekCoefficients, GreekProjector, MAX_SIZE_PARAMETER, MieOptions, Normalization,
-    PhaseBuffers,
+    Coefficients, Efficiencies, GreekCoefficients, GreekProjector, MAX_SIZE_PARAMETER, MieOptions,
+    MieOutput, Normalization, PhaseBuffers,
 };
+use crate::tmatrix::TMatrixOptions;
 use crate::{Error, Result};
 
-// The per-sphere quantities, in this order, then the phase-matrix tables at the projector's
-// nodes (F₁₁, F₁₂, F₃₃, F₃₄, each `n_q` values) and at the requested cosines (each `n_mu`).
-// Cross sections and tables are per sphere (πr²·Q, πr²·F with F per unit geometric cross
-// section, so C_sca times the normalized phase matrix); integrated with the number density
-// and divided by the integral of `ONE`, they become number averages.
+// The per-particle quantities, in this order, then the phase-matrix tables at the requested
+// cosines (F₁₁, F₁₂, F₃₃, F₃₄, each `n_mu` values), then those at each band's projector nodes
+// (each `n_q`), then a spheroid's Greek coefficients (the direct segment: α₁, …, β₂, each to
+// the direct order). Cross sections, tables and coefficients are per particle (πr²·Q, πr²·F
+// with F per unit geometric cross section, so C_sca times the normalized phase matrix);
+// integrated with the number density and divided by the integral of `ONE`, they become number
+// averages. Spheres fill the tables and spheroids the direct segment; the other's stay zero.
 const ONE: usize = 0;
 const EXT: usize = 1;
 const SCA: usize = 2;
@@ -36,7 +39,9 @@ const ABS: usize = 4;
 const BACK: usize = 5;
 const R2: usize = 6;
 const R3: usize = 7;
-const SCALARS: usize = 8;
+/// C_back − C_sca F₂₂(180°), the numerator of the depolarization ratio: exactly 0 for spheres.
+const DEPOL: usize = 8;
+const SCALARS: usize = 9;
 
 /// Pass 1 integrates the per-sphere quantities 1, C_ext, C_sca, C_sca·g, C_back and C_abs (the
 /// first four at the indices of the flat layout, C_back at `P1_BACK`, C_abs at `P1_ABS`), then the
@@ -62,6 +67,29 @@ const MIN_WIDTH: f64 = 1e-10;
 /// The largest increase of the size parameter across an initial panel: the efficiencies'
 /// broad interference structure has a period of about π/|m − 1| in x.
 const MAX_DX: f64 = 20.0;
+
+/// How the particles of one wavelength are solved: the Mie options of spheres and layered
+/// spheres; the T-matrix options of spheroids, converged at each size node to a hundredth of
+/// the ensemble's `rtol` (within [10⁻¹², 10⁻⁸]), so that the nodes' declared errors, which the
+/// error estimates include, stay well below the size integration's; and whether a spheroid's
+/// Greek coefficients are kept at its nodes, for the Greek coefficients or the phase matrix.
+struct SolveOpts {
+    mie: MieOptions,
+    tmatrix: TMatrixOptions,
+    keep_greek: bool,
+}
+
+impl SolveOpts {
+    fn new(options: &EnsembleOptions) -> Self {
+        Self {
+            mie: MieOptions::new().with_allow_unvalidated(options.allow_unvalidated),
+            tmatrix: TMatrixOptions::new()
+                .with_rtol((options.rtol / 100.0).clamp(1e-12, 1e-8))
+                .with_allow_unvalidated(options.allow_unvalidated),
+            keep_greek: options.greek.is_some() || !options.mu.is_empty(),
+        }
+    }
+}
 
 /// A component, or one mode of a multimodal component, integrated on its own.
 struct Part<'a> {
@@ -146,6 +174,7 @@ fn parts<'a>(
                     ParamKind::RadiusFraction(l) => {
                         dir_cols[2 * c.particle.groups() + l] = Some(col);
                     }
+                    ParamKind::AspectRatio => dir_cols[2 * c.particle.groups()] = Some(col),
                     _ => {}
                 }
             }
@@ -344,21 +373,56 @@ struct Sums1 {
 
 /// The pass-1 quantities at radius r: 1, C_ext, C_sca, C_sca·g, C_back, then the Greek
 /// coefficients up to `refine_order` (πr²·α), then the derivatives of C_ext, C_sca, C_sca·g,
-/// C_back and C_abs along each of the particle's directions that `dirs` asks for; and the
-/// number of terms.
+/// C_back and C_abs along each of the particle's directions that `dirs` asks for; the number of
+/// terms; and a spheroid's values, which pass 2 integrates without solving it again.
 #[allow(clippy::too_many_arguments)]
 fn quantities1(
     solver: &mut Solver,
     r: f64,
     lambda: f64,
     optics: Optics<'_>,
-    opts: &MieOptions,
+    opts: &SolveOpts,
     refine_order: Option<usize>,
     dirs: &[bool],
-) -> Result<(Vec<f64>, usize)> {
+) -> Result<(Vec<f64>, usize, Option<SpheroidValues>)> {
     let x = size(r, lambda);
+    let derivatives = dirs.iter().any(|&b| b);
+    if optics.is_direct() {
+        let keep = opts.keep_greek || refine_order.is_some();
+        let v = solver
+            .spheroid(optics, x, &opts.tmatrix, derivatives, keep)
+            .map_err(|e| context(e, lambda, r))?;
+        let area = PI * r * r;
+        let q = &v.q;
+        let mut out = vec![
+            1.0,
+            area * q.q_ext,
+            area * q.q_sca,
+            area * q.q_sca * q.g,
+            area * q.q_back,
+            area * q.q_abs,
+        ];
+        if let Some(order) = refine_order {
+            let g = v.greek.as_ref().expect("kept");
+            for a in g.arrays() {
+                out.extend((0..=order).map(|l| area * a.get(l).copied().unwrap_or(0.0)));
+            }
+        }
+        for (k, _) in dirs.iter().enumerate().filter(|&(_, &want)| want) {
+            let d = &v.dq[k];
+            out.extend([
+                area * d.q_ext,
+                area * d.q_sca,
+                area * (d.q_sca * q.g + q.q_sca * d.g),
+                area * d.q_back,
+                area * d.q_abs,
+            ]);
+        }
+        let n = v.n_terms;
+        return Ok((out, n, Some(v)));
+    }
     let s = solver
-        .solve(optics, x, opts, dirs.iter().any(|&b| b))
+        .solve(optics, x, &opts.mie, derivatives)
         .map_err(|e| context(e, lambda, r))?;
     let c = &s.c;
     let q = c.efficiencies();
@@ -396,7 +460,7 @@ fn quantities1(
             area * d.q_abs,
         ]);
     }
-    Ok((out, c.n_terms()))
+    Ok((out, c.n_terms(), None))
 }
 
 /// The number of pass-1 quantities: the base ones, the Greek coefficients, and `M_GROUP`
@@ -406,8 +470,14 @@ fn n_refined(refine_order: Option<usize>, part: &Part<'_>) -> usize {
     N_BASE + refine_order.map_or(0, |l| 6 * (l + 1)) + M_GROUP * md
 }
 
-/// Evaluates one panel in pass 1 for every part of a group: each node's Mie solution once,
-/// its quantities weighted by each part's density.
+/// One panel of pass 1, evaluated: each part's sums, and a spheroid's values at the nodes.
+struct Evaluated {
+    sums: Vec<Sums1>,
+    nodes: Vec<SpheroidValues>,
+}
+
+/// Evaluates one panel in pass 1 for every part of a group: each node's solution once, its
+/// quantities weighted by each part's density.
 #[allow(clippy::too_many_arguments)]
 fn panel1(
     solver: &mut Solver,
@@ -415,19 +485,21 @@ fn panel1(
     (a, b): (f64, f64),
     lambda: f64,
     optics: Optics<'_>,
-    opts: &MieOptions,
+    opts: &SolveOpts,
     refine_order: Option<usize>,
     n_refined: usize,
-) -> Result<Vec<Sums1>> {
+) -> Result<Evaluated> {
     let nodes = kronrod::panel(a, b);
     let first = group.first().expect("a part");
     let dirs: Vec<bool> = first.dir_cols.iter().map(Option::is_some).collect();
     let mut n_max = 0;
     let mut qs = Vec::with_capacity(nodes.len());
+    let mut values = Vec::new();
     for &(t, _, _) in &nodes {
-        let (q, n) = quantities1(solver, t.exp(), lambda, optics, opts, refine_order, &dirs)?;
+        let (q, n, v) = quantities1(solver, t.exp(), lambda, optics, opts, refine_order, &dirs)?;
         n_max = n_max.max(n);
         qs.push(q);
+        values.extend(v);
     }
     let mut out = Vec::with_capacity(group.len());
     for part in group {
@@ -483,20 +555,24 @@ fn panel1(
             edge,
         });
     }
-    Ok(out)
+    Ok(Evaluated {
+        sums: out,
+        nodes: values,
+    })
 }
 
-/// The outcome of pass 1 for a group of parts: their shared panels, and whether each part
-/// converged.
+/// The outcome of pass 1 for a group of parts: their shared panels, whether each part
+/// converged, and a spheroid's values at each panel's nodes (empty for spheres).
 struct Pass1 {
     panels: Vec<(f64, f64)>,
     converged: Vec<bool>,
     n_terms: usize,
     range: (f64, f64),
+    nodes: Vec<Vec<SpheroidValues>>,
 }
 
-/// The panels of pass 1, with each part's sums once evaluated.
-type Panels1 = Vec<((f64, f64), Option<Vec<Sums1>>)>;
+/// The panels of pass 1, each once evaluated.
+type Panels1 = Vec<((f64, f64), Option<Evaluated>)>;
 
 /// Evaluates the panels without sums, in parallel and in order.
 #[allow(clippy::too_many_arguments)]
@@ -505,7 +581,7 @@ fn evaluate(
     group: &[&Part<'_>],
     lambda: f64,
     optics: Optics<'_>,
-    opts: &MieOptions,
+    opts: &SolveOpts,
     refine_order: Option<usize>,
     n_refined: usize,
 ) -> Result<()> {
@@ -651,7 +727,7 @@ fn pass1(
     lambda: f64,
     optics: Optics<'_>,
     options: &EnsembleOptions,
-    mie_opts: &MieOptions,
+    opts: &SolveOpts,
 ) -> Result<Pass1> {
     let refine_order = options.refine_order;
     let first = group.first().expect("a part");
@@ -727,7 +803,7 @@ fn pass1(
             group,
             lambda,
             optics,
-            mie_opts,
+            opts,
             refine_order,
             n_refined,
         )?;
@@ -738,7 +814,7 @@ fn pass1(
             .map(|(p, part)| {
                 let sums: Vec<&Sums1> = panels
                     .iter()
-                    .map(|(_, s)| &s.as_ref().expect("evaluated")[p])
+                    .map(|(_, s)| &s.as_ref().expect("evaluated").sums[p])
                     .collect();
                 status(part, &sums, options, n_refined, n_greek, exts[p])
             })
@@ -805,7 +881,7 @@ fn pass1(
             .enumerate()
             .filter(|&(i, _)| panels[i].0.1 - panels[i].0.0 > MIN_WIDTH)
             .filter_map(|(i, (_, sums))| {
-                let sums = sums.as_ref().expect("evaluated");
+                let sums = &sums.as_ref().expect("evaluated").sums;
                 let badness = sums
                     .iter()
                     .zip(&statuses)
@@ -850,14 +926,19 @@ fn pass1(
 fn finish(panels: Panels1, converged: Vec<bool>, t: (f64, f64)) -> Pass1 {
     let n_terms = panels
         .iter()
-        .filter_map(|(_, s)| s.as_ref().and_then(|s| s.first()).map(|s| s.n_terms))
+        .filter_map(|(_, s)| s.as_ref().and_then(|s| s.sums.first()).map(|s| s.n_terms))
         .max()
         .unwrap_or(0);
+    let (panels, nodes) = panels
+        .into_iter()
+        .map(|(p, s)| (p, s.map_or_else(Vec::new, |s| s.nodes)))
+        .unzip();
     Pass1 {
-        panels: panels.into_iter().map(|(p, _)| p).collect(),
+        panels,
         converged,
         n_terms,
         range: (t.0.exp(), t.1.exp()),
+        nodes,
     }
 }
 
@@ -906,12 +987,15 @@ struct Band {
     projection: BandProjection,
 }
 
-/// What pass 2 computes at every node: the per-sphere scalars, the phase matrix at the
-/// requested cosines (each element `n_mu` values), and the tables of each band at its
-/// projector's nodes.
+/// What pass 2 computes at every node: the per-particle scalars, the phase matrix at the
+/// requested cosines (each element `n_mu` values), the tables of each band at its projector's
+/// nodes, and spheroids' Greek coefficients (the direct segment).
 struct Layout<'a> {
     mu: &'a [f64],
     bands: Vec<Band>,
+    /// The direct segment's start and order L_d (six arrays of L_d + 1 coefficients), if a
+    /// spheroid keeps its Greek coefficients.
+    direct: Option<(usize, usize)>,
     len: usize,
 }
 
@@ -919,6 +1003,11 @@ impl Layout<'_> {
     /// The scalars and the cosine tables: the part of the layout every node fills.
     fn common(&self) -> usize {
         SCALARS + 4 * self.mu.len()
+    }
+
+    /// The range of the direct segment ((0, 0) without one).
+    fn direct_range(&self) -> (usize, usize) {
+        self.direct.map_or((0, 0), |(s, l)| (s, s + 6 * (l + 1)))
     }
 
     fn band(&self, n: usize) -> Option<&Band> {
@@ -963,6 +1052,7 @@ fn quantities2(
         area * q.q_back,
         r * r,
         r * r * r,
+        0.0,
     ]);
     // The band of the panel (its largest number of terms), so that every node of a panel
     // fills the same tables: per-node bands would make each band's table a step function
@@ -1009,6 +1099,7 @@ fn quantities2(
             area * e.q_back,
             0.0,
             0.0,
+            0.0,
         ]
     };
     let k = 2.0 * PI / lambda;
@@ -1028,6 +1119,7 @@ fn quantities2(
         dr[ONE] = 0.0;
         dr[R2] = 2.0 * r;
         dr[R3] = 3.0 * r * r;
+        dr[DEPOL] = 0.0;
     }
     for (start, cosines) in tables {
         let n = cosines.len();
@@ -1107,6 +1199,143 @@ fn quantities2(
         g[span].iter_mut().for_each(|v| *v *= area);
     }
     Ok(segment)
+}
+
+/// A spheroid's per-particle scalars (as `quantities2`'s) and their declared errors, from
+/// efficiencies `q`, the depolarization numerator `depol` and the node's values `v`; with
+/// `value`, the efficiencies are a derivative's (r² and r³ then have none).
+fn direct_scalars(
+    v: &SpheroidValues,
+    q: &Efficiencies<f64>,
+    depol: f64,
+    r: f64,
+    value: bool,
+) -> ([f64; SCALARS], [f64; SCALARS]) {
+    let area = PI * r * r;
+    let base = &v.q;
+    let scag = if value {
+        q.q_sca * q.g
+    } else {
+        q.q_sca * base.g + base.q_sca * q.g
+    };
+    let (r2, r3) = if value {
+        (r * r, r * r * r)
+    } else {
+        (0.0, 0.0)
+    };
+    let one = if value { 1.0 } else { 0.0 };
+    let s = [
+        one,
+        area * q.q_ext,
+        area * q.q_sca,
+        area * scag,
+        area * q.q_abs,
+        area * q.q_back,
+        r2,
+        r3,
+        area * depol,
+    ];
+    let (c4, c16) = (
+        v.bound(MieOutput::Extinction),
+        v.bound(MieOutput::Absorption),
+    );
+    // In the measures of `MieOutput`: Q_abs relative to Q_ext, Q_back to max(Q_back, Q_sca),
+    // g absolute; for derivatives, relative to the derivative itself.
+    let e = if value {
+        let back = area * q.q_back.abs().max(q.q_sca.abs());
+        [
+            0.0,
+            c4 * s[EXT].abs(),
+            c4 * s[SCA].abs(),
+            c4 * s[SCA].abs() * (1.0 + q.g.abs()),
+            c16 * s[EXT].abs(),
+            c16 * back,
+            0.0,
+            0.0,
+            2.0 * c16 * back,
+        ]
+    } else {
+        [
+            0.0,
+            c4 * s[EXT].abs(),
+            c4 * s[SCA].abs(),
+            c4 * s[SCAG].abs(),
+            c16 * s[ABS].abs(),
+            c16 * s[BACK].abs(),
+            0.0,
+            0.0,
+            c16 * s[DEPOL].abs(),
+        ]
+    };
+    (s, e)
+}
+
+/// The derivative rows along each of the particle's directions, and their errors.
+type DirectionRows<'a, 'b> = (&'a mut [&'b mut [f64]], &'a mut [&'b mut [f64]]);
+
+/// A spheroid's pass-2 quantities at radius r from its stored values `v`: the scalars and the
+/// direct segment into `g` (the cosine tables zero: a spheroid's phase matrix comes from the
+/// averaged Greek coefficients), their declared errors into `e`, and if `dm`, their
+/// derivatives along the particle's directions and those derivatives' errors into `dm` and
+/// `dme`.
+fn direct_node(
+    v: &SpheroidValues,
+    r: f64,
+    layout: &Layout<'_>,
+    g: &mut [f64],
+    e: &mut [f64],
+    dm: Option<DirectionRows<'_, '_>>,
+) {
+    let area = PI * r * r;
+    let common = layout.common();
+    let (lo, hi) = layout.direct_range();
+    let (s, se) = direct_scalars(v, &v.q, v.depol, r, true);
+    g[..SCALARS].copy_from_slice(&s);
+    e[..SCALARS].copy_from_slice(&se);
+    g[SCALARS..common].iter_mut().for_each(|x| *x = 0.0);
+    e[SCALARS..common].iter_mut().for_each(|x| *x = 0.0);
+    // The direct segment: each array to the direct order (zero beyond the node's 2N), every
+    // coefficient's error the declared one, relative to the largest α₁.
+    let fill =
+        |out: &mut [f64], err: Option<&mut [f64]>, greek: &GreekCoefficients<f64>, c: f64| {
+            let order = hi.saturating_sub(lo) / 6;
+            let mut err = err;
+            for (k, a) in greek.arrays().into_iter().enumerate() {
+                for l in 0..order {
+                    let x = area * a.get(l).copied().unwrap_or(0.0);
+                    out[lo + k * order + l] = x;
+                    if let Some(err) = err.as_deref_mut() {
+                        err[lo + k * order + l] = c;
+                    }
+                }
+            }
+        };
+    if hi > lo {
+        let greek = v.greek.as_ref().expect("kept for the direct segment");
+        let big = greek.alpha1.iter().fold(0.0f64, |m, a| m.max(a.abs()));
+        fill(
+            g,
+            Some(e),
+            greek,
+            v.bound(MieOutput::GreekCoefficients { order: 0 }) * area * big,
+        );
+    }
+    if let Some((dm, dme)) = dm {
+        for (k, (d, de)) in dm.iter_mut().zip(dme.iter_mut()).enumerate() {
+            let (s, se) = direct_scalars(v, &v.dq[k], v.ddepol[k], r, false);
+            d[..SCALARS].copy_from_slice(&s);
+            de[..SCALARS].copy_from_slice(&se);
+            d[SCALARS..common].iter_mut().for_each(|x| *x = 0.0);
+            de[SCALARS..common].iter_mut().for_each(|x| *x = 0.0);
+            if hi > lo {
+                fill(d, None, &v.dgreek[k], 0.0);
+                let c = v.bound(MieOutput::GreekCoefficients { order: 0 });
+                for j in lo..hi {
+                    de[j] = c * d[j].abs();
+                }
+            }
+        }
+    }
 }
 
 /// Splits a table of 4·n values into its four elements.
@@ -1193,12 +1422,15 @@ impl Rows {
 /// nodes' values.
 fn pass2(
     group: &[&Part<'_>],
-    panels: &[(f64, f64)],
+    p1: &Pass1,
     lambda: f64,
     optics: Optics<'_>,
-    opts: &MieOptions,
+    opts: &SolveOpts,
     layout: &Layout<'_>,
 ) -> Result<Vec<Sums2>> {
+    let opts = &opts.mie;
+    let direct = optics.is_direct();
+    let panels: Vec<(usize, (f64, f64))> = p1.panels.iter().copied().enumerate().collect();
     let len = layout.len;
     let common = layout.common();
     let blocks: Vec<usize> = group.iter().map(|p| blocks(p)).collect();
@@ -1229,6 +1461,16 @@ fn pass2(
         wm: Mat,
         pv: Mat,
         pm: Vec<Mat>,
+        /// A spheroid's declared node errors: per node (nodes × stride, and along each
+        /// direction), their sums with the absolute weights, and the scratch rows.
+        ge: Vec<f64>,
+        dme: Vec<f64>,
+        ev: Mat,
+        dev: Vec<Mat>,
+        w_abs: Mat,
+        wm_abs: Mat,
+        pe: Mat,
+        pme: Vec<Mat>,
     }
     /// A chunk's sums and errors on one range [lo, hi) of the layout, every block.
     type Segment = ((usize, usize), Vec<f64>, Vec<f64>);
@@ -1243,12 +1485,14 @@ fn pass2(
     let gemm = |dst: &mut Mat, w: &Mat, v: &Mat| matmul(dst, w, v, w.ncols());
     // A chunk's sums: every part's blocks on the common part and at most a band per panel,
     // with their errors.
+    let (d_lo, d_hi) = layout.direct_range();
     let widest = layout
         .bands
         .iter()
         .map(|b| 4 * b.projector.nodes().len())
         .max()
-        .unwrap_or(0);
+        .unwrap_or(0)
+        .max(d_hi - d_lo);
     let per_chunk = blocks.iter().sum::<usize>() * (common + CHUNK * widest) * 2 * 8;
     let window = (WINDOW_BYTES / per_chunk.max(1)).clamp(1, WINDOW);
     for window in panels.chunks(CHUNK * window) {
@@ -1270,17 +1514,25 @@ fn pass2(
                     wm: Mat::zeros(2 * rows.m, n_nodes),
                     pv: Mat::zeros(0, 0),
                     pm: (0..n_dirs).map(|_| Mat::zeros(0, 0)).collect(),
+                    ge: vec![0.0; if direct { len } else { 0 }],
+                    dme: vec![0.0; if direct { n_dirs * len } else { 0 }],
+                    ev: Mat::zeros(0, 0),
+                    dev: (0..n_dirs).map(|_| Mat::zeros(0, 0)).collect(),
+                    w_abs: Mat::zeros(2 * rows.values, n_nodes),
+                    wm_abs: Mat::zeros(2 * rows.m, n_nodes),
+                    pe: Mat::zeros(0, 0),
+                    pme: (0..n_dirs).map(|_| Mat::zeros(0, 0)).collect(),
                 },
                 |sc, chunk| {
                     let densities: Vec<_> = group.iter().map(|p| p.dist.prepare()).collect();
                     let mut segments: Vec<Vec<Segment>> = vec![Vec::new(); group.len()];
-                    for &(a, b) in chunk {
-                        let band_terms = if layout.bands.is_empty() {
+                    for &(pi, (a, b)) in chunk {
+                        let band_terms = if layout.bands.is_empty() || direct {
                             0
                         } else {
                             panel_terms(a, b, lambda, optics, opts)?
                         };
-                        let band = if layout.bands.is_empty() {
+                        let band = if layout.bands.is_empty() || direct {
                             None
                         } else {
                             Some(layout.band(band_terms).ok_or_else(|| {
@@ -1303,43 +1555,81 @@ fn pass2(
                                 ));
                             }
                         }
-                        let (lo, hi) = band.map_or((0, 0), |b| {
-                            (b.start, b.start + 4 * b.projector.nodes().len())
-                        });
+                        let (lo, hi) = if direct {
+                            (d_lo, d_hi)
+                        } else {
+                            band.map_or((0, 0), |b| {
+                                (b.start, b.start + 4 * b.projector.nodes().len())
+                            })
+                        };
                         let stride = common + (hi - lo);
                         if sc.v.nrows() != nodes.len() || sc.v.ncols() != stride {
                             sc.v = Mat::zeros(nodes.len(), stride);
                             for dv in &mut sc.dv {
                                 *dv = Mat::zeros(nodes.len(), stride);
                             }
+                            if direct {
+                                sc.ev = Mat::zeros(nodes.len(), stride);
+                                for dev in &mut sc.dev {
+                                    *dev = Mat::zeros(nodes.len(), stride);
+                                }
+                            }
                         }
                         for (k, &(t, wk, wg)) in nodes.iter().enumerate() {
                             let r = t.exp();
-                            let mut dm: Vec<&mut [f64]> = sc.dmv.chunks_mut(len).collect();
-                            let products = match (band, sc.products.as_mut()) {
-                                (Some(_), Some(p)) => Some((p, k)),
-                                _ => None,
-                            };
-                            quantities2(
-                                &mut sc.solver,
-                                r,
-                                lambda,
-                                optics,
-                                opts,
-                                layout,
-                                &mut sc.g,
-                                derivatives.then_some(&mut dm[..]),
-                                None,
-                                band_terms,
-                                products,
-                            )?;
-                            for j in 0..common {
-                                sc.v[(k, j)] = sc.g[j];
-                            }
-                            if derivatives {
-                                for (c, dv) in sc.dv.iter_mut().enumerate() {
-                                    for j in 0..common {
-                                        dv[(k, j)] = sc.dmv[c * len + j];
+                            if direct {
+                                // The node's values from pass 1, with their declared errors.
+                                let value = &p1.nodes[pi][k];
+                                let mut dm: Vec<&mut [f64]> = sc.dmv.chunks_mut(len).collect();
+                                let mut dme: Vec<&mut [f64]> = sc.dme.chunks_mut(len).collect();
+                                direct_node(
+                                    value,
+                                    r,
+                                    layout,
+                                    &mut sc.g,
+                                    &mut sc.ge,
+                                    derivatives.then_some((&mut dm[..], &mut dme[..])),
+                                );
+                                // Row k: the common part, then the direct segment.
+                                for (j, o) in (0..common).chain(lo..hi).enumerate() {
+                                    sc.v[(k, j)] = sc.g[o];
+                                    sc.ev[(k, j)] = sc.ge[o];
+                                }
+                                if derivatives {
+                                    for c in 0..n_dirs {
+                                        for (j, o) in (0..common).chain(lo..hi).enumerate() {
+                                            sc.dv[c][(k, j)] = sc.dmv[c * len + o];
+                                            sc.dev[c][(k, j)] = sc.dme[c * len + o];
+                                        }
+                                    }
+                                }
+                            } else {
+                                let mut dm: Vec<&mut [f64]> = sc.dmv.chunks_mut(len).collect();
+                                let products = match (band, sc.products.as_mut()) {
+                                    (Some(_), Some(p)) => Some((p, k)),
+                                    _ => None,
+                                };
+                                quantities2(
+                                    &mut sc.solver,
+                                    r,
+                                    lambda,
+                                    optics,
+                                    opts,
+                                    layout,
+                                    &mut sc.g,
+                                    derivatives.then_some(&mut dm[..]),
+                                    None,
+                                    band_terms,
+                                    products,
+                                )?;
+                                for j in 0..common {
+                                    sc.v[(k, j)] = sc.g[j];
+                                }
+                                if derivatives {
+                                    for (c, dv) in sc.dv.iter_mut().enumerate() {
+                                        for j in 0..common {
+                                            dv[(k, j)] = sc.dmv[c * len + j];
+                                        }
                                     }
                                 }
                             }
@@ -1388,17 +1678,40 @@ fn pass2(
                                 gemm(pm, &sc.wm, dv);
                             }
                         }
+                        // A spheroid's declared node errors, summed with the absolute weights.
+                        if direct {
+                            for (dst, src) in [(&mut sc.w_abs, &sc.w), (&mut sc.wm_abs, &sc.wm)] {
+                                for i in 0..src.nrows() {
+                                    for k in 0..src.ncols() {
+                                        dst[(i, k)] = src[(i, k)].abs();
+                                    }
+                                }
+                            }
+                            gemm(&mut sc.pe, &sc.w_abs, &sc.ev);
+                            if rows.m > 0 {
+                                for (pme, dev) in sc.pme.iter_mut().zip(&sc.dev) {
+                                    gemm(pme, &sc.wm_abs, dev);
+                                }
+                            }
+                        }
                         // Each part's panel sums into the chunk's segments.
                         for (p, part) in group.iter().enumerate() {
                             let nb = blocks[p];
                             let nt = part.theta.len();
-                            // (matrix of products, its Kronrod row, its number of rows).
-                            let block_rows = |blk: usize| -> (&Mat, usize, usize) {
+                            // (matrix of products, its Kronrod row, its number of rows, and the
+                            // node errors' sums).
+                            let block_rows = |blk: usize| -> (&Mat, usize, usize, Option<&Mat>) {
                                 if blk <= nt {
-                                    (&sc.pv, rows.first[p] + blk, rows.values)
+                                    (
+                                        &sc.pv,
+                                        rows.first[p] + blk,
+                                        rows.values,
+                                        direct.then_some(&sc.pe),
+                                    )
                                 } else {
                                     let i = rows.m_row[p].expect("m derivatives");
-                                    (&sc.pm[blk - nt - 1], i, rows.m)
+                                    let c = blk - nt - 1;
+                                    (&sc.pm[c], i, rows.m, direct.then_some(&sc.pme[c]))
                                 }
                             };
                             for (range, off) in [((0, common), 0), ((lo, hi), common)] {
@@ -1416,12 +1729,15 @@ fn pass2(
                                 };
                                 let (_, ssum, serr) = &mut segs[k];
                                 for blk in 0..nb {
-                                    let (mat, row, n) = block_rows(blk);
+                                    let (mat, row, n, node_err) = block_rows(blk);
                                     for i in 0..w {
                                         let (kv, gv) =
                                             (mat[(row, off + i)], mat[(n + row, off + i)]);
                                         ssum[blk * w + i] += kv;
                                         serr[blk * w + i] += (kv - gv).abs();
+                                        if let Some(ne) = node_err {
+                                            serr[blk * w + i] += ne[(row, off + i)];
+                                        }
                                     }
                                 }
                             }
@@ -1519,15 +1835,21 @@ fn averages(part: &Part<'_>, sums: &Sums2, len: usize, truncation: f64) -> PartA
     out
 }
 
-/// A monodisperse part: the sphere itself, exact (no integration).
+/// A monodisperse part: the particle itself (no integration), exact for a sphere and within
+/// its declared node errors for a spheroid (`stored`, solved by `wavelength`).
 fn monodisperse(
     part: &Part<'_>,
     r: f64,
     lambda: f64,
     optics: Optics<'_>,
-    opts: &MieOptions,
+    opts: &SolveOpts,
     layout: &Layout<'_>,
+    stored: Option<&SpheroidValues>,
 ) -> Result<PartAverages> {
+    if let Some(v) = stored {
+        return Ok(monodisperse_direct(part, r, lambda, layout, v));
+    }
+    let opts = &opts.mie;
     let len = layout.len;
     let mut solver = Solver::new();
     let mut g = vec![0.0; len];
@@ -1568,6 +1890,76 @@ fn monodisperse(
     Ok(PartAverages { v: g, e: zeros, d })
 }
 
+/// A monodisperse spheroid from its values `v`: its quantities and declared errors, and the
+/// derivatives along its directions and, for a radius parameter, with respect to r at a fixed
+/// aspect ratio: ∂(πr²Q)/∂r = 2πr Q + πr² (2π/λ) ∂Q/∂x.
+fn monodisperse_direct(
+    part: &Part<'_>,
+    r: f64,
+    lambda: f64,
+    layout: &Layout<'_>,
+    v: &SpheroidValues,
+) -> PartAverages {
+    let len = layout.len;
+    let n_dirs = part.dir_cols.len();
+    let (mut g, mut e) = (vec![0.0; len], vec![0.0; len]);
+    let (mut dmv, mut dmev) = (vec![0.0; n_dirs * len], vec![0.0; n_dirs * len]);
+    {
+        let mut dm: Vec<&mut [f64]> = dmv.chunks_mut(len).collect();
+        let mut dme: Vec<&mut [f64]> = dmev.chunks_mut(len).collect();
+        let dirs = part
+            .dir_derivatives()
+            .then_some((&mut dm[..], &mut dme[..]));
+        direct_node(v, r, layout, &mut g, &mut e, dirs);
+    }
+    let mut d = Vec::new();
+    if let Some(&(col, _)) = part.theta.first() {
+        // ∂/∂x, the fourth direction of the values (after Re m, Im m and the aspect ratio).
+        let (mut gx, mut ex) = (vec![0.0; len], vec![0.0; len]);
+        let mut xs = v.clone();
+        xs.dq = vec![v.dq[3]];
+        xs.ddepol = vec![v.ddepol[3]];
+        xs.dgreek = v.dgreek.get(3).cloned().into_iter().collect();
+        {
+            let mut one = [gx.as_mut_slice()];
+            let mut one_e = [ex.as_mut_slice()];
+            let (mut sink, mut sink_e) = (vec![0.0; len], vec![0.0; len]);
+            direct_node(
+                &xs,
+                r,
+                layout,
+                &mut sink,
+                &mut sink_e,
+                Some((&mut one[..], &mut one_e[..])),
+            );
+        }
+        let k = 2.0 * PI / lambda;
+        let mut dr = vec![0.0; len];
+        let mut der = vec![0.0; len];
+        for j in 0..len {
+            dr[j] = 2.0 / r * g[j] + k * gx[j];
+            der[j] = 2.0 / r * e[j] + k * ex[j];
+        }
+        dr[ONE] = 0.0;
+        dr[R2] = 2.0 * r;
+        dr[R3] = 3.0 * r * r;
+        der[ONE] = 0.0;
+        der[R2] = 0.0;
+        der[R3] = 0.0;
+        d.push((col, dr, der));
+    }
+    for (c, col) in part.dir_cols.iter().enumerate() {
+        if let Some(col) = col {
+            d.push((
+                *col,
+                dmv[c * len..(c + 1) * len].to_vec(),
+                dmev[c * len..(c + 1) * len].to_vec(),
+            ));
+        }
+    }
+    PartAverages { v: g, e, d }
+}
+
 /// One wavelength: pass 1 and pass 2 per group of parts sharing panels, then a result per
 /// unit.
 fn wavelength(
@@ -1578,30 +1970,57 @@ fn wavelength(
     index: usize,
     options: &EnsembleOptions,
 ) -> Result<Vec<EnsembleResult>> {
-    let mie_opts = MieOptions::new().with_allow_unvalidated(options.allow_unvalidated);
+    let opts = SolveOpts::new(options);
     let n_cols = options.derivatives.len();
     let members = |g: &Vec<usize>| -> Vec<&Part<'_>> { g.iter().map(|&p| &parts[p]).collect() };
     // Pass 1 for every group, and the largest number of terms.
     let mut firsts = Vec::with_capacity(groups.len());
     let mut n_max = 0;
+    // The largest N of the spheroids (the direct path).
+    let mut n_direct = None;
     for group in groups {
         let g = members(group);
         let optics = g[0].particle.optics(index);
         let p1 = match g[0].support {
+            Support::Point(r) if optics.is_direct() => {
+                // A single spheroid, solved here once; `monodisperse` uses its values.
+                let part = g[0];
+                let derivatives = part.dir_derivatives() || !part.theta.is_empty();
+                let v = Solver::new()
+                    .spheroid(
+                        optics,
+                        size(r, lambda),
+                        &opts.tmatrix,
+                        derivatives,
+                        opts.keep_greek,
+                    )
+                    .map_err(|e| context(e, lambda, r))?;
+                Pass1 {
+                    panels: Vec::new(),
+                    converged: vec![true],
+                    n_terms: v.n_terms,
+                    range: (r, r),
+                    nodes: vec![vec![v]],
+                }
+            }
             Support::Point(r) => {
                 let n = optics
-                    .n_terms(size(r, lambda), &mie_opts)
+                    .n_terms(size(r, lambda), &opts.mie)
                     .map_err(|e| context(e, lambda, r))?;
                 Pass1 {
                     panels: Vec::new(),
                     converged: vec![true],
                     n_terms: n,
                     range: (r, r),
+                    nodes: Vec::new(),
                 }
             }
-            _ => pass1(&g, lambda, optics, options, &mie_opts)?,
+            _ => pass1(&g, lambda, optics, options, &opts)?,
         };
         n_max = n_max.max(p1.n_terms);
+        if optics.is_direct() {
+            n_direct = Some(n_direct.unwrap_or(0).max(p1.n_terms));
+        }
         firsts.push(p1);
     }
     // Each part's group and its place in it.
@@ -1622,12 +2041,15 @@ fn wavelength(
         for (group, p1) in groups.iter().zip(&firsts) {
             let first = &parts[group[0]];
             let optics = first.particle.optics(index);
+            if optics.is_direct() {
+                continue;
+            }
             if let Support::Point(_) = first.support {
                 uppers.insert(bucket(p1.n_terms));
                 continue;
             }
             for &(a, b) in &p1.panels {
-                uppers.insert(bucket(panel_terms(a, b, lambda, optics, &mie_opts)?));
+                uppers.insert(bucket(panel_terms(a, b, lambda, optics, &opts.mie)?));
             }
         }
     }
@@ -1648,9 +2070,25 @@ fn wavelength(
         });
         len += 4 * n_q;
     }
+    // The spheroids' Greek coefficients: every order to 2N for the phase matrix, else to the
+    // requested order.
+    let direct = match n_direct {
+        Some(n) if opts.keep_greek => {
+            let order_d = if options.mu.is_empty() {
+                order.min(2 * n)
+            } else {
+                2 * n
+            };
+            let start = len;
+            len += 6 * (order_d + 1);
+            Some((start, order_d))
+        }
+        _ => None,
+    };
     let layout = Layout {
         mu: &options.mu,
         bands,
+        direct,
         len,
     };
     // Pass 2: every part's averages.
@@ -1659,11 +2097,13 @@ fn wavelength(
         let g = members(group);
         let optics = g[0].particle.optics(index);
         if let Support::Point(r) = g[0].support {
-            averages_of[group[0]] =
-                Some(monodisperse(g[0], r, lambda, optics, &mie_opts, &layout)?);
+            let stored = p1.nodes.first().and_then(|n| n.first());
+            averages_of[group[0]] = Some(monodisperse(
+                g[0], r, lambda, optics, &opts, &layout, stored,
+            )?);
             continue;
         }
-        let sums = pass2(&g, &p1.panels, lambda, optics, &mie_opts, &layout)?;
+        let sums = pass2(&g, p1, lambda, optics, &opts, &layout)?;
         for ((&p, part), sums) in group.iter().zip(&g).zip(&sums) {
             debug_assert_eq!(sums.blocks, blocks(part));
             let truncation = if matches!(part.support, Support::Unbounded(_)) {
@@ -1749,8 +2189,45 @@ fn wavelength(
             d: d.iter().map(|c| c[i]).collect(),
             de: de.iter().map(|c| c[i]).collect(),
         };
-        let unit_greek = greek.as_ref().map(|g| g[u].clone());
-        let outputs = assemble(&lin, unit_greek, order, &layout, n_cols, options)?;
+        // The spheroids' averaged Greek coefficients, from the direct segment.
+        let direct_greek = layout.direct.map(|(start, order_d)| -> [Vec<Lin>; 6] {
+            core::array::from_fn(|k| {
+                (0..=order_d)
+                    .map(|l| lin(start + k * (order_d + 1) + l))
+                    .collect()
+            })
+        });
+        // The Greek coefficients: the spheres' projected ones and the spheroids', to the
+        // requested order.
+        let unit_greek = greek.as_ref().map(|g| {
+            let mut out = g[u].clone();
+            if let Some(dg) = &direct_greek {
+                for (o, d) in out.iter_mut().zip(dg) {
+                    let top = d.len().min(order + 1);
+                    if o.len() < top {
+                        o.resize(top, Lin::constant(0.0, n_cols));
+                    }
+                    for (l, dl) in d.iter().take(top).enumerate() {
+                        o[l] = Lin::combine(&[(1.0, &o[l]), (1.0, dl)], n_cols);
+                    }
+                }
+            }
+            out
+        });
+        let has_direct = unit
+            .parts
+            .iter()
+            .any(|&p| parts[p].particle.optics(index).is_direct());
+        let outputs = assemble(
+            &lin,
+            unit_greek,
+            direct_greek.as_ref(),
+            has_direct,
+            order,
+            &layout,
+            n_cols,
+            options,
+        )?;
         let mut unit_groups: Vec<usize> = unit.parts.iter().map(|&p| place[p].0).collect();
         unit_groups.sort_unstable();
         unit_groups.dedup();
@@ -1781,7 +2258,8 @@ struct LinOutputs {
     /// The Greek coefficients up to the largest band's order (zero above it), and the
     /// requested order, to which `pick` pads them with zeros.
     greek: Option<([Vec<Lin>; 6], usize)>,
-    phase: Option<[Vec<Lin>; 4]>,
+    /// F₁₁, F₁₂, F₂₂, F₃₃, F₃₄, F₄₄.
+    phase: Option<[Vec<Lin>; 6]>,
 }
 
 impl LinOutputs {
@@ -1816,8 +2294,10 @@ impl LinOutputs {
             phase: self.phase.as_ref().map(|p| PhaseValues {
                 f11: arr(&p[0]),
                 f12: arr(&p[1]),
-                f33: arr(&p[2]),
-                f34: arr(&p[3]),
+                f22: arr(&p[2]),
+                f33: arr(&p[3]),
+                f34: arr(&p[4]),
+                f44: arr(&p[5]),
             }),
         }
     }
@@ -1877,10 +2357,47 @@ fn project(layout: &Layout<'_>, order: usize, mixed: &[Mixed]) -> Result<Vec<[Ve
 /// A unit's mixed values, errors, derivatives and their errors over the flat layout.
 type Mixed = (Vec<f64>, Vec<f64>, Vec<Vec<f64>>, Vec<Vec<f64>>);
 
-/// The outputs from the mixed averages and the unit's Greek coefficients (from `project`).
+/// The phase matrix F₁₁, F₁₂, F₂₂, F₃₃, F₃₄, F₄₄ at cosine `mu` from averaged Greek
+/// coefficients `g` (values, errors and derivatives; errors as bounds), as
+/// [`crate::tmatrix`] evaluates a spheroid's.
+fn greek_phase(g: &[Vec<Lin>; 6], mu: f64, n_cols: usize) -> Result<[Lin; 6]> {
+    let len = g[0].len();
+    let mut d: [Vec<f64>; 4] = Default::default();
+    crate::tmatrix::wigner_tables(mu, len, &mut d)?;
+    let [d00, d22, d2m2, d02] = &d;
+    let [a1, a2, a3, a4, b1, b2] = g;
+    let sum = |terms: Vec<(f64, &Lin)>| Lin::combine(&terms, n_cols);
+    fn along<'a>(c: &'a [Lin], w: &[f64]) -> Vec<(f64, &'a Lin)> {
+        c.iter().zip(w).map(|(l, &x)| (x, l)).collect()
+    }
+    // F₂₂ ± F₃₃ = Σ (α₂ ± α₃) d²²,±: F₂₂ = Σ ½(d²² + d²,⁻²) α₂ + ½(d²² − d²,⁻²) α₃, and F₃₃ the
+    // other way round.
+    let plus: Vec<f64> = (0..len).map(|l| 0.5 * (d22[l] + d2m2[l])).collect();
+    let minus: Vec<f64> = (0..len).map(|l| 0.5 * (d22[l] - d2m2[l])).collect();
+    let mixed = |p: &Vec<f64>, q: &Vec<f64>| -> Lin {
+        let mut terms = along(a2, p);
+        terms.extend(along(a3, q));
+        sum(terms)
+    };
+    Ok([
+        sum(along(a1, d00)),
+        sum(along(b1, d02)),
+        mixed(&plus, &minus),
+        mixed(&minus, &plus),
+        sum(along(b2, d02)),
+        sum(along(a4, d00)),
+    ])
+}
+
+/// The outputs from the mixed averages, the unit's Greek coefficients (the spheres' from
+/// `project` and the spheroids' added) and the spheroids' alone (`direct`, for the phase
+/// matrix); `has_direct` when the unit has spheroids, whose depolarization ratio is not 0.
+#[allow(clippy::too_many_arguments)]
 fn assemble(
     lin: &dyn Fn(usize) -> Lin,
     greek: Option<[Vec<Lin>; 6]>,
+    direct: Option<&[Vec<Lin>; 6]>,
+    has_direct: bool,
     order: usize,
     layout: &Layout<'_>,
     n_cols: usize,
@@ -1906,6 +2423,13 @@ fn assemble(
             )));
         }
     }
+    // (F₁₁ − F₂₂)/(F₁₁ + F₂₂) at 180°: the numerator C_back − C_sca F₂₂ over 2 C_back minus it.
+    let depolarization = if has_direct {
+        let num = lin(DEPOL);
+        num.div(&Lin::combine(&[(2.0, &back), (-1.0, &num)], n_cols))
+    } else {
+        Lin::constant(0.0, n_cols)
+    };
     let scalars = [
         ext.clone(),
         sca.clone(),
@@ -1914,7 +2438,7 @@ fn assemble(
         sca.div(&ext),
         scag.div(&sca),
         ext.div(&back).scale(4.0 * PI),
-        Lin::constant(0.0, n_cols),
+        depolarization,
         r3.div(&r2),
         r2.scale(PI),
         r3.scale(4.0 * PI / 3.0),
@@ -1936,15 +2460,34 @@ fn assemble(
     let phase = if n_mu == 0 {
         None
     } else {
+        // The spheres' tables (F₂₂ = F₁₁ and F₄₄ = F₃₃ for them), plus the spheroids' phase
+        // matrix from their averaged Greek coefficients.
         let start = SCALARS;
-        Some(core::array::from_fn(|k| {
-            (0..n_mu)
-                .map(|j| {
-                    let l = lin(start + k * n_mu + j);
-                    if normalized { l.div(&sca) } else { l }
-                })
-                .collect()
-        }))
+        let table = |k: usize, j: usize| lin(start + k * n_mu + j);
+        let mut out: [Vec<Lin>; 6] = Default::default();
+        for (j, &mu) in layout.mu.iter().enumerate() {
+            let spheres = [
+                table(0, j),
+                table(1, j),
+                table(0, j),
+                table(2, j),
+                table(3, j),
+                table(2, j),
+            ];
+            let all = match direct {
+                Some(g) => {
+                    let f = greek_phase(g, mu, n_cols)?;
+                    core::array::from_fn(|k| {
+                        Lin::combine(&[(1.0, &spheres[k]), (1.0, &f[k])], n_cols)
+                    })
+                }
+                None => spheres,
+            };
+            for (o, l) in out.iter_mut().zip(all) {
+                o.push(if normalized { l.div(&sca) } else { l });
+            }
+        }
+        Some(out)
     };
     Ok(LinOutputs {
         scalars,
